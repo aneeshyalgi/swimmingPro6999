@@ -1,0 +1,1 @@
+"""SwimGPT FastAPI backend package."""
