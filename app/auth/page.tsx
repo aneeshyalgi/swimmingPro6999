@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react"
+import { Suspense, useEffect, useState, type CSSProperties, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { AlertTriangle, ArrowRight, CalendarCheck, CheckCircle2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles, Trophy, User, Waves } from "lucide-react"
@@ -44,6 +44,21 @@ function passwordScore(password: string) {
 }
 
 export default function AuthPage() {
+  return (
+    <Suspense fallback={
+      <main className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <div role="status" className="flex items-center gap-3">
+          <Loader2 aria-hidden className="h-5 w-5 animate-spin text-cyan-300" />
+          <span>Loading sign-in...</span>
+        </div>
+      </main>
+    }>
+      <AuthPageContent />
+    </Suspense>
+  )
+}
+
+function AuthPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [mode, setMode] = useState<Mode>(searchParams.get("mode") === "signup" ? "signup" : "signin")

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { CheckCircle2, Loader2, Waves, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -8,6 +8,21 @@ import { Button } from "@/components/ui/button"
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 export default function PaymentSuccessPage() {
+  return (
+    <Suspense fallback={
+      <main className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <div role="status" className="flex items-center gap-3">
+          <Loader2 aria-hidden className="h-5 w-5 animate-spin text-cyan-300" />
+          <span>Loading payment confirmation...</span>
+        </div>
+      </main>
+    }>
+      <PaymentSuccessContent />
+    </Suspense>
+  )
+}
+
+function PaymentSuccessContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [status, setStatus] = useState<"checking" | "success" | "error">("checking")
