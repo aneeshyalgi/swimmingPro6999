@@ -169,7 +169,7 @@ class DashboardEndpointTests(unittest.TestCase):
         self.client = TestClient(app)
         self.supabase = MagicMock()
         self.supabase.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="account-a"))
-        self.profile_query = query([PROFILE])
+        self.profile_query = query([{**PROFILE, "is_paid": True}])
         self.plan_query = query([{"plan": PLAN}])
         self.session_query = query([])
         self.supabase.table.side_effect = {
@@ -218,9 +218,19 @@ class DashboardEndpointTests(unittest.TestCase):
     def test_missing_profile_and_plan_are_explicit(self):
         self.profile_query.execute.return_value.data = []
         self.assertEqual(self.get().status_code, 404)
-        self.profile_query.execute.return_value.data = [PROFILE]
+        self.profile_query.execute.return_value.data = [{**PROFILE, "is_paid": True}]
         self.plan_query.execute.return_value.data = []
         self.assertEqual(self.get().status_code, 409)
+
+    def test_unpaid_profile_cannot_open_the_dashboard(self):
+        # No checkout on record, so there is nothing to confirm with Stripe either.
+        for row in (PROFILE, {**PROFILE, "is_paid": False}):
+            with self.subTest(is_paid=row.get("is_paid")):
+                self.profile_query.execute.return_value.data = [row]
+                response = self.get()
+                self.assertEqual(response.status_code, 402)
+                self.assertEqual(response.json()["detail"], "Activate your coaching plan to open your dashboard.")
+        self.plan_query.execute.assert_not_called()
 
     def test_invalid_session_is_rejected(self):
         self.supabase.auth.get_user.return_value = SimpleNamespace(user=None)

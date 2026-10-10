@@ -15,14 +15,14 @@ const COPY: Record<Mode, { eyebrow: string; title: ReactNode; body: string; card
   signin: {
     eyebrow: "Welcome back",
     title: <>Back in the <span className="au-gradient-text">water.</span></>,
-    body: "Pick up exactly where you left off: this week's sessions, your coaches and the countdown to your next meet.",
+    body: "Pick up exactly where you left off: this week's sessions, your coach and the countdown to your next meet.",
     card: "Log in to SwimGPT",
     cardBody: "Good to see you again.",
   },
   signup: {
     eyebrow: "High performance coaching",
     title: <>Your next breakthrough <span className="au-gradient-text">starts here.</span></>,
-    body: "Tell us about your swimming, choose your coaches, and get a season plan built around your events.",
+    body: "Tell us about your swimming, choose your coach, and get a season plan built around your events.",
     card: "Create your account",
     cardBody: "Set up takes about 3 minutes.",
   },
@@ -33,6 +33,12 @@ const COACHES = ["Coach Brad", "Coach Pete", "Coach Timothy", "Coach Robert", "C
 const REPS = [13.4, 13.3, 13.3, 13.2, 13.1, 13.1, 13.0, 12.9]
 // Faster reps stand taller.
 const barHeight = (seconds: number) => 30 + ((13.6 - seconds) / 0.7) * 60
+
+/** Where to go after signing in when another page sent the visitor here (like buying a training plan): a path on this
+ * site only, never another site. */
+function safeNext(value: string | null) {
+  return value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\") ? value : null
+}
 
 function passwordScore(password: string) {
   if (!password) return 0
@@ -71,8 +77,15 @@ function AuthPageContent() {
   const [authError, setAuthError] = useState("")
   const [errorKey, setErrorKey] = useState(0)
   const [notice, setNotice] = useState("")
+  const next = safeNext(searchParams.get("next"))
+  // Buying a training plan needs only an account: no coaching setup or subscription.
+  const forPlan = Boolean(next?.startsWith("/training-plans"))
 
   const redirectAfterAuth = async (_authUserId: string) => {
+    if (next) {
+      router.replace(next)
+      return
+    }
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error("Your session could not be verified. Please sign in again.")
     const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/onboarding/status`, {
@@ -85,13 +98,9 @@ function AuthPageContent() {
 
     const result = await response.json()
 
-    if (result.completed && result.user_key) {
-      localStorage.setItem("swimgpt_user_key", result.user_key)
-      router.replace("/dashboard")
-      return
-    }
-
-    router.replace("/onboarding")
+    if (result.completed && result.user_key) localStorage.setItem("swimgpt_user_key", result.user_key)
+    // Setup first, then the monthly payment screen; the dashboard is only for athletes who have paid.
+    router.replace(!result.completed ? "/onboarding" : result.paid ? "/dashboard" : "/subscribe")
   }
 
   useEffect(() => {
@@ -145,7 +154,7 @@ function AuthPageContent() {
             data: {
               full_name: fullName,
             },
-            emailRedirectTo: `${window.location.origin}/onboarding`,
+            emailRedirectTo: `${window.location.origin}${next ?? "/onboarding"}`,
           },
         })
 
@@ -190,10 +199,19 @@ function AuthPageContent() {
     }
   }
 
-  const switchMode = (next: Mode) => {
-    if (next !== mode) router.push(`/auth?mode=${next}`)
+  const switchMode = (target: Mode) => {
+    if (target !== mode) router.push(`/auth?mode=${target}${next ? `&next=${encodeURIComponent(next)}` : ""}`)
   }
-  const copy = COPY[mode]
+  const toRead = Boolean(next?.startsWith("/training-plans/read/"))
+  const copy = toRead ? {
+    ...COPY[mode],
+    body: "Your training plans are saved to the account you bought them with. Log in with it and your plan opens straight away.",
+    cardBody: mode === "signup" ? "Free. Every plan you buy is saved to it." : "Then straight back to your plan.",
+  } : forPlan ? {
+    ...COPY[mode],
+    body: "A free account is all you need to buy a training plan: no subscription and no setup. Every plan you buy is saved to it.",
+    cardBody: mode === "signup" ? "Free, and all you need to buy your plan." : "Then straight on to your plan's checkout.",
+  } : COPY[mode]
   const score = passwordScore(password)
 
   return (
@@ -359,7 +377,10 @@ function AuthPageContent() {
                     {isSubmitting ? (
                       <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{mode === "signup" ? "Creating your account…" : "Signing you in…"}</>
                     ) : (
-                      <>{mode === "signup" ? "Create account" : "Continue to dashboard"}<ArrowRight className="ml-2 h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" /></>
+                      <>
+                        {mode === "signup" ? (forPlan ? "Create account and continue" : "Create account") : forPlan ? "Log in and continue" : "Continue to dashboard"}
+                        <ArrowRight className="ml-2 h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
+                      </>
                     )}
                   </span>
                 </button>

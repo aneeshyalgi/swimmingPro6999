@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from app.auth import get_authenticated_profile
 from app.config import get_settings
-from app.context import chat_context, select_coaches
+from app.context import athlete_coach, chat_context
 from app.swim_planner import assign_week, main_strokes, taper_meet
 from app.db import get_supabase_client
 from app.jobs import generating
@@ -217,6 +217,13 @@ def record_id(profile_id: str, key: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"swimgpt:training:{profile_id}:{key}"))
 
 
+def find_record(profile_id: str, key: str) -> dict[str, Any] | None:
+    """The record saved under a deterministic key (id and details), if there is one."""
+    rows = (get_supabase_client().table("user_training_sessions").select("id, details")
+            .eq("user_id", profile_id).eq("id", record_id(profile_id, key)).limit(1).execute()).data
+    return rows[0] if rows else None
+
+
 def load_records(profile_id: str, kinds: list[str]) -> list[dict[str, Any]]:
     rows = []
     offset = 0
@@ -332,7 +339,7 @@ def athlete_brief(profile) -> dict[str, Any]:
         "strength_equipment": strength_equipment,
         "health_issues": profile.get("health_issues") or [],
         "injury_history": profile.get("injury_history") or None,
-        "selected_coaches": profile.get("recommended_coaches") or [],
+        "coach": athlete_coach(profile),
         "data_quality_warnings": [
             f"{item}. Do not use it for pace targets or send-offs; use effort cues (e.g. 'easy', 'strong', 'max effort', RPE) and rest-based intervals instead."
             for item in unusable
@@ -383,21 +390,16 @@ def openai_client() -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key)
 
 
-def athlete_coaches(profile) -> list[str]:
-    """The athlete's coach pair (re-selected from onboarding for profiles saved before coaches were stored)."""
-    return list(profile.get("recommended_coaches") or select_coaches(profile)[1])
-
-
 def build_grounding(profile, query: str, client: OpenAI | None = None) -> tuple[str, list[str]]:
-    """Athlete data, pacing method, history and the coaches' programs shared by every generation call."""
+    """Athlete data, pacing method, history and the coach's program shared by every generation call."""
     brief = athlete_brief(profile)
-    context, sources, _ = chat_context(athlete_coaches(profile), query, limit=10)
+    context, sources, _ = chat_context([athlete_coach(profile)], query, limit=10)
     text = f"""ATHLETE BRIEF (use this first): {json.dumps(brief)}
 FULL ONBOARDING RECORD: {json.dumps(athlete_data(profile))}
 SHARED PACING METHODOLOGY: {json.dumps(pacing_context(profile["id"]))}
 RECENT CHECK-INS: {json.dumps(recent_athlete_feedback(profile["id"]))}
 RECENT ACTUAL RACE RESULTS: {json.dumps(recent_race_results(profile["id"]))}
-COACH PROGRAMS (apply these coaches' own methods, session types and sessions): {context}"""
+COACH PROGRAM (apply this coach's own methods, session types and sessions): {context}"""
     return text, sorted({source["source_file"] for source in sources})
 
 
@@ -1266,10 +1268,10 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     if remaining > 0 or len(strength_days) < strength_to_place:
         raise HTTPException(status_code=409, detail="This week's scheduled sessions leave no room for your onboarding availability. Remove a scheduled workout or update your availability.")
 
-    # Which coach session each swim is: the coaches' own weekly order and sessions (taper sessions near A/B meets).
+    # Which coach session each swim is: the coach's own weekly order and sessions (taper sessions near A/B meets).
     swim_slots = [(day, index) for day in week_days if day.isoformat() not in fixed_dates for index in range(swim_plan.get(day, 0))]
     tapering = taper_meet(competitions(profile), week_start)
-    assignments = dict(zip(swim_slots, assign_week(athlete_coaches(profile), main_events, week_start, len(swim_slots), tapering is not None)))
+    assignments = dict(zip(swim_slots, assign_week(athlete_coach(profile), week_start, len(swim_slots), tapering is not None)))
     strokes = main_strokes(main_events)
 
     layout = []
@@ -1296,8 +1298,8 @@ Day-by-day layout (already matches the athlete's weekly availability):
 {chr(10).join("- " + line for line in layout)}
 User-entered competitions: {json.dumps([{"date": day["date"], "competitions": day["competitions"]} for day in existing["days"] if day["competitions"]])}.
 The athlete's own scheduled swims (never duplicate): {json.dumps([{"date": item["date"], "title": item["workout"]["title"]} for item in manual])}.
-Every generated swim is one of the coaches' own sessions, already chosen from their weekly order (named in the layout).
-{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coaches' taper sessions are used where they wrote them." if tapering else ""}"""
+Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
+{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
 
     # Stage 1: week outline. Counts are repaired deterministically to the layout, so it never needs a retry for them.
     def repair_outline(outline: WeekOutline) -> list[str]:
@@ -1317,7 +1319,7 @@ Every generated swim is one of the coaches' own sessions, already chosen from th
 Plan the week's structure. For each of the seven days give the objective (what that day's coach session trains),
 swim_focuses = the coach session names from the layout, strength_focus null on every day
 (strength is planned separately), at least one swim-related mobility exercise and recovery actions.
-Tie the objectives to the athlete's main events {json.dumps(main_events)} and the coaches' methods.
+Tie the objectives to the athlete's main events {json.dumps(main_events)} and the coach's methods.
 The coaching_note explains this week's intent for this athlete in 2-3 sentences.""", check=repair_outline, grounding=grounding)
 
     # Stage 2: every session generated and validated on its own, in parallel.
@@ -1437,6 +1439,20 @@ def create_competition(request: CompetitionCreate, authorization: str | None = H
     identifier = save_record(profile["id"], str(uuid4()), "competition", request.name, request.date,
                             {"competition": request.model_dump(mode="json")})
     return owned_competition(profile, identifier)
+
+
+@router.delete("/competitions/{identifier}")
+def delete_competition(identifier: UUID, authorization: str | None = Header(default=None)):
+    """Deletes a competition the athlete entered, together with its race plans and any results recorded at it (a result
+    without its meet can't be shown, so those leave the race history and PBs too). Weeks already generated keep their
+    sessions; taper and strength planning simply stop counting toward the meet."""
+    profile = get_authenticated_profile(authorization)
+    meet = owned_competition(profile, str(identifier))
+    linked = [row["id"] for row in load_records(profile["id"], ["race_plan", "race_result"])
+              if row["details"].get("competition_id") == meet["id"]]
+    # One statement, so a failure can never leave results behind without their meet.
+    get_supabase_client().table("user_training_sessions").delete().eq("user_id", profile["id"]).in_("id", [meet["id"], *linked]).execute()
+    return {"deleted": meet["id"]}
 
 
 @router.post("/competitions/{identifier}/plan")

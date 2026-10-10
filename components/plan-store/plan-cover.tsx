@@ -13,14 +13,15 @@ function wave(y: number, amplitude: number, phase: number) {
   return d
 }
 
-type CoverSize = "sm" | "md" | "lg"
+type CoverSize = "xs" | "sm" | "md" | "lg"
 const TEXT: Record<CoverSize, { title: string; kicker: string; meta: string; pad: string }> = {
+  xs: { title: "text-[9.5px] leading-[1.15]", kicker: "text-[5.5px]", meta: "", pad: "py-2 pl-[11px] pr-1.5" },
   sm: { title: "text-[15px] leading-[1.1]", kicker: "text-[7px]", meta: "text-[7px]", pad: "p-3 pl-5" },
   md: { title: "text-[22px] leading-[1.05]", kicker: "text-[9px]", meta: "text-[9px]", pad: "p-4 pl-6" },
   lg: { title: "text-[30px] leading-[1.02]", kicker: "text-[10px]", meta: "text-[10px]", pad: "p-6 pl-9" },
 }
 
-/** The plan's PDF cover, drawn from its data: a booklet with a spine, lane lines and the plan title. */
+/** The plan's cover, drawn from its data: a booklet with a spine, lane lines and the plan title. */
 export function PlanCover({ plan, size = "md", className }: { plan: StorePlan; size?: CoverSize; className?: string }) {
   const color = ACCENT_COLORS[plan.accent]
   const seed = seedOf(plan.id)
@@ -59,16 +60,18 @@ export function PlanCover({ plan, size = "md", className }: { plan: StorePlan; s
       <div className={cn("relative flex h-full flex-col", text.pad)}>
         <div className="flex items-center justify-between gap-2">
           <span className={cn("font-bold uppercase tracking-[0.28em] text-white/80", text.kicker)}>SwimGPT</span>
-          <span className={cn("rounded-full border px-1.5 py-px font-semibold uppercase tracking-[0.14em]", text.kicker)} style={{ borderColor: `rgba(${color.rgb},0.45)`, color: color.light }}>{plan.category}</span>
+          {size !== "xs" && (
+            <span className={cn("rounded-full border px-1.5 py-px font-semibold uppercase tracking-[0.14em]", text.kicker)} style={{ borderColor: `rgba(${color.rgb},0.45)`, color: color.light }}>{plan.category}</span>
+          )}
         </div>
         <div className="mt-auto">
           <p className={cn("font-black tracking-tight text-white", text.title)}>{plan.title}</p>
-          <div className="mt-2 h-[3px] w-10 rounded-full" style={{ background: `linear-gradient(90deg, ${color.light}, ${color.main})` }} />
-          <div className={cn("mt-2.5 flex flex-wrap gap-x-2 gap-y-0.5 font-semibold uppercase tracking-[0.16em] text-white/55", text.meta)}>
+          <div className={cn("rounded-full", size === "xs" ? "mt-1.5 h-[2px] w-6" : "mt-2 h-[3px] w-10")} style={{ background: `linear-gradient(90deg, ${color.light}, ${color.main})` }} />
+          {size !== "xs" && <div className={cn("mt-2.5 flex flex-wrap gap-x-2 gap-y-0.5 font-semibold uppercase tracking-[0.16em] text-white/55", text.meta)}>
             {size === "sm"
               ? <><span>{plan.weeks} wk</span><span style={{ color: color.light }}>·</span><span>{plan.sessions_per_week}×/wk</span></>
               : <><span>{plan.weeks} weeks</span><span style={{ color: color.light }}>·</span><span>{plan.sessions_per_week}×/week</span><span style={{ color: color.light }}>·</span><span>{plan.pages} pp</span></>}
-          </div>
+          </div>}
         </div>
       </div>
       {/* moving sheen, driven by the tilt wrapper's pointer position */}

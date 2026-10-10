@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useId, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import type { CSSProperties, ReactNode } from "react"
 import type { LucideIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -114,6 +114,31 @@ export function StatTile({
   )
 }
 
+/** Eases from the value it showed last to `target` (from 0 the first time), so a changed number glides to the new one. */
+export function useTween(target: number, duration = 800) {
+  const [value, setValue] = useState(0)
+  const shown = useRef(0)
+  useEffect(() => {
+    if (prefersReducedMotion()) {
+      shown.current = target
+      setValue(target)
+      return
+    }
+    const origin = shown.current
+    const start = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / duration)
+      shown.current = origin + (target - origin) * (1 - Math.pow(1 - progress, 3))
+      setValue(shown.current)
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [target, duration])
+  return value
+}
+
 export function useCountUp(target: number, duration = 900) {
   const [value, setValue] = useState(0)
   useEffect(() => {
@@ -200,5 +225,43 @@ export function GrowBar({ percent, className, barClassName }: { percent: number;
         style={{ width: `${shown}%` }}
       />
     </div>
+  )
+}
+
+export type TimelineStep = { key: string; icon: LucideIcon; when: string; title: string; text: string; chips?: string[]; tone: string; ring: string }
+
+/**
+ * Steps along a line that draws itself in, with a light travelling along it: a row from md up, a column below.
+ * `tone` colours a step's icon and `ring` its circle; `line` is the line's gradient (from-…/via-…/to-… classes).
+ */
+export function StepTimeline({ steps, line }: { steps: TimelineStep[]; line: string }) {
+  return (
+    <ol className={cn("relative grid gap-6 md:gap-4", steps.length === 4 ? "md:grid-cols-4" : "md:grid-cols-3")}>
+      <span aria-hidden className={cn("st-line pointer-events-none absolute top-[22px] hidden h-px bg-gradient-to-r md:block", line)}
+        style={{ left: `${50 / steps.length}%`, right: `${50 / steps.length}%` }}>
+        <span className="st-travel absolute top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.85)]" />
+      </span>
+      {steps.map((step, index) => (
+        <li key={step.key} className="st-node relative flex gap-4 md:flex-col md:items-center md:gap-0 md:text-center" style={{ "--i": index } as CSSProperties}>
+          <span className="st-node-icon relative z-10 grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#0d151d]">
+            <span className={cn("grid h-full w-full place-items-center rounded-full border", step.ring)}>
+              <step.icon className={cn("h-5 w-5", step.tone)} />
+            </span>
+          </span>
+          <div className="min-w-0 md:mt-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{step.when}</p>
+            <h4 className="mt-1 text-base font-semibold text-white">{step.title}</h4>
+            <p className="mt-1.5 text-sm leading-6 text-slate-400">{step.text}</p>
+            {step.chips && step.chips.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5 md:justify-center">
+                {step.chips.map((chip) => (
+                  <span key={chip} className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-slate-300">{chip}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </li>
+      ))}
+    </ol>
   )
 }

@@ -1,0 +1,44 @@
+{
+ "50-free-speed-lab": {
+  "pages": 48,
+  "weeks": 6,
+  "sessions_per_week": 6,
+  "sessions": 36
+ },
+ "100-race-pace-system": {
+  "pages": 51,
+  "weeks": 6,
+  "sessions_per_week": 5,
+  "sessions": 30
+ },
+ "200-free-back-half": {
+  "pages": 67,
+  "weeks": 6,
+  "sessions_per_week": 8,
+  "sessions": 48
+ },
+ "distance-engine": {
+  "pages": 53,
+  "weeks": 6,
+  "sessions_per_week": 6,
+  "sessions": 36
+ },
+ "im-mastery": {
+  "pages": 53,
+  "weeks": 6,
+  "sessions_per_week": 6,
+  "sessions": 36
+ },
+ "age-group-foundations": {
+  "pages": 75,
+  "weeks": 6,
+  "sessions_per_week": 5,
+  "sessions": 30
+ },
+ "masters-comeback": {
+  "pages": 54,
+  "weeks": 6,
+  "sessions_per_week": 5,
+  "sessions": 30
+ }
+}

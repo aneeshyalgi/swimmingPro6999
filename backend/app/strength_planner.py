@@ -42,7 +42,7 @@ class Athlete:
     weight_kg: float | None = None
     events: list[str] = field(default_factory=list)
     swimmer_type: str | None = None
-    coaches: list[str] = field(default_factory=list)
+    coach: str | None = None                         # the athlete's coach ("Coach Tony")
     facility: str | None = None                      # best gym level available, None = no gym access
     gym_sessions: int = 0
     swim_sessions: int = 0
@@ -61,7 +61,7 @@ def athlete_from_profile(profile: dict[str, Any], *, completed_sessions: int = 0
     return Athlete(
         age=_number(profile.get("age")), gender=profile.get("gender"), weight_kg=_number(profile.get("weight"), float),
         events=list(profile.get("main_events") or []), swimmer_type=profile.get("swimmer_type"),
-        coaches=list(profile.get("recommended_coaches") or []),
+        coach=(profile.get("recommended_coaches") or [None])[0],
         facility=next((name for name in GYM_FACILITIES if name in facilities), None),
         gym_sessions=_number(profile.get("gym_sessions_per_week")) or 0,
         swim_sessions=_number(profile.get("swim_sessions_per_week")) or 0,
@@ -80,10 +80,10 @@ def _number(value: Any, kind: type = int):
 
 
 def coach_system(athlete: Athlete) -> CoachSystem:
-    """The athlete's strength identity: their first matched coach that has a Strength & Mobility system."""
-    for name in athlete.coaches:
-        if name in SYSTEM_BY_COACH_NAME:
-            return COACH_SYSTEMS[SYSTEM_BY_COACH_NAME[name]]
+    """The athlete's strength identity: their coach's Strength & Mobility system, or (for a coach without one, such
+    as Coach Brad) the system for their swimmer type."""
+    if athlete.coach in SYSTEM_BY_COACH_NAME:
+        return COACH_SYSTEMS[SYSTEM_BY_COACH_NAME[athlete.coach]]
     by_type = {"sprinter": "timothy" if athlete.facility in ("Full Gym Access", "Basic Gym") else "pete",
                "distance": "tony", "mid": "robert", "specialist": "robert"}
     return COACH_SYSTEMS[by_type.get(str(athlete.swimmer_type or "").lower(), "robert")]
@@ -222,6 +222,12 @@ class Context:
     restricted: list[str]
     caps: dict[str, int]
     areas: list[str]                   # stroke mobility demands
+    borrowed: bool = False             # the athlete's coach has no strength system, so SwimGPT's is used
+
+
+def speaker(ctx: Context) -> str:
+    """Who the athlete's gym sessions speak as: their own coach, never another coach whose system is borrowed."""
+    return ctx.athlete.coach if ctx.borrowed and ctx.athlete.coach else ctx.coach.coach
 
 
 def context_for(athlete: Athlete, week_start: date) -> Context:
@@ -237,6 +243,7 @@ def context_for(athlete: Athlete, week_start: date) -> Context:
         youth=athlete.age is not None and athlete.age < YOUTH_AGE, tired=readiness_low(athlete),
         heavy_swim_load=athlete.swim_sessions >= 9, buckets=bucket_plan(athlete), mobility=profile,
         restricted=restricted, caps=movement_caps(athlete), areas=areas,
+        borrowed=bool(athlete.coach) and athlete.coach != coach.coach,
     )
 
 
@@ -403,7 +410,8 @@ def intensity(ctx: Context, template: SessionTemplate) -> str:
 def reasons(ctx: Context, template: SessionTemplate) -> list[str]:
     """Plain-language decisions behind the session (shown as the rationale and given to the AI writer)."""
     coach, block, phase = ctx.coach, ctx.block, PHASES[ctx.block.key]
-    out = [f"{coach.coach}'s {coach.system}: {coach.character}"]
+    out = [f"{ctx.athlete.coach} has no written gym program, so your strength work follows SwimGPT's {coach.system}: {coach.character}"
+           if ctx.borrowed else f"{coach.coach}'s {coach.system}: {coach.character}"]
     if block.meet:
         meet = block.meet.get("name") or "your next meet"
         when = f"race week for {meet}" if block.weeks_out == 0 else f"{block.weeks_out} week{'s' if block.weeks_out != 1 else ''} out from {meet}"
@@ -481,7 +489,7 @@ def strength_session(day: date, template: SessionTemplate, ctx: Context, extra: 
             "buckets": {bucket: value for bucket, value in ctx.buckets.items() if value != MAINTAIN},
             "mobility_profile": ctx.mobility, "readiness": "low" if ctx.tired else "normal",
             "families": [item["_family"] for item in exercises]}
-    brief = {"coach": ctx.coach.coach, "identity": ctx.coach.character, "feel": ctx.coach.feel, "philosophy": ctx.coach.philosophy,
+    brief = {"coach": speaker(ctx), "identity": ctx.coach.character, "feel": ctx.coach.feel, "philosophy": ctx.coach.philosophy,
              "objective": ctx.coach.objective, "programming_rule": PROGRAMMING_RULE,
              "session": template.title, "focus": template.focus, "block": ctx.coach.mesocycle[ctx.block.key], "phase": phase.label,
              "decisions": why, "exercises": [f"{item['exercise']} {item['sets']}×{item['repetitions']}" for item in exercises]}
@@ -520,7 +528,8 @@ def mobility_session(day: date, ctx: Context) -> PlannedSession:
     focus = ", ".join(MOBILITY_AREAS[area].label for area in ctx.areas[:2]) or "full-body ranges"
     workout = {
         "title": f"{routine.title}", "objective": f"{routine.minutes} of mobility focused on {focus.lower()}.",
-        "rationale": f"{ctx.coach.coach}'s mobility on a non-gym day. {routine.note}",
+        "rationale": (f"Mobility on a non-gym day from SwimGPT's {ctx.coach.system}. {routine.note}" if ctx.borrowed
+                      else f"{ctx.coach.coach}'s mobility on a non-gym day. {routine.note}"),
         "intensity": "Minimal", "estimated_duration_minutes": 15,
         "warm_up": ["Temperature: 3 min easy movement (skipping, jog or bike)"],
         "exercises": exercises, "cool_down": [CENTRAL_MOBILITY_RULE],

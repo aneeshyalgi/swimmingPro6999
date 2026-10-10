@@ -18,7 +18,7 @@ const demoVideoUrl = supabase.storage.from("Videos").getPublicUrl("gemini_genera
 
 const heroStats = [
   { value: "6", label: "pace zones from your PBs" },
-  { value: "2", label: "elite coaches matched to you" },
+  { value: "1", label: "elite coach of your choice" },
   { value: "24/7", label: "coach chat" },
 ]
 

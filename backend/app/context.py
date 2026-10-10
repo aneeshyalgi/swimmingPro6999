@@ -43,8 +43,24 @@ def _coach_fit(key: str, profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _lead_rank(key: str, fit: dict[str, Any], order: list[str]) -> tuple:
+def _coach_rank(key: str, fit: dict[str, Any], order: list[str]) -> tuple:
     return (len(fit["matched"]), fit["affinity"], fit["feasible"], len(fit["supporting"]), fit["specificity"], -order.index(key))
+
+
+def _ranked(profile: dict[str, Any]) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    """Every coach key, best fit for the athlete first, with each coach's fit.
+
+    Coaches are ranked by, in order:
+      1. how many of the athlete's events are the coach's main events;
+      2. swimmer-type fit (specialist = 2, adjacent = 1);
+      3. whether the athlete can follow the program (Timothy's program needs a gym);
+      4. extra event support beyond main events (Pete's 200 Pace sessions);
+      5. how specialised the coach is for the athlete's events;
+      6. catalog order, so the result is always deterministic.
+    """
+    order = list(COACHES)
+    fit = {key: _coach_fit(key, profile) for key in order}
+    return sorted(order, key=lambda key: _coach_rank(key, fit[key], order), reverse=True), fit
 
 
 def coach_key(name: str) -> str | None:
@@ -55,62 +71,28 @@ def coach_key(name: str) -> str | None:
     return next((key for key, coach in COACHES.items() if coach["name"].lower() == normalized), None)
 
 
-def select_coaches(profile: dict[str, Any], chosen: list[str] | None = None) -> tuple[list[str], list[str]]:
-    """The athlete's two coaches: the ones they chose, or the two whose programs best fit them.
-
-    `chosen` (or the profile's `chosen_coaches`) holds the coaches the athlete picked during onboarding, head coach
-    first. Two picks are used exactly as given. One pick leads, paired with the coach who completes it best under the
-    ranking below. No picks (or an empty list) gives the recommended pair.
-
-    Every pair of coaches is ranked by, in order:
-
-    Every pair of coaches is ranked by, in order:
-      1. how many of the athlete's events are main events of at least one of the two coaches;
-      2. total main-event matches across both coaches;
-      3. swimmer-type fit (specialist = 2, adjacent = 1);
-      4. whether the athlete can follow both programs (Timothy's program needs a gym);
-      5. extra event support beyond main events (Pete's 200 Pace sessions);
-      6. how specialised the coaches are for the athlete's events;
-      7. catalog order, so the result is always deterministic.
-    The coach who fits the athlete best on their own leads (the default coach in chat).
-    """
-    order, fit, pair_rank = _pair_ranker(profile)
-    picks = chosen if chosen is not None else profile.get("chosen_coaches") or []
-    keys = list(dict.fromkeys(key for key in (coach_key(name) for name in picks) if key))[:2]
-    if len(keys) == 1:
-        keys.append(max((key for key in order if key != keys[0]), key=lambda key: pair_rank((keys[0], key))))
-    if not keys:
-        best = max(((a, b) for i, a in enumerate(order) for b in order[i + 1 :]), key=pair_rank)
-        keys = sorted(best, key=lambda key: _lead_rank(key, fit[key], order), reverse=True)
-    return keys, [_coach_name(key) for key in keys]
+def recommended_coach(profile: dict[str, Any]) -> str:
+    """The coach whose program fits the athlete best (see _ranked)."""
+    return _coach_name(_ranked(profile)[0][0])
 
 
-def _pair_ranker(profile: dict[str, Any]):
-    order = list(COACHES)
-    fit = {key: _coach_fit(key, profile) for key in order}
-    events = set(profile.get("main_events") or [])
+def select_coach(profile: dict[str, Any], chosen: str | None = None) -> str:
+    """The athlete's one coach: the one they chose (`chosen`, or the profile's `chosen_coach`), else the recommended coach."""
+    key = coach_key(chosen or profile.get("chosen_coach") or "")
+    return _coach_name(key) if key else recommended_coach(profile)
 
-    def pair_rank(pair: tuple[str, str]) -> tuple:
-        first, second = pair
-        covered = events & (set(COACHES[first]["main_events"]) | set(COACHES[second]["main_events"]))
-        return (
-            len(covered),
-            len(fit[first]["matched"]) + len(fit[second]["matched"]),
-            fit[first]["affinity"] + fit[second]["affinity"],
-            fit[first]["feasible"] + fit[second]["feasible"],
-            len(fit[first]["supporting"]) + len(fit[second]["supporting"]),
-            fit[first]["specificity"] + fit[second]["specificity"],
-            -(order.index(first) + order.index(second)),
-        )
 
-    return order, fit, pair_rank
+def athlete_coach(profile: dict[str, Any]) -> str:
+    """The coach saved on the athlete's profile (re-selected for profiles saved before coaches were stored)."""
+    saved = profile.get("recommended_coaches") or []
+    return saved[0] if saved else select_coach(profile)
 
 
 def _join(items: list[str]) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f" and {items[-1]}"
 
 
-def _reasons(key: str, fit: dict[str, Any], profile: dict[str, Any], standalone: bool = False) -> list[str]:
+def _reasons(key: str, fit: dict[str, Any], profile: dict[str, Any]) -> list[str]:
     coach = COACHES[key]
     swimmer_type = SWIMMER_TYPE_LABELS.get(str(profile.get("swimmer_type") or "").lower())
     reasons = []
@@ -131,10 +113,7 @@ def _reasons(key: str, fit: dict[str, Any], profile: dict[str, Any], standalone:
             else "Includes gym sessions, but you haven't listed gym access, so those days will need adapting."
         )
     if not fit["matched"] and not fit["supporting"]:
-        reasons.append(
-            f"Built for {_join(coach['main_events'][:3])} rather than your events." if standalone
-            else f"Complements your other coach with {coach['title'].lower()} sessions."
-        )
+        reasons.append(f"Built for {_join(coach['main_events'][:3])} rather than your events.")
     return reasons
 
 
@@ -147,47 +126,32 @@ def _your_week(key: str, profile: dict[str, Any]) -> dict[str, Any] | None:
     return {"requested": requested, "sessions_per_week": sessions, "order": structure[sessions]}
 
 
-def coach_recommendations(profile: dict[str, Any], coach_names: list[str]) -> list[dict[str, Any]]:
-    """Full profile of each selected coach plus why they were recommended, in the given (lead-first) order."""
-    recommendations = []
-    for name in coach_names:
-        key = coach_key(name)
-        if key is None:
-            continue
-        fit = _coach_fit(key, profile)
-        recommendations.append({
-            **public_profile(key),
-            "covered_events": fit["matched"],
-            "supported_events": fit["supporting"],
-            "reasons": _reasons(key, fit, profile),
-            "your_week": _your_week(key, profile),
-        })
-    return recommendations
+def _recommendation(key: str, fit: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **public_profile(key),
+        "covered_events": fit["matched"],
+        "supported_events": fit["supporting"],
+        "reasons": _reasons(key, fit, profile),
+        "your_week": _your_week(key, profile),
+    }
+
+
+def coach_recommendation(profile: dict[str, Any], coach_name: str) -> dict[str, Any]:
+    """Full profile of the athlete's coach plus why they fit the athlete."""
+    key = coach_key(coach_name)
+    if key is None:
+        raise ValueError(f"Unknown coach: {coach_name}")
+    return _recommendation(key, _coach_fit(key, profile), profile)
 
 
 def coach_options(profile: dict[str, Any]) -> dict[str, Any]:
-    """Every coach the athlete can choose during onboarding, recommended pair first, each with how they fit.
+    """Every coach the athlete can choose during onboarding, best fit first, each with how they fit.
 
-    `recommended` is 1 for the recommended head coach, 2 for the second, else None. `partner` is who the coach would be
-    paired with if the athlete picks only them.
+    `recommended` is true for the top match only (also returned by name as the response's `recommended`).
     """
-    recommended, names = select_coaches(profile, chosen=[])
-    order, fit, pair_rank = _pair_ranker(profile)
-    ranked = recommended + sorted((key for key in order if key not in recommended),
-                                  key=lambda key: _lead_rank(key, fit[key], order), reverse=True)
-    coaches = []
-    for key in ranked:
-        partner = max((other for other in order if other != key), key=lambda other: pair_rank((key, other)))
-        coaches.append({
-            **public_profile(key),
-            "covered_events": fit[key]["matched"],
-            "supported_events": fit[key]["supporting"],
-            "reasons": _reasons(key, fit[key], profile, standalone=True),
-            "your_week": _your_week(key, profile),
-            "recommended": recommended.index(key) + 1 if key in recommended else None,
-            "partner": _coach_name(partner),
-        })
-    return {"coaches": coaches, "recommended": names}
+    ranked, fit = _ranked(profile)
+    coaches = [{**_recommendation(key, fit[key], profile), "recommended": index == 0} for index, key in enumerate(ranked)]
+    return {"coaches": coaches, "recommended": _coach_name(ranked[0])}
 
 
 def resolve_coaches(names: list[str]) -> list[CoachProgram]:
@@ -244,8 +208,7 @@ def chat_context(names: list[str], query: str, limit: int = 8) -> tuple[str, lis
     return "\n\n".join(blocks), sources, [program.name for program in programs]
 
 
-def plan_context(profile: dict[str, Any]) -> tuple[str, list[str], list[str]]:
-    """The two selected coaches' programs (overviews and session catalogue) for the season plan."""
-    _, selected = select_coaches(profile)
-    context, sources, names = chat_context(selected, " ".join(profile.get("main_events") or []) + " race pace taper", limit=6)
-    return context, sorted({item["source_file"] for item in sources}), names
+def plan_context(profile: dict[str, Any], coach: str) -> tuple[str, list[str]]:
+    """The coach's program (overview and session catalogue) for the athlete's season plan."""
+    context, sources, _ = chat_context([coach], " ".join(profile.get("main_events") or []) + " race pace taper", limit=6)
+    return context, sorted({item["source_file"] for item in sources})

@@ -17,9 +17,16 @@ class Settings(BaseSettings):
     openai_speech_model: str = Field(default="gpt-4o-mini-tts", alias="OPENAI_SPEECH_MODEL")
     # Training-plan generation needs precise arithmetic and instruction following; a stronger model by default.
     openai_plan_model: str = Field(default="gpt-4.1", alias="OPENAI_PLAN_MODEL")
+    # Recognising the stroke in a clip's frames (Stroke Lab); tested best on underwater and side-on clips.
+    openai_vision_model: str = Field(default="gpt-5.5", alias="OPENAI_VISION_MODEL")
     stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
     stripe_publishable_key: str = Field(default="", alias="STRIPE_PUBLISHABLE_KEY")
     frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
+    # Proxies in front of the API that append the caller's IP to X-Forwarded-For: 1 for a hosting platform's load
+    # balancer, 2 with a CDN in front of that. The free video analysis is counted per network, so this must match the
+    # deployment. The header is only read from connections on a private network (where those proxies are); otherwise,
+    # and in local development, the connection's own address is used.
+    trusted_proxy_hops: int = Field(default=1, alias="TRUSTED_PROXY_HOPS")
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

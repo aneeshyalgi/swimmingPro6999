@@ -114,27 +114,29 @@ class NoDocumentReadingTests(unittest.TestCase):
 class SwimPlannerTests(unittest.TestCase):
     MONDAY = date(2026, 10, 5)
 
-    def test_lead_coach_order_with_second_coach_days(self):
-        week = assign_week(["Coach Robert", "Coach Tony"], ["200m IM", "400m IM", "800m Freestyle"], self.MONDAY, 6)
+    def test_the_week_follows_the_coachs_own_weekly_order(self):
+        week = assign_week("Coach Robert", self.MONDAY, 6)
         self.assertEqual(len(week), 6)
-        self.assertEqual(sum(item.coach.key == "tony" for item in week), 2)   # 800 free is Tony's alone: 1/3 of events
-        robert = [item.session.type for item in week if item.coach.key == "robert"]
-        self.assertEqual(robert, [kind for index, kind in enumerate(swim_order(PROGRAMS["robert"], 6)) if index not in (1, 4)])
+        self.assertTrue(all(item.coach.key == "robert" for item in week))
+        self.assertEqual([item.session.type for item in week], swim_order(PROGRAMS["robert"], 6))
+
+    def test_unknown_coach_or_no_swims_plans_nothing(self):
+        self.assertEqual(assign_week("Coach Nobody", self.MONDAY, 5), [])
+        self.assertEqual(assign_week("Coach Robert", self.MONDAY, 0), [])
 
     def test_sessions_rotate_week_to_week(self):
-        this = [item.label for item in assign_week(["Coach Robert"], ["200m IM"], self.MONDAY, 5)]
-        later = [item.label for item in assign_week(["Coach Robert"], ["200m IM"], date(2026, 10, 12), 5)]
+        this = [item.label for item in assign_week("Coach Robert", self.MONDAY, 5)]
+        later = [item.label for item in assign_week("Coach Robert", date(2026, 10, 12), 5)]
         self.assertNotEqual(this, later)
 
     def test_taper_weeks_use_the_written_taper_sessions(self):
         meets = [{"date": "2026-10-16", "priority": "A", "name": "Nationals"}, {"date": "2026-10-07", "priority": "C"}]
         self.assertEqual(taper_meet(meets, self.MONDAY)["name"], "Nationals")
-        week = assign_week(["Coach Brad", "Coach Pete"], ["50m Freestyle"], self.MONDAY, 4, taper=True)
-        self.assertTrue(all(item.taper for item in week if item.coach.key == "brad"))
-        self.assertFalse(any(item.taper for item in week if item.coach.key == "pete"))   # Pete wrote no taper sessions
+        self.assertTrue(all(item.taper for item in assign_week("Coach Brad", self.MONDAY, 4, taper=True)))
+        self.assertFalse(any(item.taper for item in assign_week("Coach Pete", self.MONDAY, 4, taper=True)))   # Pete wrote no taper sessions
 
     def test_timothy_gym_days_are_not_swims(self):
-        week = assign_week(["Coach Timothy"], ["50m Freestyle"], self.MONDAY, 6)
+        week = assign_week("Coach Timothy", self.MONDAY, 6)
         self.assertNotIn("Gym", [item.session.type for item in week])
 
     def test_main_strokes_follow_the_athletes_events(self):
@@ -173,7 +175,7 @@ class SwimWeekGenerationTests(unittest.TestCase):
         monday = date(2030, 1, 7)
         profile = {"id": "p", "main_events": ["200m IM", "400m IM"], "swimmer_type": "specialist", "swim_sessions_per_week": 5,
                    "gym_sessions_per_week": 0, "session_duration": "120", "facilities": ["50m Pool"],
-                   "recommended_coaches": ["Coach Robert", "Coach Tony"]}
+                   "recommended_coaches": ["Coach Robert"]}
         empty_week = {"generated": False, "days": [{"date": (monday + timedelta(days=i)).isoformat(), "workouts": [], "strength": None,
                                                     "mobility": [], "competitions": [], "objective": "", "recovery": []} for i in range(7)]}
         prompts = []
@@ -201,7 +203,7 @@ class SwimWeekGenerationTests(unittest.TestCase):
 
         swim_prompts = [prompt for prompt in prompts if "by adapting this exact session" in prompt]
         self.assertEqual(len(swim_prompts), 5)
-        expected = assign_week(["Coach Robert", "Coach Tony"], profile["main_events"], monday, 5)
+        expected = assign_week("Coach Robert", monday, 5)
         for prompt, assignment in zip(swim_prompts, expected):
             self.assertIn(assignment.render(), prompt)
         saved = save_record.call_args.args[5]

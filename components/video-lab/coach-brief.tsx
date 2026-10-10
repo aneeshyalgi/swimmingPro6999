@@ -1,8 +1,7 @@
 "use client"
 
 import { useEffect, useState, type CSSProperties } from "react"
-import Link from "next/link"
-import { AlertTriangle, ArrowRight, CheckCircle2, Dumbbell, MessageSquare, RotateCcw, Sparkles, Zap } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Dumbbell, RotateCcw, Sparkles, Zap } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { ClipSummary } from "@/components/video-lab/pose-engine"
 
@@ -145,9 +144,6 @@ export function CoachBrief({ result, summary, stroke, onReset }: { result: Analy
         <button type="button" onClick={onReset} className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.04] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/[0.08]">
           <RotateCcw className="h-4 w-4" />Analyze another clip
         </button>
-        <Link href="/coach-chat" className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-foreground shadow-[0_12px_30px_rgba(87,229,234,0.3)] transition-transform hover:-translate-y-0.5">
-          <MessageSquare className="h-4 w-4" />Ask your coach about it<ArrowRight className="h-4 w-4" />
-        </Link>
       </div>
     </section>
   )

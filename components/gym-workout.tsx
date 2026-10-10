@@ -1,6 +1,6 @@
 "use client"
 
-import type { ReactNode } from "react"
+import type { MouseEvent, ReactNode } from "react"
 import { CheckCircle2, Clock, Dumbbell, Flame, Lightbulb, Pencil, Snowflake, Sparkles, UserRound, Waves } from "lucide-react"
 import { Expander } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
@@ -96,19 +96,39 @@ export function GymWorkoutDetails({ item }: { item: GymItem }) {
   )
 }
 
-/** Collapsible strength workout in the Workout Library calendar. */
-export function GymWorkoutCard({ item, onEdit, actions, className }: {
+/** A strength workout's prescription and its builder and ••• controls (the open card and the full-screen workout view). */
+export function GymWorkoutBody({ item, onEdit, actions }: { item: GymItem; onEdit: () => void; actions?: ReactNode }) {
+  return (
+    <>
+      <GymWorkoutDetails item={item} />
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.07] pt-4">
+        {!item.completed && <button type="button" onClick={onEdit} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 text-sm font-medium text-white transition-colors hover:border-violet-300/50 hover:bg-violet-400/10"><Pencil className="h-3.5 w-3.5 text-violet-300" />Open in builder</button>}
+        {item.completed && <span className="text-xs text-slate-500">Untick it to edit, move or delete.</span>}
+        <span className="flex-1" />
+        {actions}
+      </div>
+    </>
+  )
+}
+
+/**
+ * A strength workout in the Workout Library calendar. With `onOpen` its button opens the workout full screen; without
+ * it the card expands in place (`defaultOpen` starts it expanded, as in the full-screen day view).
+ */
+export function GymWorkoutCard({ item, onEdit, actions, className, defaultOpen = false, onOpen }: {
   item: GymItem
   onEdit: () => void
   actions?: ReactNode
   className?: string
+  defaultOpen?: boolean
+  onOpen?: (event: MouseEvent<HTMLButtonElement>) => void
 }) {
   const tone = doseTones[item.dose] ?? doseTones.Moderate
   const meta = item.workout.meta
   const when = [meta?.label, meta?.start_time && (meta.end_time ? `${meta.start_time}–${meta.end_time}` : meta.start_time)].filter(Boolean).join(" · ")
   const manual = item.source === "manual"
   return (
-    <Expander className={cn(item.completed ? "border-emerald-400/25" : "border-violet-400/15", className)} header={
+    <Expander defaultOpen={defaultOpen} onOpen={onOpen} className={cn(item.completed ? "border-emerald-400/25" : "border-violet-400/15", className)} header={
       <div className="flex items-center gap-3">
         <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", item.completed ? "bg-emerald-400/15 text-emerald-300" : tone.icon)}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Dumbbell className="h-5 w-5" />}</span>
         <div className="min-w-0 flex-1">
@@ -124,13 +144,7 @@ export function GymWorkoutCard({ item, onEdit, actions, className }: {
         </div>
         <span className="flex shrink-0 flex-col items-end gap-1"><DoseChip dose={item.dose} /><span className="flex items-center gap-1 text-[11px] text-slate-400"><Clock className="h-3 w-3" />{item.workout.estimated_duration_minutes} min</span></span>
       </div>}>
-      <GymWorkoutDetails item={item} />
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.07] pt-4">
-        {!item.completed && <button type="button" onClick={onEdit} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 text-sm font-medium text-white transition-colors hover:border-violet-300/50 hover:bg-violet-400/10"><Pencil className="h-3.5 w-3.5 text-violet-300" />Open in builder</button>}
-        {item.completed && <span className="text-xs text-slate-500">Untick it to edit, move or delete.</span>}
-        <span className="flex-1" />
-        {actions}
-      </div>
+      <GymWorkoutBody item={item} onEdit={onEdit} actions={actions} />
     </Expander>
   )
 }

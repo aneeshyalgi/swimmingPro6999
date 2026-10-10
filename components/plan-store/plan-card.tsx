@@ -1,18 +1,21 @@
 "use client"
 
 import type { CSSProperties } from "react"
-import { CalendarDays, Eye, FileText, Repeat, Sparkles } from "lucide-react"
+import { CalendarDays, Check, Eye, FileText, Repeat, Sparkles } from "lucide-react"
 import { PlanCover, Tilt } from "@/components/plan-store/plan-cover"
 import { BuyButton } from "@/components/plan-store/plan-preview"
-import { ACCENT_COLORS, formatPrice, type StorePlan } from "@/lib/plan-store"
+import { ACCENT_COLORS, formatPrice, prefetchPlanPreview, type StorePlan } from "@/lib/plan-store"
 
 /** One plan in the store grid: the cover on a lit stage with a page fanning out behind it on hover. */
-export function PlanCard({ plan, index, buying, onPreview, onBuy }: { plan: StorePlan; index: number; buying: boolean; onPreview: () => void; onBuy: () => void }) {
+export function PlanCard({ plan, index, buying, owned, onPreview, onBuy }: {
+  plan: StorePlan; index: number; buying: boolean; owned?: boolean; onPreview: () => void; onBuy: () => void
+}) {
   const color = ACCENT_COLORS[plan.accent]
   return (
     <div className="dash-reveal h-full" style={{ "--reveal-delay": `${Math.min(index, 8) * 70}ms` } as CSSProperties}>
       <Tilt max={7} className="group h-full">
-        <article className="relative flex h-full flex-col overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(170deg,rgba(20,30,40,0.92),rgba(8,12,18,0.97))] p-3 shadow-[0_20px_50px_rgba(0,0,0,0.35)] transition-[border-color,box-shadow] duration-500 hover:border-white/[0.16]"
+        <article onPointerEnter={() => prefetchPlanPreview(plan.id)} onFocus={() => prefetchPlanPreview(plan.id)}
+          className="relative flex h-full flex-col overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(170deg,rgba(20,30,40,0.92),rgba(8,12,18,0.97))] p-3 shadow-[0_20px_50px_rgba(0,0,0,0.35)] transition-[border-color,box-shadow] duration-500 hover:border-white/[0.16]"
           style={{ "--accent-rgb": color.rgb } as CSSProperties}>
           <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100" style={{ boxShadow: `inset 0 0 0 1px rgba(${color.rgb},0.35), 0 0 60px rgba(${color.rgb},0.08)`, borderRadius: 26 }} />
 
@@ -53,11 +56,13 @@ export function PlanCard({ plan, index, buying, onPreview, onBuy }: { plan: Stor
               <span className="inline-flex items-center gap-1.5"><Repeat className="h-3.5 w-3.5 text-slate-500" />{plan.sessions_per_week}×/wk</span>
               <span className="inline-flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 text-slate-500" />{plan.pages} pages</span>
             </div>
-            <div className="mt-auto flex items-center justify-between gap-3 pt-5">
-              <p className="font-mono text-2xl font-bold tabular-nums text-white">{formatPrice(plan.price, plan.currency)}</p>
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-3 pt-5">
+              {owned
+                ? <p className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-300"><Check className="h-4 w-4" strokeWidth={3} />Purchased</p>
+                : <p className="font-mono text-2xl font-bold tracking-tighter tabular-nums text-white">{formatPrice(plan.price, plan.currency)}</p>}
               <div className="flex gap-2">
                 <button type="button" onClick={onPreview} className="h-9 rounded-full border border-white/12 bg-white/[0.04] px-4 text-sm font-medium text-white transition-colors hover:bg-white/[0.1]">Details</button>
-                <BuyButton plan={plan} buying={buying} onBuy={onBuy} compact />
+                <BuyButton plan={plan} buying={buying} owned={owned} onBuy={onBuy} compact />
               </div>
             </div>
           </div>

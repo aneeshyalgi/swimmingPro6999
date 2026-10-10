@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { createPortal } from "react-dom"
 import { Captions, CaptionsOff, Hand, Loader2, Mic, MicOff, PhoneOff, RotateCcw, Send } from "lucide-react"
 import { CoachAvatar, coachLookKey } from "@/components/coach-avatar"
+import { CoachLiveAvatar } from "@/components/coach-live-avatar"
 import { generateCoachSpeech, speechChunks, transcribeRecording } from "@/lib/coach-audio"
+import { playHangUpSound } from "@/lib/call-sounds"
 import { cn } from "@/lib/utils"
 
 /*
@@ -161,11 +163,19 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
     go("speaking")
     const context = contextRef.current
     let offset = 0
-    let next = generateCoachSpeech(coach, parts[0], controller.signal)
+    // The next part is synthesised while the current one plays. When the call ends or the athlete interrupts, that
+    // request is cancelled with nothing left awaiting it; the no-op catch keeps its cancellation from surfacing as an
+    // unhandled AbortError. A part that is awaited still rejects normally, so real failures reach finishTurn's catch.
+    const synthesise = (text: string) => {
+      const request = generateCoachSpeech(coach, text, controller.signal)
+      request.catch(() => undefined)
+      return request
+    }
+    let next = synthesise(parts[0])
     for (let index = 0; index < parts.length; index++) {
       const blob = await next
       if (controller.signal.aborted) return
-      if (index + 1 < parts.length) next = generateCoachSpeech(coach, parts[index + 1], controller.signal)
+      if (index + 1 < parts.length) next = synthesise(parts[index + 1])
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       audioRef.current = audio
@@ -284,6 +294,9 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
   }
   const retry = () => { setError(null); if (streamRef.current) listen(); else onClose() }
   const end = () => {
+    // Once only: a second press (or Esc) while the call is closing shouldn't chime again.
+    if (!aliveRef.current) return
+    playHangUpSound()
     aliveRef.current = false
     stopPlayback()
     discardRecording()
@@ -341,13 +354,13 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
       {/* Orb */}
       <main className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4">
         <button type="button" onClick={interrupt} aria-label={phase === "speaking" ? "Interrupt the coach" : coachName}
-          className={cn("cv-orb relative grid aspect-square w-[min(78vw,420px,46vh)] shrink-0 place-items-center rounded-full outline-none", (phase === "speaking" || phase === "thinking") && "cursor-pointer")}>
-          {[0, 1, 2].map((ring) => <span key={ring} aria-hidden className="cv-ring absolute inset-[14%] rounded-full" style={{ "--r": ring } as CSSProperties} />)}
-          <canvas ref={canvasRef} aria-hidden className="absolute inset-0 h-full w-full" />
-          <span className={cn("cv-portrait relative block w-[34%] rounded-full", phase === "thinking" && "cv-portrait-think")}>
-            <CoachAvatar name={coach} shape="circle" className="h-full w-full ring-4 ring-white/20" />
-            {(phase === "thinking" || phase === "transcribing") && <span aria-hidden className="cv-orbit absolute -inset-3 rounded-full" />}
+          className={cn("cv-orb relative mt-6 w-[min(80vw,400px,44vh)] shrink-0 outline-none [aspect-ratio:180/182] sm:mt-10", (phase === "speaking" || phase === "thinking") && "cursor-pointer")}>
+          {/* The orb glows behind the coach's head and moves with the voice */}
+          <span aria-hidden className="absolute left-1/2 top-[-8%] aspect-square w-[80%] -translate-x-1/2">
+            {[0, 1, 2].map((ring) => <span key={ring} className="cv-ring absolute inset-[14%] rounded-full" style={{ "--r": ring } as CSSProperties} />)}
+            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
           </span>
+          <CoachLiveAvatar coach={coach} phaseRef={phaseRef} speech={outAnalyser} mic={micAnalyser} className="cv-avatar relative h-full w-full" />
         </button>
 
         <p key={phase} role="status" aria-live="polite" className="cv-label mt-5 flex items-center gap-2 text-lg font-semibold tracking-tight sm:text-xl">
@@ -361,7 +374,7 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
           </div>
         )}
         <p className="mt-3 h-5 text-center text-xs text-slate-500">
-          {phase === "listening" ? "Pause when you're done and I'll answer. Space to send now." : phase === "speaking" ? "Tap the orb or press Space to interrupt." : phase === "muted" ? "Unmute when you're ready to talk." : ""}
+          {phase === "listening" ? "Pause when you're done and I'll answer. Space to send now." : phase === "speaking" ? "Tap the coach or press Space to interrupt." : phase === "muted" ? "Unmute when you're ready to talk." : ""}
         </p>
 
         {/* Captions */}

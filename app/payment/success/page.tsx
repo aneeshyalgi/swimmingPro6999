@@ -75,7 +75,7 @@ function PaymentSuccessContent() {
         <p className="mt-3 text-sm leading-6 text-slate-300">{message}</p>
         {status === "error" && (
           <div className="mt-6 flex gap-3">
-            <Button variant="outline" onClick={() => router.replace("/onboarding")} className="flex-1 border-white/10 bg-white/[0.03]">Back to onboarding</Button>
+            <Button variant="outline" onClick={() => router.replace("/subscribe")} className="flex-1 border-white/10 bg-white/[0.03]">Back to payment</Button>
             <Button onClick={() => router.replace("/auth")} className="flex-1 bg-accent text-accent-foreground">Sign in</Button>
           </div>
         )}

@@ -1,10 +1,12 @@
 "use client"
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react"
-import { CalendarDays, Check, ChevronLeft, ChevronRight, CreditCard, FileText, Loader2, Lock, Repeat, ShieldCheck, Sparkles } from "lucide-react"
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { useEffect, useState, type CSSProperties } from "react"
+import Link from "next/link"
+import { BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, CreditCard, FileText, Loader2, Repeat, RotateCcw, ShieldCheck, Sparkles, X, ZoomIn } from "lucide-react"
+import { BookPage } from "@/components/plan-reader/book-page"
 import { PlanCover } from "@/components/plan-store/plan-cover"
-import { ACCENT_COLORS, formatPrice, type StorePlan } from "@/lib/plan-store"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { ACCENT_COLORS, fetchPlanPreview, formatPrice, readerHref, type PlanPreviewPages, type StorePlan } from "@/lib/plan-store"
 import { cn } from "@/lib/utils"
 
 /** Rough intensity of a sample-week session, from its wording, for the coloured bars. */
@@ -16,105 +18,18 @@ export function sessionTone(text: string): { level: number; color: string; label
   return { level: 0.62, color: "#38bdf8", label: "Aerobic" }
 }
 
-/** A light "paper" page, drawn at a fixed 340 px width so it can be scaled down for thumbnails. */
-function Paper({ plan, page, title, children }: { plan: StorePlan; page: number; title: string; children: ReactNode }) {
-  const color = ACCENT_COLORS[plan.accent]
-  return (
-    <div className="relative flex h-[453px] w-[340px] flex-col overflow-hidden rounded-[10px] bg-[#f6f8fa] text-slate-900 shadow-[0_24px_50px_rgba(0,0,0,0.5)]">
-      <div className="h-1.5" style={{ background: `linear-gradient(90deg, ${color.main}, ${color.light})` }} />
-      <div className="flex items-center justify-between px-6 pt-4 text-[8px] font-bold uppercase tracking-[0.22em] text-slate-400">
-        <span>SwimGPT · {plan.title}</span><span>{page}</span>
-      </div>
-      <p className="px-6 pt-3 text-[19px] font-black tracking-tight">{title}</p>
-      <div className="flex-1 px-6 pb-5 pt-3">{children}</div>
-    </div>
-  )
-}
-
-function WeekPage({ plan }: { plan: StorePlan }) {
-  return (
-    <Paper plan={plan} page={2} title="Week 1 at a glance">
-      <p className="text-[10px] leading-4 text-slate-500">{plan.sessions_per_week} sessions · {plan.level}</p>
-      <div className="mt-3 space-y-1.5">
-        {plan.sample_week.map(([day, session], index) => {
-          const tone = sessionTone(session)
-          return (
-            <div key={day + session} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5">
-              <div className="flex items-center gap-2">
-                <span className="w-7 shrink-0 text-[9px] font-black uppercase tracking-[0.1em] text-slate-400">{day}</span>
-                <p className="min-w-0 flex-1 truncate text-[11px] font-semibold">{session}</p>
-                <span className="shrink-0 rounded-full px-1.5 text-[8px] font-bold uppercase tracking-[0.1em]" style={{ background: `${tone.color}22`, color: tone.color }}>{tone.label}</span>
-              </div>
-              <div className="mt-1 h-1 rounded-full bg-slate-100">
-                <div className="store-fill h-full rounded-full" style={{ width: `${tone.level * 100}%`, background: tone.color, "--fill-delay": `${200 + index * 90}ms` } as CSSProperties} />
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </Paper>
-  )
-}
-
-function InsidePage({ plan }: { plan: StorePlan }) {
-  const color = ACCENT_COLORS[plan.accent]
-  return (
-    <Paper plan={plan} page={3} title="What's inside">
-      <ul className="space-y-2.5">
-        {plan.includes.map((item) => (
-          <li key={item} className="flex gap-2.5 text-[11.5px] leading-[1.35] text-slate-700">
-            <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full" style={{ background: color.main }}><Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} /></span>{item}
-          </li>
-        ))}
-      </ul>
-      <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-        {[[plan.weeks, "weeks"], [plan.sessions_per_week, "per week"], [plan.pages, "pages"]].map(([value, label]) => (
-          <div key={label} className="rounded-lg bg-white py-2 ring-1 ring-slate-200"><p className="text-lg font-black">{value}</p><p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</p></div>
-        ))}
-      </div>
-      <p className="mt-4 text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Built for</p>
-      <div className="mt-1.5 flex flex-wrap gap-1">
-        {plan.events.map((event) => <span key={event} className="rounded-full bg-slate-900 px-2 py-0.5 text-[9px] font-semibold text-white">{event}</span>)}
-      </div>
-    </Paper>
-  )
-}
-
-function LockedPage({ plan }: { plan: StorePlan }) {
-  const color = ACCENT_COLORS[plan.accent]
-  return (
-    <Paper plan={plan} page={4} title="Session 1">
-      <div className="pointer-events-none select-none space-y-3 blur-[3px]" aria-hidden>
-        {["Warm-up", "Pre-set", "Main set", "Cool-down"].map((block, index) => (
-          <div key={block}>
-            <p className="text-[9px] font-black uppercase tracking-[0.16em]" style={{ color: color.main }}>{block}</p>
-            {Array.from({ length: index === 2 ? 4 : 2 }, (_, line) => (
-              <div key={line} className="mt-1.5 flex items-center gap-2">
-                <span className="h-2 w-8 rounded bg-slate-300" /><span className="h-2 rounded bg-slate-200" style={{ width: `${45 + ((line * 37 + index * 11) % 40)}%` }} />
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-      <div className="absolute inset-x-0 bottom-0 top-24 flex flex-col items-center justify-center bg-gradient-to-b from-transparent via-[#f6f8fa]/80 to-[#f6f8fa] text-center">
-        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg"><Lock className="h-5 w-5" /></span>
-        <p className="mt-3 text-sm font-black">Every session, written out</p>
-        <p className="mt-1 max-w-[220px] text-[11px] leading-4 text-slate-500">Sets, send-offs and notes for all {plan.weeks * plan.sessions_per_week} sessions unlock with the plan.</p>
-      </div>
-    </Paper>
-  )
-}
-
-const PAGES = ["Cover", "Week 1", "Inside", "Sessions"] as const
-
-function PageView({ plan, page }: { plan: StorePlan; page: number }) {
-  if (page === 0) return <div className="w-[340px]"><PlanCover plan={plan} size="lg" /></div>
-  if (page === 1) return <WeekPage plan={plan} />
-  if (page === 2) return <InsidePage plan={plan} />
-  return <LockedPage plan={plan} />
-}
-
-export function BuyButton({ plan, buying, onBuy, className, compact }: { plan: StorePlan; buying: boolean; onBuy: () => void; className?: string; compact?: boolean }) {
+export function BuyButton({ plan, buying, owned, onBuy, className, compact }: {
+  plan: StorePlan; buying: boolean; owned?: boolean; onBuy: () => void; className?: string; compact?: boolean
+}) {
+  if (owned) {
+    return (
+      <Link href={readerHref(plan.id)} aria-label={`Open ${plan.title}`}
+        className={cn("store-cta inline-flex items-center justify-center gap-2 rounded-full bg-[linear-gradient(135deg,#6ee7b7,#34d399)] font-semibold text-emerald-950 shadow-[0_14px_34px_rgba(52,211,153,0.32)] transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(52,211,153,0.45)]",
+          compact ? "h-9 px-4 text-sm" : "h-12 px-6 text-[15px]", className)}>
+        <BookOpen className="h-4 w-4" />{compact ? "Open" : "Open plan"}
+      </Link>
+    )
+  }
   return (
     <button type="button" onClick={onBuy} disabled={buying}
       className={cn("store-cta inline-flex items-center justify-center gap-2 rounded-full bg-accent font-semibold text-accent-foreground shadow-[0_14px_34px_rgba(87,229,234,0.32)] transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(87,229,234,0.45)] disabled:translate-y-0 disabled:opacity-80",
@@ -124,50 +39,136 @@ export function BuyButton({ plan, buying, onBuy, className, compact }: { plan: S
   )
 }
 
-/** Plan details with a page-turning preview of the PDF. */
-export function PlanPreview({ plan, open, onOpenChange, buying, error, onBuy }: {
-  plan: StorePlan | null; open: boolean; onOpenChange: (open: boolean) => void; buying: boolean; error: string | null; onBuy: (plan: StorePlan) => void
+/** Plan details with Look inside: the plan's cover as the store shows it, then the book's own first two pages after its
+ * cover, which open larger to read. */
+export function PlanPreview({ plan, open, onOpenChange, buying, owned, error, onBuy }: {
+  plan: StorePlan | null; open: boolean; onOpenChange: (open: boolean) => void; buying: boolean; owned?: boolean; error: string | null; onBuy: (plan: StorePlan) => void
 }) {
-  const [page, setPage] = useState(0)
+  const [slide, setSlide] = useState(0)
   const [direction, setDirection] = useState(1)
-  useEffect(() => { if (open) { setPage(0); setDirection(1) } }, [open, plan?.id])
+  const [reading, setReading] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const [preview, setPreview] = useState<{ id: string; pages?: PlanPreviewPages; failed?: string } | null>(null)
+  const planId = plan?.id
+  useEffect(() => { if (open) { setSlide(0); setDirection(1); setReading(false) } }, [open, planId])
+  useEffect(() => {
+    if (!open || !planId) return
+    let cancelled = false
+    fetchPlanPreview(planId)
+      .then((pages) => { if (!cancelled) setPreview({ id: planId, pages }) })
+      .catch((reason: Error) => { if (!cancelled) setPreview({ id: planId, failed: reason.message || "The preview didn't load." }) })
+    return () => { cancelled = true }
+  }, [open, planId, attempt])
+  const shown = preview?.id === planId ? preview : null
+  const pages = shown?.pages
+  const count = pages?.book.pages.length ?? 2
+  const firstPage = pages?.firstPage ?? 1
+  // Slide 0 is the cover; slide 1 onwards, the book's pages (bookIndex into the preview).
+  const slides = 1 + count
+  const bookIndex = slide - 1
+  const pageNumber = firstPage + bookIndex + 1
   const go = (next: number) => {
-    const target = (next + PAGES.length) % PAGES.length
-    setDirection(target > page ? 1 : -1)
-    setPage(target)
+    const target = (next + slides) % slides
+    setDirection(target > slide ? 1 : -1)
+    setSlide(target)
   }
+  /** In the larger view: between the book's pages only. */
+  const turnPage = (by: 1 | -1) => go(slide + by < 1 ? slides - 1 : slide + by > slides - 1 ? 1 : slide + by)
   if (!plan) return null
   const color = ACCENT_COLORS[plan.accent]
   const flip = { "--flip-from": direction > 0 ? "-34deg" : "34deg", "--flip-shift": direction > 0 ? "26px" : "-26px", "--flip-origin": direction > 0 ? "left" : "right" } as CSSProperties
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[94vh] gap-0 overflow-y-auto border-white/10 bg-[#0a1118] p-0 sm:max-w-5xl"
-        onKeyDown={(event) => { if (event.key === "ArrowRight") go(page + 1); if (event.key === "ArrowLeft") go(page - 1) }}>
+        onKeyDown={(event) => { if (event.key === "ArrowRight") go(slide + 1); if (event.key === "ArrowLeft") go(slide - 1) }}>
         <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          {/* viewer */}
+          {/* Look inside: the cover, then the plan's own pages */}
           <div className="relative flex flex-col items-center overflow-hidden border-b border-white/[0.06] bg-[radial-gradient(circle_at_50%_30%,rgba(var(--accent-rgb),0.22),transparent_60%)] px-4 pb-5 pt-8 lg:border-b-0 lg:border-r" style={{ "--accent-rgb": color.rgb } as CSSProperties}>
             <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:radial-gradient(rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:18px_18px]" />
             <div className="relative flex w-full items-center justify-center gap-2">
-              <button type="button" onClick={() => go(page - 1)} aria-label="Previous page" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white transition-colors hover:bg-white/10 sm:flex"><ChevronLeft className="h-5 w-5" /></button>
-              <div className="relative h-[371px] w-[279px] sm:h-[453px] sm:w-[340px]" style={{ perspective: 1400 }}>
-                <div className="origin-top-left scale-[0.82] sm:scale-100">
-                  <div key={page} className="store-flip" style={flip}><PageView plan={plan} page={page} /></div>
-                </div>
+              <button type="button" onClick={() => go(slide - 1)} aria-label="Previous page" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white transition-colors hover:bg-white/10 sm:flex"><ChevronLeft className="h-5 w-5" /></button>
+              <div className="relative aspect-[595/842] w-[262px] sm:w-[340px]" style={{ perspective: 1400 }}>
+                {slide === 0 ? (
+                  <button key={`${planId}-cover`} type="button" onClick={() => go(1)} aria-label={`Look inside ${plan.title}`}
+                    className="store-flip group/page relative block h-full w-full rounded-[14px] text-left transition-shadow hover:shadow-[0_0_0_2px_rgba(87,229,234,0.6)]" style={flip}>
+                    <PlanCover plan={plan} size="lg" className="aspect-auto h-full w-full" />
+                    {/* A hint for mouse users only, in the cover's empty middle, so the cover itself stays as the store shows it */}
+                    <span className="pointer-events-none absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full bg-white/90 px-3.5 py-2 text-xs font-semibold text-slate-900 opacity-0 shadow-lg backdrop-blur transition-opacity group-focus-visible/page:opacity-100 [@media(hover:hover)]:group-hover/page:opacity-100">
+                      <BookOpen className="h-3.5 w-3.5" />Look inside
+                    </span>
+                  </button>
+                ) : pages ? (
+                  <button key={`${planId}-${slide}`} type="button" onClick={() => setReading(true)} aria-label={`Read page ${pageNumber} larger`}
+                    className="store-flip group/page relative block h-full w-full overflow-hidden rounded-[6px] bg-white text-left shadow-[0_24px_50px_rgba(0,0,0,0.5)] ring-1 ring-white/10 transition-shadow hover:shadow-[0_30px_60px_rgba(0,0,0,0.6),0_0_0_2px_rgba(87,229,234,0.6)]" style={flip}>
+                    <BookPage book={pages.book} index={bookIndex} images={pages.images} label={`Page ${pageNumber}`} />
+                    {/* Always there on touch screens; with a mouse, on hover, so it doesn't sit on the page */}
+                    <span className="pointer-events-none absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-slate-950/85 px-3 py-1.5 text-[11px] font-semibold text-white shadow-lg backdrop-blur transition-opacity group-focus-visible/page:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/page:opacity-100">
+                      <ZoomIn className="h-3.5 w-3.5" />Tap to read
+                    </span>
+                  </button>
+                ) : shown?.failed ? (
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-3 rounded-[6px] border border-white/10 bg-white/[0.03] p-6 text-center">
+                    <p className="text-sm text-slate-300">{shown.failed}</p>
+                    <button type="button" onClick={() => setAttempt((value) => value + 1)} className="inline-flex h-9 items-center gap-2 rounded-full bg-white/10 px-4 text-sm font-semibold text-white transition-colors hover:bg-white/15">
+                      <RotateCcw className="h-4 w-4" />Try again
+                    </button>
+                  </div>
+                ) : (
+                  <div role="status" aria-label="Loading the preview" className="store-shimmer h-full w-full rounded-[6px]" />
+                )}
               </div>
-              <button type="button" onClick={() => go(page + 1)} aria-label="Next page" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white transition-colors hover:bg-white/10 sm:flex"><ChevronRight className="h-5 w-5" /></button>
+              <button type="button" onClick={() => go(slide + 1)} aria-label="Next page" className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white transition-colors hover:bg-white/10 sm:flex"><ChevronRight className="h-5 w-5" /></button>
             </div>
-            <div className="relative mt-5 flex gap-2.5">
-              {PAGES.map((label, index) => (
-                <button key={label} type="button" onClick={() => go(index)} aria-label={`Show ${label}`} aria-current={index === page}
-                  className={cn("group flex flex-col items-center gap-1.5 transition-transform", index === page ? "-translate-y-1" : "hover:-translate-y-0.5")}>
-                  <span className={cn("block h-[76px] w-[57px] overflow-hidden rounded-md ring-2 transition-all", index === page ? "ring-accent shadow-[0_0_18px_rgba(87,229,234,0.45)]" : "opacity-60 ring-white/10 group-hover:opacity-100")}>
-                    <span className="block origin-top-left scale-[0.1676]"><PageView plan={plan} page={index} /></span>
+            <div className="relative mt-5 flex gap-3">
+              {Array.from({ length: slides }, (_, index) => (
+                <button key={index} type="button" onClick={() => go(index)} aria-label={index === 0 ? "Show the cover" : `Show page ${firstPage + index}`} aria-current={index === slide}
+                  className={cn("group flex flex-col items-center gap-1.5 transition-transform", index === slide ? "-translate-y-1" : "hover:-translate-y-0.5")}>
+                  <span className={cn("block w-[57px] overflow-hidden rounded-md ring-2 transition-all", index === 0 ? "bg-[#070d14]" : "bg-white",
+                    index === slide ? "ring-accent shadow-[0_0_18px_rgba(87,229,234,0.45)]" : "opacity-60 ring-white/10 group-hover:opacity-100")}
+                    style={{ aspectRatio: "595 / 842" }}>
+                    {index === 0 ? (
+                      <span className="block origin-top-left scale-[0.1676]" style={{ width: 340, height: 481 }}><PlanCover plan={plan} size="lg" className="aspect-auto h-full w-full" /></span>
+                    ) : pages ? <BookPage book={pages.book} index={index - 1} images={pages.images} /> : <span className="store-shimmer block h-full w-full" />}
                   </span>
-                  <span className={cn("text-[10px] font-semibold", index === page ? "text-cyan-200" : "text-slate-500")}>{label}</span>
+                  <span className={cn("text-[10px] font-semibold", index === slide ? "text-cyan-200" : "text-slate-500")}>{index === 0 ? "Cover" : `Page ${firstPage + index}`}</span>
                 </button>
               ))}
             </div>
+            <p className="relative mt-4 max-w-[340px] text-center text-xs leading-5 text-slate-500">
+              {pages ? `Pages ${firstPage + 1}–${firstPage + count} of ${pages.pageCount}, straight from the plan. ` : "A look inside the plan. "}
+              {owned ? "Open the plan to read every page." : "Every page is yours once you buy."} Tap a page to read it larger.
+            </p>
           </div>
+
+          {/* A preview page, large enough to read */}
+          {pages && (
+            <Dialog open={reading && slide > 0} onOpenChange={setReading}>
+              <DialogContent showCloseButton={false}
+                className="flex h-[100dvh] max-h-none w-screen max-w-none flex-col gap-0 rounded-none border-0 bg-[#05090d]/95 p-0 backdrop-blur-sm sm:max-w-none"
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return
+                  event.stopPropagation()  // the details dialog underneath turns pages on arrows too
+                  turnPage(event.key === "ArrowRight" ? 1 : -1)
+                }}>
+                <div className="flex h-14 shrink-0 items-center gap-2 border-b border-white/[0.07] px-3 sm:px-5">
+                  <div className="min-w-0 flex-1">
+                    <DialogTitle className="truncate text-sm font-semibold text-white">{plan.title}</DialogTitle>
+                    <DialogDescription className="truncate text-[11px] text-slate-400">Look inside · page {pageNumber} of {pages.pageCount}</DialogDescription>
+                  </div>
+                  <button type="button" onClick={() => turnPage(-1)} aria-label="Previous page" className="reader-icon-btn"><ChevronLeft className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => turnPage(1)} aria-label="Next page" className="reader-icon-btn"><ChevronRight className="h-4 w-4" /></button>
+                  <BuyButton plan={plan} buying={buying} owned={owned} onBuy={() => { setReading(false); onBuy(plan) }} compact className="hidden sm:inline-flex" />
+                  <DialogClose aria-label="Close" className="reader-icon-btn"><X className="h-4 w-4" /></DialogClose>
+                </div>
+                <div className="flex-1 overflow-auto overscroll-contain">
+                  <div key={slide} className="store-flip mx-auto my-4 overflow-hidden rounded-md bg-white shadow-[0_30px_80px_rgba(0,0,0,0.6)] sm:my-8"
+                    style={{ ...flip, width: "min(900px, max(92vw, 760px))", aspectRatio: "595 / 842" }}>
+                    <BookPage book={pages.book} index={Math.max(0, bookIndex)} images={pages.images} label={`Page ${pageNumber}`} />
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
 
           {/* details */}
           <div className="flex flex-col p-6 sm:p-8">
@@ -181,7 +182,7 @@ export function PlanPreview({ plan, open, onOpenChange, buying, error, onBuy }: 
               {[
                 { icon: CalendarDays, value: plan.weeks, label: "weeks" },
                 { icon: Repeat, value: plan.sessions_per_week, label: "sessions / wk" },
-                { icon: FileText, value: plan.pages, label: "PDF pages" },
+                { icon: FileText, value: plan.pages, label: "pages" },
               ].map((stat) => (
                 <div key={stat.label} className="rounded-2xl border border-white/[0.07] bg-white/[0.03] p-3">
                   <stat.icon className="h-4 w-4" style={{ color: color.light }} />
@@ -203,15 +204,25 @@ export function PlanPreview({ plan, open, onOpenChange, buying, error, onBuy }: 
             </div>
             <div className="mt-auto pt-7">
               <div className="flex items-end justify-between gap-3 border-t border-white/[0.07] pt-5">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">One-time price</p>
-                  <p className="font-mono text-4xl font-bold tabular-nums text-white">{formatPrice(plan.price, plan.currency)}</p>
-                </div>
-                <p className="pb-1 text-right text-xs leading-5 text-slate-500">No subscription.<br />Yours to keep.</p>
+                {owned ? (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">In your library</p>
+                    <p className="mt-1 inline-flex items-center gap-2 text-2xl font-bold text-emerald-300"><Check className="h-6 w-6" strokeWidth={3} />Purchased</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">One-time price</p>
+                    <p className="font-mono text-4xl font-bold tracking-tighter tabular-nums text-white">{formatPrice(plan.price, plan.currency)}</p>
+                  </div>
+                )}
+                <p className="pb-1 text-right text-xs leading-5 text-slate-500">{owned ? <>Read it in SwimGPT,<br />on any device.</> : <>No subscription.<br />Yours to keep.</>}</p>
               </div>
-              <BuyButton plan={plan} buying={buying} onBuy={() => onBuy(plan)} className="mt-4 w-full" />
+              <BuyButton plan={plan} buying={buying} owned={owned} onBuy={() => onBuy(plan)} className="mt-4 w-full" />
               {error && <p role="alert" className="mt-3 rounded-xl border border-red-400/25 bg-red-400/[0.08] px-3 py-2 text-sm text-red-200">{error}</p>}
-              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-300" />Secure payment by Stripe. Card details never touch SwimGPT.</p>
+              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-slate-500">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-300" />
+                {owned ? "Saved to your SwimGPT account. Open it any time you sign in." : "Secure payment by Stripe. Card details never touch SwimGPT."}
+              </p>
             </div>
           </div>
         </div>

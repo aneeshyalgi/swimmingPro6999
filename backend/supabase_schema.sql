@@ -31,6 +31,8 @@ create table if not exists public.user_profiles (
   one_year_goal_times jsonb not null default '{}'::jsonb,
   three_year_goal text,
   recommended_coaches text[] not null default '{}',
+  is_paid boolean not null default false,
+  subscription_checked_at timestamptz,
   payment_status text not null default 'pending',
   payment_plan_id text,
   stripe_checkout_session_id text,
@@ -57,6 +59,26 @@ alter table public.user_profiles
 
 alter table public.user_profiles
   add column if not exists stripe_subscription_id text;
+
+-- Dashboard access: true while the athlete pays for their monthly coaching plan. The backend sets it when Stripe
+-- confirms the checkout and sets it back to false when the subscription is cancelled or its renewals go unpaid.
+-- Every dashboard API refuses a profile where this is false and sends the athlete to the payment screen.
+alter table public.user_profiles
+  add column if not exists is_paid boolean not null default false;
+
+-- When the backend last confirmed the monthly subscription with Stripe (it re-checks at most once a day).
+alter table public.user_profiles
+  add column if not exists subscription_checked_at timestamptz;
+
+comment on column public.user_profiles.is_paid is
+  'True while the athlete''s monthly coaching subscription is paid. The dashboard opens only when this is true.';
+comment on column public.user_profiles.subscription_checked_at is
+  'When the backend last confirmed the Stripe subscription is live. Null means check on the next dashboard visit.';
+
+-- Athletes who paid before is_paid existed keep their access. Safe to re-run.
+update public.user_profiles
+set is_paid = true
+where payment_status = 'paid' and not is_paid;
 
 create index if not exists idx_user_profiles_user_key
   on public.user_profiles (user_key);
@@ -280,6 +302,23 @@ create table if not exists public.user_training_sessions (
 -- Duplicates are unscheduled independent records; deleting a manual prescription
 -- removes its preferences, not independent scheduled copies or actual history.
 -- PDF export is an authenticated in-memory download, never a public stored file.
+-- Nutrition keeps one nutrition_profile record per profile (deterministic key, no session_date, so it never
+-- counts as training). details.answers holds the athlete's answers to the Nutrition questions (goal, sex, age,
+-- height_cm, weight_kg, swim_time, meals_per_day, pre_training, water, diet, avoid, challenge), details.saved_at
+-- when they last answered, and details.water maps their last 7 local dates to the millilitres of water logged.
+-- The fuel plan (calories, macros, water, timing and habits) is calculated from the answers and the profile's
+-- training volume on every read; it is never stored. No new table or column is needed for it.
+-- Mental Performance keeps one mental_profile record per profile the same way: details.answers holds the
+-- athlete's answers (goal, 1-5 self-ratings for confidence, focus, calm, motivation and resilience, pre_race,
+-- routine, setback, sleep, stress, mood, tools), details.saved_at, and details.checkins maps their last 14 local
+-- dates to a 1-5 daily mood check-in. The plan (strength, routine, mental skills, support card) is chosen from
+-- fixed text on every read and never stored.
+-- Switching coach from the dashboard is a one-time Stripe payment per switch: $1.99, or $2.99 to the athlete's
+-- best-match (recommended) coach. The athlete's latest switch checkout is kept in one coach_switch record
+-- (deterministic key, no session_date): details.session_id is the Stripe Checkout Session, details.coach the coach
+-- chosen at checkout, and details.earlier any paid checkouts from before it whose switch never happened (they count
+-- towards it, so it only charged the rest). Stripe says what was paid; the switch deletes the record as it uses the
+-- payment, so one payment pays for exactly one switch.
 create index if not exists idx_user_training_sessions_user_id
   on public.user_training_sessions (user_id);
 
@@ -318,3 +357,29 @@ execute function public.set_updated_at();
 -- for insert with check (auth.uid()::text = user_key);
 -- create policy "Users can update own profile" on public.user_profiles
 -- for update using (auth.uid()::text = user_key);
+
+-- Training Plan store (backend/app/plan_store.py): every PDF plan an account buys. Buying needs an account but no
+-- subscription or onboarding, so purchases belong to the sign-in account (auth.users), not to an athlete profile.
+-- A row is written as checkout opens (status 'pending') and marked 'paid' once Stripe confirms the payment; a
+-- checkout that expires unpaid is removed. amount is in cents; plan_title is the plan's name when it was bought.
+-- Only the backend (secret key) reads or writes it: row level security is on with no policies.
+create table if not exists public.user_plan_purchases (
+  id uuid primary key default gen_random_uuid(),
+  auth_user_id uuid not null references auth.users(id) on delete cascade,
+  plan_id text not null,
+  plan_title text not null,
+  amount integer not null,
+  currency text not null default 'usd',
+  status text not null default 'pending' check (status in ('pending', 'paid')),
+  stripe_checkout_session_id text not null unique,
+  created_at timestamptz not null default now(),
+  paid_at timestamptz
+);
+
+create index if not exists idx_user_plan_purchases_auth_user_id
+  on public.user_plan_purchases (auth_user_id);
+
+alter table public.user_plan_purchases enable row level security;
+
+-- Make the Supabase API see new columns straight away (otherwise it can report them missing until its cache refreshes).
+notify pgrst, 'reload schema';

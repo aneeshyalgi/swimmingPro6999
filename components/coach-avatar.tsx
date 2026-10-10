@@ -6,12 +6,12 @@ import { cn } from "@/lib/utils"
  * methods inspired the programs). Pure SVG, so they stay sharp from a 28px chip to a full profile header.
  */
 
-type HairStyle = "quiff" | "sidepart" | "fade" | "receding" | "curls"
+export type HairStyle = "quiff" | "sidepart" | "fade" | "receding" | "curls"
 type Beard = "full" | "boxed" | "goatee" | "stubble" | null
 type Outfit = "polo" | "quarterzip" | "tee" | "jacket" | "hoodie"
 type Prop = "whistle" | "stopwatch" | "headphones" | null
 
-type Look = {
+export type Look = {
   bg: [string, string, string]      // light, mid, deep
   skin: [string, string, string]    // light, base, shadow
   lip: string
@@ -27,7 +27,7 @@ type Look = {
   prop: Prop
 }
 
-const LOOKS: Record<string, Look> = {
+export const LOOKS: Record<string, Look> = {
   brad: {
     bg: ["#cffafe", "#22d3ee", "#073b4c"], skin: ["#f7d6bb", "#e9b792", "#c48663"], lip: "#9a5a48", iris: "#3b2a1a",
     hair: ["#3a2417", "#7a4e2c"], hairStyle: "quiff", beard: "full",
@@ -58,9 +58,9 @@ const LOOKS: Record<string, Look> = {
 /** Catalog key from a coach name or key ("Coach Brad" → "brad"). */
 export const coachLookKey = (name: string) => name.replace(/^coach\s+/i, "").trim().toLowerCase()
 
-const FACE = "M60 24 C 75 24, 84.5 35, 84.5 50 C 84.5 62, 80 72, 72.5 78.5 C 68.5 82, 64 83.5, 60 83.5 C 56 83.5, 51.5 82, 47.5 78.5 C 40 72, 35.5 62, 35.5 50 C 35.5 35, 45 24, 60 24 Z"
-const BEARD = "M36 52 C 36 70, 46 85.5, 60 86 C 74 85.5, 84 70, 84 52 C 82.5 60, 79 64.5, 74.5 66 C 71 72, 66.5 76.5, 60 76.5 C 53.5 76.5, 49 72, 45.5 66 C 41 64.5, 37.5 60, 36 52 Z"
-const MOUSTACHE = "M51 69.6 C 54 66.4, 58 66.6, 60 68 C 62 66.6, 66 66.4, 69 69.6 C 66 69.1, 63 69.6, 60 70.3 C 57 69.6, 54 69.1, 51 69.6 Z"
+export const FACE = "M60 24 C 75 24, 84.5 35, 84.5 50 C 84.5 62, 80 72, 72.5 78.5 C 68.5 82, 64 83.5, 60 83.5 C 56 83.5, 51.5 82, 47.5 78.5 C 40 72, 35.5 62, 35.5 50 C 35.5 35, 45 24, 60 24 Z"
+export const BEARD = "M36 52 C 36 70, 46 85.5, 60 86 C 74 85.5, 84 70, 84 52 C 82.5 60, 79 64.5, 74.5 66 C 71 72, 66.5 76.5, 60 76.5 C 53.5 76.5, 49 72, 45.5 66 C 41 64.5, 37.5 60, 36 52 Z"
+export const MOUSTACHE = "M51 69.6 C 54 66.4, 58 66.6, 60 68 C 62 66.6, 66 66.4, 69 69.6 C 66 69.1, 63 69.6, 60 70.3 C 57 69.6, 54 69.1, 51 69.6 Z"
 
 export function CoachAvatar({ name, className, shape = "squircle", title }: {
   name: string
@@ -219,7 +219,7 @@ export function CoachAvatar({ name, className, shape = "squircle", title }: {
   )
 }
 
-function Outfit({ look }: { look: Look }) {
+export function Outfit({ look }: { look: Look }) {
   const { outfit, trim, shirt, shirtShade } = { outfit: look.outfit, trim: look.trim, shirt: look.shirt[0], shirtShade: look.shirt[1] }
   const skinShadow = look.skin[2]
   if (outfit === "polo") {
@@ -276,7 +276,7 @@ function Outfit({ look }: { look: Look }) {
   )
 }
 
-function PropShape({ prop, trim }: { prop: Prop; trim: string }) {
+export function PropShape({ prop, trim }: { prop: Prop; trim: string }) {
   if (prop === "whistle") {
     return (
       <g>
@@ -318,7 +318,7 @@ function PropShape({ prop, trim }: { prop: Prop; trim: string }) {
   return null
 }
 
-function BeardShape({ beard, hair }: { beard: Beard; hair: string }) {
+export function BeardShape({ beard, hair }: { beard: Beard; hair: string }) {
   if (beard === "full") {
     return (
       <g>
@@ -342,7 +342,7 @@ function BeardShape({ beard, hair }: { beard: Beard; hair: string }) {
   return null
 }
 
-function HairShape({ style, fill, fade, base, light }: { style: HairStyle; fill: string; fade: string; base: string; light: string }) {
+export function HairShape({ style, fill, fade, base, light }: { style: HairStyle; fill: string; fade: string; base: string; light: string }) {
   if (style === "quiff") {
     return (
       <g>
@@ -417,7 +417,7 @@ function HairShape({ style, fill, fade, base, light }: { style: HairStyle; fill:
   )
 }
 
-function Glasses() {
+export function Glasses() {
   return (
     <g>
       {[50, 70].map((cx) => (

@@ -7,10 +7,14 @@ import { SiteFooter } from "@/components/site-footer"
 import { WaterBubbles } from "@/components/water-bubbles"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { AccountRequired } from "@/components/plan-store/account-required"
 import { PlanCard, PlanCardSkeleton } from "@/components/plan-store/plan-card"
 import { PlanPreview } from "@/components/plan-store/plan-preview"
-import { CategoryTabs, FeaturedPlan, HeroStack, HowItWorks } from "@/components/plan-store/store-ui"
-import { fetchCatalog, formatPrice, startPlanCheckout, type Catalog, type StorePlan } from "@/lib/plan-store"
+import { CategoryTabs, FeaturedPlan, HeroStack, HowItWorks, YourPlans } from "@/components/plan-store/store-ui"
+import {
+  PlanStoreError, SignInRequired, fetchCatalog, fetchPurchases, formatPrice, prefetchPlanPreview, startPlanCheckout, type Catalog, type StorePlan,
+} from "@/lib/plan-store"
+import { supabase } from "@/lib/supabase"
 
 type Sort = "featured" | "price-asc" | "price-desc" | "shortest"
 const SORTS: { value: Sort; label: string }[] = [
@@ -21,9 +25,10 @@ const SORTS: { value: Sort; label: string }[] = [
 ]
 
 const FAQ = [
-  { q: "Is this a subscription?", a: "No. Each plan is a one-time purchase. Pay once and the PDF is yours to keep." },
-  { q: "What do I actually get?", a: "A print-ready PDF with every session written out: sets, send-offs and notes, plus the extras listed on each plan, like dryland, taper or race-day pages." },
-  { q: "Do I need a SwimGPT membership?", a: "No. The plans work on their own. Members still get their personalised Swim Week and Gym Week in the app; these PDFs are focused blocks for a specific goal." },
+  { q: "Is this a subscription?", a: "No. Each plan is a one-time purchase. Pay once and it stays in your SwimGPT account." },
+  { q: "What do I actually get?", a: "The complete plan as an interactive book in your SwimGPT account: every session written out with sets, send-offs and notes, plus the extras listed on each plan, like dryland, taper or race-day pages. Turn the pages, search any set and tick off sessions as you train." },
+  { q: "Can I download it as a PDF?", a: "No. Your plan lives in your SwimGPT account as an interactive book, so there's no file to download. Open it on any phone, tablet or laptop you sign in on." },
+  { q: "Do I need an account or a membership?", a: "Just a free SwimGPT account, so every plan you buy is saved to it. No membership, subscription or coaching setup needed. Members still get their personalised Swim Week and Gym Week in the app; these plans are focused blocks for a specific goal." },
   { q: "Which plan should I choose?", a: "Start with your main event and level. Open \"Details\" on any plan to see its cover, a sample week and everything that's included before you buy." },
 ]
 
@@ -38,6 +43,15 @@ export default function TrainingPlansPage() {
   const [buyingId, setBuyingId] = useState<string | null>(null)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
   const [cancelled, setCancelled] = useState<string | null>(null)
+  // Buying needs an account: whether someone is signed in (null until known), and the plans their account owns.
+  const [signedIn, setSignedIn] = useState<boolean | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
+  const [owned, setOwned] = useState<Set<string>>(new Set())
+  const [accountFor, setAccountFor] = useState<StorePlan | null>(null)
+  const [accountOpen, setAccountOpen] = useState(false)
+  // Back from signing in to buy a plan (?buy=): its checkout carries on. A link to a plan (?view=) opens its details.
+  const [resumeBuy, setResumeBuy] = useState<string | null>(null)
+  const [viewId, setViewId] = useState<string | null>(null)
 
   const load = useCallback(() => {
     setLoadError(null)
@@ -45,16 +59,32 @@ export default function TrainingPlansPage() {
   }, [])
   useEffect(load, [load])
 
-  // Back from a cancelled Stripe checkout: say so, and tidy the URL.
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "TOKEN_REFRESHED") return
+      setSignedIn(Boolean(session))
+      setUserId(session?.user.id ?? null)
+      if (!session) { setOwned(new Set()); return }
+      fetchPurchases()
+        .then((purchases) => setOwned(new Set(purchases.map((purchase) => purchase.plan_id))))
+        .catch((error) => console.error("Your plans couldn't be loaded:", error)) // buying checks again anyway
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // Back from a cancelled Stripe checkout: say so. Back from signing in to buy: carry on. Either way, tidy the URL.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (params.get("checkout") === "cancelled") {
-      setCancelled(params.get("plan") ?? "")
-      window.history.replaceState(null, "", window.location.pathname)
-    }
+    if (params.get("checkout") === "cancelled") setCancelled(params.get("plan") ?? "")
+    const buyId = params.get("buy")
+    if (buyId) setResumeBuy(buyId)
+    const view = params.get("view")
+    if (view) setViewId(view)
+    if (params.has("checkout") || buyId || view) window.history.replaceState(null, "", window.location.pathname)
   }, [])
 
   const plans = useMemo(() => catalog?.plans ?? [], [catalog])
+  const ownedPlans = useMemo(() => plans.filter((plan) => owned.has(plan.id)), [plans, owned])
   const featured = plans.find((plan) => plan.badge === "Bestseller") ?? plans[0]
   const cancelledPlan = plans.find((plan) => plan.id === cancelled)
   // Hero fan: badged plans first, each a different colour; the top one sits in the middle (last = on top).
@@ -90,21 +120,51 @@ export default function TrainingPlansPage() {
     setPreviewOpen(true)
   }
 
+  const askForAccount = (plan: StorePlan) => {
+    setPreviewOpen(false)
+    setAccountFor(plan)
+    setAccountOpen(true)
+  }
+
   const buy = async (plan: StorePlan) => {
-    if (buyingId) return
+    if (buyingId || owned.has(plan.id)) return
+    if (signedIn === false) { askForAccount(plan); return }
     setBuyingId(plan.id)
     setCheckoutError(null)
     try {
       await startPlanCheckout(plan.id)
     } catch (error) {
       setBuyingId(null)
+      if (error instanceof SignInRequired) { askForAccount(plan); return }
+      if (error instanceof PlanStoreError && error.status === 409) setOwned((current) => new Set(current).add(plan.id))
       openPreview(plan)
       setCheckoutError(error instanceof Error ? error.message : "Couldn't start checkout. Please try again.")
     }
   }
 
+  useEffect(() => {
+    if (!viewId || !catalog) return
+    setViewId(null)
+    const plan = catalog.plans.find((item) => item.id === viewId)
+    if (plan) openPreview(plan)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewId, catalog])
+
+  useEffect(() => {
+    if (!resumeBuy || !catalog || signedIn === null) return
+    setResumeBuy(null)
+    const plan = catalog.plans.find((item) => item.id === resumeBuy)
+    if (!plan) return
+    openPreview(plan)
+    if (signedIn) void buy(plan)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeBuy, catalog, signedIn])
+
   const prices = plans.map((plan) => plan.price)
   const weeks = plans.map((plan) => plan.weeks)
+  // Every plan at one price: show that price without "from", and no price sorts (they'd change nothing).
+  const onePrice = new Set(prices).size <= 1
+  const sorts = onePrice ? SORTS.filter((option) => !option.value.startsWith("price")) : SORTS
   const filtersKey = `${category}|${sort}|${query}`
 
   return (
@@ -125,14 +185,14 @@ export default function TrainingPlansPage() {
               <span className="bg-gradient-to-r from-cyan-200 via-accent to-violet-300 bg-clip-text text-transparent">Every session written out.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-slate-300 lg:mx-0">
-              Focused PDF training plans from SwimGPT, built for a single event or block. Buy once, print it or keep it on your phone, and swim it.
+              Focused training plans from SwimGPT, built for a single event or block. Buy once, read it as an interactive book on your phone, tablet or laptop, and swim it.
             </p>
             <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <a href="#plans" className="inline-flex h-12 items-center gap-2 rounded-full bg-accent px-7 text-base font-semibold text-accent-foreground shadow-[0_12px_32px_rgba(87,229,234,0.35)] transition-transform hover:-translate-y-0.5">
                 Browse plans<ArrowDown className="h-4 w-4" />
               </a>
               {featured && (
-                <button type="button" onClick={() => openPreview(featured)} className="inline-flex h-12 items-center gap-2 rounded-full border border-white/15 bg-white/[0.04] px-7 text-base font-medium text-white transition-colors hover:bg-white/[0.09]">
+                <button type="button" onClick={() => openPreview(featured)} onPointerEnter={() => prefetchPlanPreview(featured.id)} className="inline-flex h-12 items-center gap-2 rounded-full border border-white/15 bg-white/[0.04] px-7 text-base font-medium text-white transition-colors hover:bg-white/[0.09]">
                   <Sparkles className="h-4 w-4 text-cyan-200" />Look inside the bestseller
                 </button>
               )}
@@ -141,8 +201,8 @@ export default function TrainingPlansPage() {
               <dl className="mx-auto mt-10 grid max-w-md grid-cols-3 gap-3 lg:mx-0">
                 {[
                   { label: "plans", value: String(plans.length) },
-                  { label: "weeks long", value: `${Math.min(...weeks)}–${Math.max(...weeks)}` },
-                  { label: "one-time", value: `from ${formatPrice(Math.min(...prices))}` },
+                  { label: "weeks long", value: Math.min(...weeks) === Math.max(...weeks) ? String(weeks[0]) : `${Math.min(...weeks)}–${Math.max(...weeks)}` },
+                  { label: "one-time", value: onePrice ? formatPrice(prices[0]) : `from ${formatPrice(Math.min(...prices))}` },
                 ].map((stat) => (
                   <div key={stat.label} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] px-3 py-3">
                     <dt className="sr-only">{stat.label}</dt>
@@ -156,6 +216,12 @@ export default function TrainingPlansPage() {
           {heroPlans.length === 3 ? <HeroStack plans={heroPlans} onPick={openPreview} /> : <div className="h-[380px] sm:h-[460px]" />}
         </div>
       </section>
+
+      {ownedPlans.length > 0 && (
+        <section className="relative pb-4 pt-2">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8"><YourPlans plans={ownedPlans} userId={userId} /></div>
+        </section>
+      )}
 
       {cancelled !== null && (
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -173,7 +239,7 @@ export default function TrainingPlansPage() {
       {featured && (
         <section className="relative py-12">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <FeaturedPlan plan={featured} buying={buyingId === featured.id} onPreview={() => openPreview(featured)} onBuy={() => buy(featured)} />
+            <FeaturedPlan plan={featured} buying={buyingId === featured.id} owned={owned.has(featured.id)} onPreview={() => openPreview(featured)} onBuy={() => buy(featured)} />
           </div>
         </section>
       )}
@@ -199,7 +265,7 @@ export default function TrainingPlansPage() {
                   <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" /><SelectValue />
                 </SelectTrigger>
                 <SelectContent className="border-white/10 bg-[#0d151d]">
-                  {SORTS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                  {sorts.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -228,7 +294,7 @@ export default function TrainingPlansPage() {
             ) : (
               <div key={filtersKey} className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {visible.map((plan, index) => (
-                  <PlanCard key={plan.id} plan={plan} index={index} buying={buyingId === plan.id} onPreview={() => openPreview(plan)} onBuy={() => buy(plan)} />
+                  <PlanCard key={plan.id} plan={plan} index={index} buying={buyingId === plan.id} owned={owned.has(plan.id)} onPreview={() => openPreview(plan)} onBuy={() => buy(plan)} />
                 ))}
               </div>
             )}
@@ -267,7 +333,9 @@ export default function TrainingPlansPage() {
 
       <SiteFooter />
 
-      <PlanPreview plan={previewing} open={previewOpen} onOpenChange={setPreviewOpen} buying={buyingId === previewing?.id} error={checkoutError} onBuy={buy} />
+      <PlanPreview plan={previewing} open={previewOpen} onOpenChange={setPreviewOpen} buying={buyingId === previewing?.id}
+        owned={previewing ? owned.has(previewing.id) : false} error={checkoutError} onBuy={buy} />
+      <AccountRequired plan={accountFor} open={accountOpen} onOpenChange={setAccountOpen} />
     </div>
   )
 }

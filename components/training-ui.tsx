@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react"
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileDown, FileText, Loader2, Sparkles, type LucideIcon } from "lucide-react"
+import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react"
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileDown, FileText, Loader2, Maximize2, Sparkles, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -60,45 +60,59 @@ export function ZoneStack({ entries, className }: { entries: { label: string; me
   )
 }
 
-/** Accessible disclosure with a smooth height transition. */
+/**
+ * Accessible disclosure with a smooth height transition. With `onOpen` it doesn't expand in place: the header opens
+ * the content full screen instead (handled by the caller) and the chevron becomes a full-screen button.
+ */
 export function Expander({
   header,
   children,
   className,
   defaultOpen = false,
   actions,
+  onOpen,
 }: {
   header: ReactNode
-  children: ReactNode
+  children?: ReactNode
   className?: string
   defaultOpen?: boolean
   /** Controls shown beside the header (e.g. a ••• menu); kept outside the toggle button. */
   actions?: ReactNode
+  onOpen?: (event: MouseEvent<HTMLButtonElement>) => void
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const panelId = useId()
+  const expanded = open && !onOpen
   return (
-    <div className={cn("overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025] transition-colors duration-300", open && "border-white/15 bg-white/[0.04]", className)}>
+    <div className={cn("group/expander overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025] transition-colors duration-300", expanded && "border-white/15 bg-white/[0.04]", onOpen && "hover:border-white/15", className)}>
       <div className="flex items-center">
       <button
         type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen((value) => !value)}
+        {...(onOpen ? { "aria-haspopup": "dialog" as const, title: "Open full screen" } : { "aria-expanded": open, "aria-controls": panelId })}
+        onClick={(event) => (onOpen ? onOpen(event) : setOpen((value) => !value))}
         className="flex min-w-0 flex-1 items-center gap-3 p-4 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
         <div className="min-w-0 flex-1">{header}</div>
-        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-transform duration-300", open && "rotate-180 border-accent/30 text-accent")}>
-          <ChevronDown className="h-4 w-4" />
-        </span>
+        {onOpen ? (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-slate-300 transition-all duration-300 group-hover/expander:scale-110 group-hover/expander:border-accent/40 group-hover/expander:bg-accent/15 group-hover/expander:text-accent group-hover/expander:shadow-[0_0_18px_rgba(87,229,234,0.35)]">
+            <Maximize2 className="h-3.5 w-3.5" />
+            <span className="sr-only">Open full screen</span>
+          </span>
+        ) : (
+          <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] transition-transform duration-300", open && "rotate-180 border-accent/30 text-accent")}>
+            <ChevronDown className="h-4 w-4" />
+          </span>
+        )}
       </button>
       {actions && <div className="shrink-0 pr-3">{actions}</div>}
       </div>
-      <div id={panelId} inert={!open} className={cn("grid transition-[grid-template-rows] duration-500 ease-out motion-reduce:transition-none", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-        <div className="min-w-0 overflow-hidden">
-          <div className={cn("border-t border-white/[0.06] p-4 transition-opacity duration-500", open ? "opacity-100" : "opacity-0")}>{children}</div>
+      {!onOpen && (
+        <div id={panelId} inert={!open} className={cn("grid transition-[grid-template-rows] duration-500 ease-out motion-reduce:transition-none", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+          <div className="min-w-0 overflow-hidden">
+            <div className={cn("border-t border-white/[0.06] p-4 transition-opacity duration-500", open ? "opacity-100" : "opacity-0")}>{children}</div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -465,7 +479,7 @@ export function Skeleton({ className, delay = 0 }: { className?: string; delay?:
 /** Day tile placeholder for the week strip; the shimmer ripples across the seven days like a wave. */
 export function DayTileSkeleton({ index }: { index: number }) {
   return (
-    <div aria-hidden className="tl-day flex h-28 flex-col items-center justify-between rounded-2xl border border-white/[0.06] bg-white/[0.025] px-1 py-2.5" style={{ "--i": index } as CSSProperties}>
+    <div aria-hidden className="tl-day flex h-32 flex-col items-center justify-between rounded-[20px] border border-white/[0.06] bg-white/[0.025] px-1 py-2.5 sm:h-40" style={{ "--i": index } as CSSProperties}>
       <Skeleton className="h-2 w-7" delay={index * 90} />
       <Skeleton className="h-5 w-6 rounded-md" delay={index * 90} />
       <span className="tl-level relative h-8 w-2 overflow-hidden rounded-full bg-white/[0.06] sm:w-3"><span /></span>

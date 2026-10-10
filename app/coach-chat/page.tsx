@@ -3,6 +3,7 @@
 import type React from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import {
   AlertTriangle,
   ArrowDown,
@@ -19,6 +20,7 @@ import {
   Sparkles,
   Square,
   Target,
+  Trash2,
   Volume2,
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
@@ -29,6 +31,10 @@ import { WaterBubbles } from "@/components/water-bubbles"
 import { CoachAvatar as CoachPortrait } from "@/components/coach-avatar"
 import { useCoachAudio } from "@/hooks/use-coach-audio"
 import { CoachConversation } from "@/components/coach-conversation"
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 type Message = {
   id: string
@@ -104,6 +110,7 @@ function CoachAvatar({ name, size = "md", live }: { name: string; size?: "sm" | 
 }
 
 export default function CoachChatPage() {
+  const router = useRouter()
   const [coaches, setCoaches] = useState<string[]>([])
   const [coachInfo, setCoachInfo] = useState<Record<string, CoachInfo>>({})
   const [activeCoach, setActiveCoach] = useState<string | null>(null)
@@ -117,6 +124,8 @@ export default function CoachChatPage() {
   const [nearBottom, setNearBottom] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [clearArmed, setClearArmed] = useState(false)
+  // Confirmation for deleting the whole conversation history.
+  const [confirmClearAll, setConfirmClearAll] = useState(false)
   // Voice conversation overlay; `origin` is where it expands from.
   const [conversation, setConversation] = useState<{ origin: { x: number; y: number } | null } | null>(null)
   const threadsRef = useRef(threads)
@@ -135,16 +144,21 @@ export default function CoachChatPage() {
     if (recordingState === "idle") inputRef.current?.focus()
   }, [recordingState])
 
-  // Load the athlete's assigned coaches (same source as before) plus public coach profiles.
+  // Load the athlete's coach (same source as before) plus public coach profiles.
   useEffect(() => {
     const load = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession()
         if (error) throw error
-        if (!session) throw new Error("Sign in to load your coaches.")
+        if (!session) throw new Error("Sign in to load your coach.")
         const response = await fetch(`${apiUrl()}/api/dashboard`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
         })
+        // Coach chat is part of the dashboard, which is only for athletes who have paid.
+        if (response.status === 402) {
+          router.replace("/subscribe")
+          return
+        }
         if (!response.ok) throw new Error(await response.text())
         const result = await response.json()
         const key: string = result.profile.user_key
@@ -152,7 +166,7 @@ export default function CoachChatPage() {
         setUserKey(key)
 
         if (savedCoaches.length === 0) {
-          setLoadError("No coaches are assigned to this athlete profile yet.")
+          setLoadError("No coach is assigned to this athlete profile yet.")
           return
         }
 
@@ -181,7 +195,7 @@ export default function CoachChatPage() {
           .catch(() => undefined)
       } catch (error) {
         console.error("Coach profile loading failed:", error)
-        setLoadError("The assigned coaches could not be loaded from your athlete profile.")
+        setLoadError("Your coach could not be loaded from your athlete profile.")
       } finally {
         setLoading(false)
       }
@@ -339,6 +353,19 @@ export default function CoachChatPage() {
     setConversation({ origin: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null })
   }
 
+  // Opened from the dashboard's "Talk to your coach" button (?call=1): the voice call starts as soon as the coach is
+  // loaded, and ending it goes back to where the athlete came from. The flag is removed so a refresh doesn't redial.
+  const backAfterCall = useRef(false)
+  useEffect(() => {
+    if (loading || !activeCoach || !userKey) return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get("call") !== "1") return
+    backAfterCall.current = params.get("from") === "dashboard" && window.history.length > 1
+    window.history.replaceState(null, "", window.location.pathname)
+    openConversation()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, activeCoach, userKey])
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
@@ -368,6 +395,25 @@ export default function CoachChatPage() {
     setClearArmed(false)
   }
 
+  /**
+   * Deletes the athlete's entire conversation history on this device: every coach's thread, typed and voice-call
+   * messages alike, and the saved copy in browser storage (the only place chat history is kept). Each coach starts
+   * again from their greeting.
+   */
+  const clearAllHistory = () => {
+    cancelAudio()
+    setThreads(Object.fromEntries(coaches.map((coach) => [coach, [greetingFor(coach)]])))
+    try {
+      localStorage.removeItem(STORAGE_PREFIX + userKey)
+    } catch {
+      // Storage unavailable: the threads above are still cleared for this visit.
+    }
+    setClearArmed(false)
+    setConfirmClearAll(false)
+    setNearBottom(true)
+  }
+  const hasHistory = coaches.some((coach) => (threads[coach]?.length ?? 0) > 1)
+
   if (loading) {
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-[#070b10]" aria-busy="true">
@@ -378,7 +424,7 @@ export default function CoachChatPage() {
               <MessageSquarePlus className="h-6 w-6 text-primary-foreground" />
             </span>
           </span>
-          <p className="thinking-shimmer text-sm font-medium">Connecting you with your coaches…</p>
+          <p className="thinking-shimmer text-sm font-medium">Connecting you with your coach…</p>
         </div>
       </div>
     )
@@ -392,7 +438,7 @@ export default function CoachChatPage() {
             <AlertTriangle className="h-6 w-6 text-amber-200" />
           </span>
           <h1 className="mt-4 text-xl font-semibold text-white">Coach chat isn&apos;t available</h1>
-          <p role="alert" className="mt-2 text-sm leading-6 text-slate-300">{loadError || "Your coaches could not be loaded."}</p>
+          <p role="alert" className="mt-2 text-sm leading-6 text-slate-300">{loadError || "Your coach could not be loaded."}</p>
           <Link href="/dashboard" className="mt-6 inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-foreground hover:bg-accent/90">
             <ArrowLeft className="h-4 w-4" />
             Back to dashboard
@@ -459,6 +505,17 @@ export default function CoachChatPage() {
             <MessageSquarePlus className="h-4 w-4" />
             <span className="hidden sm:inline">{clearArmed ? "Tap again to clear" : "New chat"}</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setConfirmClearAll(true)}
+            disabled={!hasHistory || isThinking}
+            aria-label="Clear conversation history"
+            title="Clear conversation history"
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-slate-200 transition-all hover:border-rose-400/40 hover:bg-rose-400/10 hover:text-rose-100 disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Trash2 className="h-4 w-4" />
+            <span className="hidden lg:inline">Clear history</span>
+          </button>
           </div>
         </div>
 
@@ -494,7 +551,7 @@ export default function CoachChatPage() {
       <div className="relative z-10 flex min-h-0 flex-1">
         {/* Coach roster */}
         <aside className="hidden w-80 shrink-0 flex-col gap-4 overflow-y-auto border-r border-white/[0.07] bg-[#070b10]/40 p-4 backdrop-blur-xl lg:flex">
-          <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Your coaching team</p>
+          <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Your coach</p>
           <div role="tablist" aria-label="Choose coach" className="space-y-2">
             {coaches.map((coach) => {
               const thread = threads[coach] ?? []
@@ -796,9 +853,31 @@ export default function CoachChatPage() {
           </div>
         </main>
       </div>
+      <AlertDialog open={confirmClearAll} onOpenChange={setConfirmClearAll}>
+        <AlertDialogContent className="border-white/10 bg-[#0d151c]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Clear your conversation history?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              Every message with {coachName}, including voice conversation transcripts, will be permanently deleted from
+              this device. Your training plan and profile aren&apos;t affected. This can&apos;t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full">Cancel</AlertDialogCancel>
+            <AlertDialogAction className="rounded-full bg-rose-500 text-white hover:bg-rose-400" onClick={clearAllHistory}>
+              <Trash2 className="h-4 w-4" />Clear history
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {conversation && (
         <CoachConversation key={activeCoach} coach={activeCoach} coachName={coachName} origin={conversation.origin} ask={converse}
-          onClose={() => { setConversation(null); setNearBottom(true); window.setTimeout(() => scrollToBottom("auto"), 50) }} />
+          onClose={() => {
+            setConversation(null)
+            if (backAfterCall.current) { backAfterCall.current = false; router.back(); return }
+            setNearBottom(true)
+            window.setTimeout(() => scrollToBottom("auto"), 50)
+          }} />
       )}
     </div>
   )

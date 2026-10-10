@@ -132,8 +132,8 @@ export function FeatureBento() {
       </Tile>
 
       {/* Coach chat */}
-      <Tile icon={MessageSquare} eyebrow="Coach chat" title="Elite coaches, on call"
-        body="Answers grounded in your two matched coaches' methods and your own profile.">
+      <Tile icon={MessageSquare} eyebrow="Coach chat" title="Your elite coach, on call"
+        body="Answers grounded in your coach's methods and your own profile.">
         <div className="space-y-2 text-xs">
           <p className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-md bg-accent px-3 py-2 text-accent-foreground">How should I pace my 200 back?</p>
           <p className="w-fit max-w-[90%] rounded-2xl rounded-bl-md border border-white/10 bg-white/[0.05] px-3 py-2 text-slate-200">Build the third 50. Hold 1:06 pace, then…</p>

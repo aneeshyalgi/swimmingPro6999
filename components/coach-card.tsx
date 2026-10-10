@@ -18,7 +18,7 @@ import {
 import { CoachAvatar } from "@/components/coach-avatar"
 import { cn } from "@/lib/utils"
 
-// Mirrors backend/app/coach_catalog.py public_profile() + context.coach_recommendations().
+// Mirrors backend/app/coach_catalog.py public_profile() + context.coach_recommendation().
 export type CoachProfile = {
   key: string
   name: string
@@ -42,9 +42,8 @@ export type CoachProfile = {
   supported_events: string[]
   reasons: string[]
   your_week: { requested: number; sessions_per_week: number; order: string[] } | null
-  // Only in the onboarding coach step (POST /api/coaches/options).
-  recommended?: number | null
-  partner?: string
+  // Only in the onboarding coach step (POST /api/coaches/options): true for the top match.
+  recommended?: boolean
 }
 
 function Section({ icon: Icon, title, children, className }: { icon: typeof Target; title: string; children: ReactNode; className?: string }) {

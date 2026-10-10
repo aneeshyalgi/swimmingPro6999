@@ -5,6 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { WaterBubbles } from "@/components/water-bubbles"
+import { CoachAvatar } from "@/components/coach-avatar"
 import { CoachCard, type CoachProfile } from "@/components/coach-card"
 import { CountrySelect } from "@/components/country-select"
 import { CoachPicker } from "@/components/onboarding/coach-picker"
@@ -19,10 +20,8 @@ import {
   ChevronLeft,
   ChevronRight,
   CornerDownLeft,
-  CreditCard,
   Dumbbell,
   Gauge,
-  Loader2,
   Medal,
   Pencil,
   Route,
@@ -76,9 +75,12 @@ type OnboardingData = {
   oneYearGoal: string
   oneYearGoalTimes: Record<string, TimeParts>
 
-  // Step 5: Coaches (head coach first; one pick gets an automatic second coach)
-  coaches: string[]
+  // Step 5: Coach (the one coach who writes every session)
+  coach: string
 }
+
+/** Why the coach suits the athlete, written with the season plan. */
+type CoachMatch = { headline: string; rationale: string; evidence: string[]; training_impact: string }
 
 const initialData: OnboardingData = {
   age: "",
@@ -98,7 +100,7 @@ const initialData: OnboardingData = {
   coachingSituation: "",
   oneYearGoal: "",
   oneYearGoalTimes: {},
-  coaches: [],
+  coach: "",
 }
 
 const eventGroups = [
@@ -114,7 +116,7 @@ const steps = [
   { title: "Swimming background", short: "Background", description: "Events and personal bests", icon: Waves },
   { title: "Training setup", short: "Training", description: "Volume, facilities, coaching", icon: Dumbbell },
   { title: "Goals", short: "Goals", description: "Your 1-year target times", icon: Target },
-  { title: "Your coaches", short: "Coaches", description: "Choose who trains you", icon: Medal },
+  { title: "Your coach", short: "Coach", description: "Choose who trains you", icon: Medal },
   { title: "Review", short: "Review", description: "Confirm and generate", icon: Sparkles },
 ]
 
@@ -172,9 +174,13 @@ const fromSavedAnswers = (answers: Record<string, unknown>): OnboardingData => {
     facilities: Array.isArray(answers.facilities) ? (answers.facilities as string[]) : [],
     coachingSituation: text(answers.coaching_situation), oneYearGoal: text(answers.one_year_goal),
     oneYearGoalTimes: times(answers.one_year_goal_times),
-    coaches: Array.isArray(answers.coaches) ? (answers.coaches as string[]).slice(0, 2) : [],
+    coach: text(answers.coach),
   }
 }
+
+/** A coach from a saved draft; drafts saved before athletes had one coach hold a `coaches` list (head coach first). */
+const draftCoach = (draft: Record<string, unknown>) =>
+  typeof draft.coach === "string" ? draft.coach : Array.isArray(draft.coaches) && typeof draft.coaches[0] === "string" ? draft.coaches[0] : ""
 
 const eventFieldId = (prefix: string, event: string) => `${prefix}-${event.toLowerCase().replace(/\s+/g, "-")}`
 
@@ -223,7 +229,7 @@ const validateStep = (step: number, data: OnboardingData): Record<string, string
     })
   }
 
-  if (step === 5 && data.coaches.length === 0) errors.coaches = "Choose your head coach"
+  if (step === 5 && !data.coach) errors.coach = "Choose your coach"
 
   return errors
 }
@@ -241,36 +247,18 @@ export default function OnboardingPage() {
   const [attempted, setAttempted] = useState(false)
   const [draftUserId, setDraftUserId] = useState<string | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
-  // The plan is saved; the loader swims its last metres, then the coaching team screen opens.
+  // The plan is saved; the loader swims its last metres, then the coach screen opens.
   const [planReady, setPlanReady] = useState(false)
-  // How many coaches the athlete picked (2, or 1 with an automatic second), for the results copy.
-  const [chosenCount, setChosenCount] = useState(0)
   const [showCoaches, setShowCoaches] = useState(false)
-  const [recommendedCoaches, setRecommendedCoaches] = useState<string[]>([])
-  const [coachPairing, setCoachPairing] = useState<{
-    headline: string
-    rationale: string
-    evidence: string[]
-    training_impact: string
-  } | null>(null)
-  // Full profile of each recommended coach, with why they were matched (from the backend coach catalog).
-  const [coachProfiles, setCoachProfiles] = useState<CoachProfile[]>([])
+  // The athlete's coach, why they suit the athlete, and their full profile (from the backend coach catalog).
+  const [coach, setCoach] = useState<string | null>(null)
+  const [coachMatch, setCoachMatch] = useState<CoachMatch | null>(null)
+  const [coachProfile, setCoachProfile] = useState<CoachProfile | null>(null)
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [fullName, setFullName] = useState("")
-  const [selectedPlanId, setSelectedPlanId] = useState("performance-build")
-  const [isStartingCheckout, setIsStartingCheckout] = useState(false)
   const [prefilled, setPrefilled] = useState(false)
-
-  const paymentPlans = [
-    {
-      id: "performance-build",
-      name: "Performance Build",
-      price: "$14.00",
-      description: "The complete adaptive coaching system for serious athletes.",
-      features: ["Full coach-context programming", "Race-specific progression", "Priority plan refinement"],
-      recommended: true,
-    },
-  ]
+  // Whether the account has paid for its coaching plan (null until known). Paid athletes are never asked to pay again.
+  const [paid, setPaid] = useState<boolean | null>(null)
 
   const [data, setData] = useState<OnboardingData>(initialData)
 
@@ -286,7 +274,8 @@ export default function OnboardingPage() {
         try {
           const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null")
           if (draft?.userId === user.id && draft.data) {
-            const restored: OnboardingData = { ...initialData, ...draft.data }
+            const { coaches: _legacyCoaches, ...savedDraft } = draft.data
+            const restored: OnboardingData = { ...initialData, ...savedDraft, coach: draftCoach(draft.data) }
             for (const field of ["pbsLCM", "pbsSCM", "oneYearGoalTimes"] as const) {
               restored[field] = Object.fromEntries(
                 Object.entries(restored[field] || {}).map(([event, time]) => [event, coerceTimeParts(time)]),
@@ -300,22 +289,31 @@ export default function OnboardingPage() {
         } catch {
           localStorage.removeItem(DRAFT_KEY)
         }
-        // No local draft: pre-fill from answers already saved to the account (editing, or a setup that didn't finish).
-        if (!restoredDraft) {
-          try {
-            const { data: { session } } = await supabase.auth.getSession()
-            const response = session ? await fetch(`${API_URL}/api/onboarding`, { headers: { Authorization: `Bearer ${session.access_token}` } }) : null
-            if (response?.ok) {
-              const saved = await response.json()
+        // Answers already saved to the account: with no local draft they pre-fill the form (editing, or a setup that
+        // didn't finish).
+        let accountPaid = false
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          const response = session ? await fetch(`${API_URL}/api/onboarding`, { headers: { Authorization: `Bearer ${session.access_token}` } }) : null
+          if (response?.ok) {
+            const saved = await response.json()
+            accountPaid = Boolean(saved.paid)
+            if (!restoredDraft) {
               setData(fromSavedAnswers(saved.answers || {}))
               setMaxStep(steps.length)
               setPrefilled(true)
+            } else if (accountPaid && typeof saved.answers?.coach === "string") {
+              // A paying athlete keeps their coach here (switching is done from the dashboard), whatever an old draft says.
+              setData((current) => ({ ...current, coach: saved.answers.coach }))
             }
-          } catch {
-            // Saved answers are a convenience; the form still works empty.
           }
+        } catch {
+          // Saved answers are a convenience; the form still works empty.
         }
+        setPaid(accountPaid)
         setDraftUserId(user.id)
+      } else {
+        setPaid(false)
       }
 
       const accountName = user?.user_metadata?.full_name?.trim() || ""
@@ -336,11 +334,11 @@ export default function OnboardingPage() {
     if (!pendingPayment) return
 
     try {
+      // Saved before athletes had one coach: `coaches` / `coachProfiles` lists, head coach first.
       const pending = JSON.parse(pendingPayment)
-      setRecommendedCoaches(pending.coaches || [])
-      setChosenCount(Number(pending.chosenCount) || 0)
-      setCoachPairing(pending.coachPairing || null)
-      setCoachProfiles(Array.isArray(pending.coachProfiles) ? pending.coachProfiles : [])
+      setCoach(pending.coach || (Array.isArray(pending.coaches) ? pending.coaches[0] : null) || null)
+      setCoachMatch(pending.coachMatch || null)
+      setCoachProfile(pending.coachProfile || (Array.isArray(pending.coachProfiles) ? pending.coachProfiles[0] : null) || null)
       setShowCoaches(true)
     } catch {
       localStorage.removeItem("swimgpt_pending_payment")
@@ -466,7 +464,7 @@ export default function OnboardingPage() {
       coaching_situation: data.coachingSituation,
       one_year_goal: data.oneYearGoal.trim(),
       one_year_goal_times: storedTimes(data.oneYearGoalTimes, data.mainEvents),
-      coaches: data.coaches,
+      coach: data.coach || null,
     }
 
     try {
@@ -499,18 +497,12 @@ export default function OnboardingPage() {
           user_key: result.user_key,
         }),
       )
-      setRecommendedCoaches(result.selected_coaches || [])
-      setChosenCount(data.coaches.length)
-      setCoachPairing(result.coach_pairing || null)
-      setCoachProfiles(result.coach_profiles || [])
+      setCoach(result.coach || null)
+      setCoachMatch(result.coach_match || null)
+      setCoachProfile(result.coach_profile || null)
       localStorage.setItem(
         "swimgpt_pending_payment",
-        JSON.stringify({
-          coaches: result.selected_coaches || [],
-          chosenCount: data.coaches.length,
-          coachPairing: result.coach_pairing || null,
-          coachProfiles: result.coach_profiles || [],
-        }),
+        JSON.stringify({ coach: result.coach || null, coachMatch: result.coach_match || null, coachProfile: result.coach_profile || null }),
       )
       localStorage.removeItem(DRAFT_KEY)
     } catch (error) {
@@ -531,40 +523,15 @@ export default function OnboardingPage() {
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
-  const handleProceedToDashboard = async () => {
-    setIsStartingCheckout(true)
-    setGenerationError(null)
+  // The monthly payment screen is its own page; the coach reveal stays here until the athlete comes back to it.
+  const continueToPayment = () => {
+    localStorage.setItem("swimgpt_pending_payment", JSON.stringify({ coach, coachMatch, coachProfile }))
+    window.location.assign("/subscribe")
+  }
 
-    localStorage.setItem("swimgpt_coaches", JSON.stringify(recommendedCoaches))
-    localStorage.setItem("swimgpt_pending_payment", JSON.stringify({ coaches: recommendedCoaches, chosenCount, coachPairing, coachProfiles }))
-
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-      const userKey = localStorage.getItem("swimgpt_user_key")
-
-      if (!user || !userKey) {
-        throw new Error("Your session could not be verified. Please sign in again.")
-      }
-
-      const response = await fetch(`${API_URL}/api/payments/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          auth_user_id: user.id,
-          user_key: userKey,
-          plan_id: selectedPlanId,
-        }),
-      })
-
-      if (!response.ok) throw new Error(await response.text())
-      const result = await response.json()
-      window.location.assign(result.checkout_url)
-    } catch (error: any) {
-      setGenerationError(error?.message || "Could not start secure checkout. Please try again.")
-      setIsStartingCheckout(false)
-    }
+  const openDashboard = () => {
+    localStorage.removeItem("swimgpt_pending_payment")
+    window.location.assign("/dashboard")
   }
 
   const getCoachDisplayName = (name: string) => {
@@ -622,11 +589,8 @@ export default function OnboardingPage() {
     },
     {
       step: 5,
-      title: "Coaches",
-      rows: [
-        ["Head coach", data.coaches[0] || "—"],
-        ["Second coach", data.coaches[1] || (data.coaches[0] ? "Paired for you" : "—")],
-      ],
+      title: "Coach",
+      rows: [["Your coach", data.coach || "—"]],
     },
   ]
 
@@ -818,7 +782,9 @@ export default function OnboardingPage() {
                             "Your events and best times anchor every pace in your plan.",
                             "We'll fit the program around the time and equipment you actually have.",
                             "Set the times you want to hit over the next 12 months.",
-                            "Pick who coaches you. We've flagged the best fit for your events, but it's your call.",
+                            paid
+                              ? "Your coach stays with you while you edit your answers."
+                              : "Pick the one coach who'll train you. We've flagged the best fit for your events, but it's your call.",
                             "Check everything looks right, then we'll build your program.",
                           ][currentStep - 1]
                         }
@@ -1161,7 +1127,21 @@ export default function OnboardingPage() {
                     </div>
                   )}
 
-                  {currentStep === 5 && (
+                  {currentStep === 5 && paid && data.coach && (
+                    <div className="flex flex-col items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center sm:flex-row sm:text-left">
+                      <CoachAvatar name={data.coach} shape="circle" className="h-16 w-16 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Your coach</p>
+                        <p className="mt-0.5 text-lg font-semibold text-white">{data.coach}</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-400">
+                          Your new answers are built into {getCoachDisplayName(data.coach)}&apos;s program. To change coach, use
+                          Switch coach on your dashboard.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentStep === 5 && !(paid && data.coach) && (
                     <CoachPicker
                       answers={{
                         main_events: data.mainEvents,
@@ -1170,9 +1150,9 @@ export default function OnboardingPage() {
                         gym_sessions_per_week: data.gymSessionsPerWeek,
                         swim_sessions_per_week: data.swimSessionsPerWeek,
                       }}
-                      value={data.coaches}
-                      onChange={(coaches) => updateData("coaches", coaches)}
-                      invalid={Boolean(visibleError("coaches"))}
+                      value={data.coach}
+                      onChange={(coach) => updateData("coach", coach)}
+                      invalid={Boolean(visibleError("coach"))}
                     />
                   )}
 
@@ -1257,7 +1237,7 @@ export default function OnboardingPage() {
 
         {isGenerating && (
           <div className="py-4 animate-in fade-in duration-700 sm:py-8">
-            <PlanLoader firstName={firstName} coaches={data.coaches} done={planReady} onFinished={showResults} />
+            <PlanLoader firstName={firstName} coach={data.coach} done={planReady} onFinished={showResults} />
           </div>
         )}
 
@@ -1271,125 +1251,88 @@ export default function OnboardingPage() {
                     <Sparkles className="h-7 w-7 text-accent" />
                   </div>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-accent">Program ready</p>
-                  <h2 className="text-3xl font-bold mb-2">Your coaching team is ready</h2>
+                  <h2 className="text-3xl font-bold mb-2">Your coach is ready</h2>
                   <p className="mx-auto max-w-xl text-muted-foreground">
-                    {recommendedCoaches.length === 2 && chosenCount === 2
-                      ? `Your plan is built on the coaches you chose: ${recommendedCoaches[0]} leads, with ${recommendedCoaches[1]} alongside.`
-                      : recommendedCoaches.length === 2 && chosenCount === 1
-                        ? `${recommendedCoaches[0]} leads your plan, as you chose. We paired them with ${recommendedCoaches[1]}, whose sessions best complement theirs for your events.`
-                        : "Two coaching systems shaped your training plan."}
+                    {coach
+                      ? `Your plan is built on ${getCoachDisplayName(coach)}'s program. Every session in your week comes from them.`
+                      : "Your coach's program shaped your training plan."}
                   </p>
                 </div>
               </div>
 
-              <div className="space-y-5">
-                {recommendedCoaches.map((coach, idx) => {
-                  const profile = coachProfiles.find((item) => item.name.toLowerCase() === coach.toLowerCase())
-                  return profile ? (
-                    <CoachCard key={coach} coach={profile} index={idx}
-                      label={<span className="rounded-full bg-accent/15 px-2 py-0.5 text-accent">
-                        {idx === 0 ? "Head coach" : chosenCount === 1 ? "Second coach · paired for you" : "Second coach"}
-                      </span>} />
-                  ) : (
-                    <Card key={coach} className="border-white/10 bg-card/70 p-6">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                        Match {String(idx + 1).padStart(2, "0")}
-                      </p>
-                      <h3 className="mt-1 text-2xl font-bold">{getCoachDisplayName(coach)}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">Selected for your training profile</p>
-                    </Card>
-                  )
-                })}
-              </div>
+              {coach && (coachProfile ? (
+                <CoachCard coach={coachProfile} index={0}
+                  label={<span className="rounded-full bg-accent/15 px-2 py-0.5 text-accent">Your coach</span>} />
+              ) : (
+                <Card className="border-white/10 bg-card/70 p-6">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Your coach</p>
+                  <h3 className="mt-1 text-2xl font-bold">{getCoachDisplayName(coach)}</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">Selected for your training profile</p>
+                </Card>
+              ))}
 
-              {coachPairing && (
+              {coachMatch && (
                 <Card className="overflow-hidden border-accent/30 bg-accent/5">
                   <div className="flex flex-col gap-5 p-6 md:flex-row md:items-center">
                     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/10">
                       <User className="h-5 w-5 text-accent" />
                     </div>
                     <div className="flex-1">
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-accent">Why this pairing</p>
-                      <h4 className="mb-2 text-lg font-semibold">{coachPairing.headline}</h4>
-                      <p className="text-sm leading-6 text-muted-foreground">{coachPairing.rationale}</p>
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-accent">Why this coach</p>
+                      <h4 className="mb-2 text-lg font-semibold">{coachMatch.headline}</h4>
+                      <p className="text-sm leading-6 text-muted-foreground">{coachMatch.rationale}</p>
                       <div className="mt-4 space-y-2">
-                        {coachPairing.evidence?.map((item) => (
+                        {coachMatch.evidence?.map((item) => (
                           <div key={item} className="flex gap-2 text-sm text-muted-foreground">
                             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
                             <span>{item}</span>
                           </div>
                         ))}
                       </div>
-                      <p className="mt-4 border-t border-border/60 pt-3 text-sm font-medium text-foreground">{coachPairing.training_impact}</p>
+                      <p className="mt-4 border-t border-border/60 pt-3 text-sm font-medium text-foreground">{coachMatch.training_impact}</p>
                     </div>
                     <div className="grid shrink-0 grid-cols-2 gap-2 text-center text-xs">
                       <div className="rounded-xl border border-border/70 bg-background/40 px-4 py-3">
-                        <p className="text-lg font-bold text-foreground">{recommendedCoaches.length}</p>
-                        <p className="text-muted-foreground">coaches</p>
-                      </div>
-                      <div className="rounded-xl border border-border/70 bg-background/40 px-4 py-3">
                         <p className="text-lg font-bold text-foreground">
                           {data.mainEvents.length ||
-                            new Set(coachProfiles.flatMap((coach) => [...coach.covered_events, ...coach.supported_events])).size}
+                            (coachProfile ? new Set([...coachProfile.covered_events, ...coachProfile.supported_events]).size : "—")}
                         </p>
                         <p className="text-muted-foreground">events</p>
+                      </div>
+                      <div className="rounded-xl border border-border/70 bg-background/40 px-4 py-3">
+                        <p className="text-lg font-bold text-foreground">{coachProfile?.your_week?.requested ?? data.swimSessionsPerWeek}</p>
+                        <p className="text-muted-foreground">swims / week</p>
                       </div>
                     </div>
                   </div>
                 </Card>
               )}
 
-              <div className="flex justify-center pt-4">
-                <div className="w-full space-y-5">
-                  <div className="text-center">
+              {paid === true && (
+                <div className="space-y-5 pt-4 text-center">
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-accent">Your coaching plan</p>
+                    <h3 className="text-2xl font-bold">Your plan is active</h3>
+                    <p className="mt-2 text-sm text-muted-foreground">Your updated program is waiting in your dashboard.</p>
+                  </div>
+                  <Button onClick={openDashboard} size="lg" className="h-14 w-full rounded-full bg-accent text-lg text-accent-foreground shadow-[0_12px_32px_rgba(87,229,234,0.3)] hover:bg-accent/90">
+                    Open my dashboard<ChevronRight className="ml-2 h-5 w-5" />
+                  </Button>
+                </div>
+              )}
+
+              {paid === false && (
+                <div className="space-y-5 pt-4 text-center">
+                  <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-accent">Your coaching plan</p>
                     <h3 className="text-2xl font-bold">Activate your personalized program</h3>
-                    <p className="mt-2 text-sm text-muted-foreground">Your plan is generated. Activate your coaching plan to unlock the dashboard, where you&apos;ll generate your first week of workouts.</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Your plan is generated. Start your monthly plan to unlock the dashboard, where you&apos;ll generate your first week of workouts.</p>
                   </div>
-
-                  <div role="radiogroup" aria-label="Coaching plan" className="grid gap-4">
-                    {paymentPlans.map((plan) => {
-                      const isSelected = selectedPlanId === plan.id
-                      return (
-                        <button
-                          key={plan.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={isSelected}
-                          onClick={() => setSelectedPlanId(plan.id)}
-                          className={`relative rounded-2xl border p-5 text-left transition-all ${
-                            isSelected
-                              ? "border-accent bg-accent/10 shadow-[0_0_28px_rgba(34,211,238,0.16)]"
-                              : "border-border/80 bg-card/60 hover:border-accent/50"
-                          }`}
-                        >
-                          {plan.recommended && <span className="absolute -top-3 left-4 rounded-full bg-accent px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-accent-foreground">Recommended</span>}
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-bold">{plan.name}</p>
-                              <p className="mt-1 text-3xl font-black text-accent">{plan.price}<span className="text-sm font-medium text-muted-foreground"> / month</span></p>
-                            </div>
-                            <div className={`flex h-6 w-6 items-center justify-center rounded-full border ${isSelected ? "border-accent bg-accent text-accent-foreground" : "border-border text-transparent"}`}>
-                              <CheckCircle2 className="h-4 w-4" />
-                            </div>
-                          </div>
-                          <p className="mt-3 min-h-12 text-sm leading-5 text-muted-foreground">{plan.description}</p>
-                          <div className="mt-4 space-y-2 border-t border-border/60 pt-4 text-xs text-muted-foreground">
-                            {plan.features.map((feature) => <p key={feature} className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5 text-accent" />{feature}</p>)}
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  {generationError && <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{generationError}</p>}
-
-                  <Button onClick={handleProceedToDashboard} disabled={isStartingCheckout} size="lg" className="h-14 w-full rounded-full bg-accent text-lg text-accent-foreground shadow-[0_12px_32px_rgba(87,229,234,0.3)] hover:bg-accent/90">
-                    {isStartingCheckout ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" />Opening secure checkout...</> : <><CreditCard className="mr-2 h-5 w-5" />Continue to secure payment<ChevronRight className="ml-2 h-5 w-5" /></>}
+                  <Button onClick={continueToPayment} size="lg" className="h-14 w-full rounded-full bg-accent text-lg text-accent-foreground shadow-[0_12px_32px_rgba(87,229,234,0.3)] hover:bg-accent/90">
+                    Unlock my program<ChevronRight className="ml-2 h-5 w-5" />
                   </Button>
-                  <p className="text-center text-xs text-muted-foreground">Secure payment handled by Stripe. Your card details never touch SwimGPT.</p>
                 </div>
-              </div>
+              )}
             </div>
           </Card>
         )}

@@ -19,9 +19,9 @@ const clock = (ms: number) => {
  * each generation stage is a split, and they touch the wall the moment the plan is ready.
  * Progress is time-based while waiting (it never reaches the wall on its own) and finishes when `done` turns true.
  */
-export function PlanLoader({ firstName, coaches, done, onFinished }: {
+export function PlanLoader({ firstName, coach, done, onFinished }: {
   firstName: string
-  coaches: string[]
+  coach: string
   done: boolean
   onFinished: () => void
 }) {
@@ -33,13 +33,12 @@ export function PlanLoader({ firstName, coaches, done, onFinished }: {
   const finishedRef = useRef(onFinished)
   finishedRef.current = onFinished
 
-  const head = coaches[0]?.replace(/^Coach\s+/i, "")
-  const second = coaches[1]?.replace(/^Coach\s+/i, "")
+  const name = coach.replace(/^Coach\s+/i, "")
   const stages = [
     { at: 0, label: "Reading your PBs and target times" },
     { at: 0.13, label: "Setting your pace zones" },
-    { at: 0.29, label: head ? `Loading Coach ${head}'s program` : "Loading your coaches' programs" },
-    { at: 0.46, label: second ? `Blending in Coach ${second}'s sessions` : "Pairing your second coach" },
+    { at: 0.29, label: name ? `Loading Coach ${name}'s program` : "Loading your coach's program" },
+    { at: 0.46, label: name ? `Fitting Coach ${name}'s sessions to your week` : "Fitting the sessions to your week" },
     { at: 0.63, label: "Writing your season plan" },
     { at: 0.8, label: "Checking every number against your goals" },
   ]
@@ -97,7 +96,7 @@ export function PlanLoader({ firstName, coaches, done, onFinished }: {
       <div className="pl-board flex items-center justify-between gap-3 rounded-t-[26px] border border-b-0 border-white/10 px-4 py-3 sm:px-6">
         <div className="hidden min-w-0 sm:block">
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-500">SwimGPT Aquatic Centre</p>
-          <p className="truncate text-xs text-slate-300">50 m · Plan build{head ? ` · Coach ${head}` : ""}</p>
+          <p className="truncate text-xs text-slate-300">50 m · Plan build{name ? ` · Coach ${name}` : ""}</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="rounded-md bg-accent/15 px-2 py-1 font-mono text-[11px] font-bold text-accent">LANE 4</span>
@@ -167,7 +166,7 @@ export function PlanLoader({ firstName, coaches, done, onFinished }: {
         <h2 className="text-balance text-3xl font-bold tracking-tight text-white">
           {allDone ? `Your program is ready${firstName ? `, ${firstName}` : ""}` : `Building your program${firstName ? `, ${firstName}` : ""}`}
         </h2>
-        <p className="mt-2 text-slate-400">{allDone ? "Meet your coaching team…" : "This usually takes under a minute. Keep this tab open."}</p>
+        <p className="mt-2 text-slate-400">{allDone ? "Meet your coach…" :"This usually takes under a minute. Keep this tab open."}</p>
         <div className="mx-auto mt-5 flex max-w-md items-center gap-3">
           <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
             <span className="pl-bar absolute inset-y-0 left-0 rounded-full" style={{ width: `${progress * 100}%` }} />

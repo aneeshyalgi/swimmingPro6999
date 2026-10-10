@@ -44,7 +44,7 @@ async function fetchStatus(): Promise<Status> {
 /**
  * The dashboard's hands-on first-week setup. It starts by itself for an athlete with nothing planned yet, then walks
  * them through every tap: it opens the right screen, points at the one button to press (blocking everything else),
- * narrates while their coaches write the week, and moves on as soon as each step lands.
+ * narrates while their coach writes the week, and moves on as soon as each step lands.
  */
 export function GuidedSetup({ userKey, firstName, coach, swimSessions, gymSessions, step, onStep, event, onNavigate }: {
   userKey: string

@@ -60,11 +60,11 @@ class OnboardingSubmission(BaseModel):
     coaching_situation: Literal["team", "club", "solo"]
     one_year_goal: str = Field(default="", max_length=600)
     one_year_goal_times: dict[str, SwimTime] = Field(default_factory=dict)
-    # Coaches the athlete picked, head coach first. One pick is paired with its best complement; none uses the
-    # recommended pair. Not a profile column: the final pair is stored as recommended_coaches.
-    coaches: list[str] = Field(default_factory=list, max_length=2)
+    # The one coach the athlete picked; none uses the recommended coach. Not a profile column: the final coach is
+    # stored as recommended_coaches (a one-item list).
+    coach: str | None = Field(default=None, max_length=80)
 
-    # Older clients also send auth_user_id, user_key, full_name and recommended_coaches; they are ignored.
+    # Older clients also send auth_user_id, user_key, full_name, coaches and recommended_coaches; they are ignored.
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     @field_validator("pbs_lcm", "pbs_scm", "one_year_goal_times", mode="before")
@@ -94,9 +94,8 @@ class OnboardingSubmission(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self):
-        keys = [coach_key(name) for name in self.coaches]
-        if None in keys or len(set(keys)) != len(keys):
-            raise ValueError("Choose distinct coaches from the list.")
+        if self.coach and coach_key(self.coach) is None:
+            raise ValueError("Choose a coach from the list.")
         unknown = [event for event in self.main_events if event not in ONBOARDING_EVENTS]
         if unknown or len(set(self.main_events)) != len(self.main_events):
             raise ValueError(f"Choose distinct events from the list (unknown: {', '.join(unknown) or 'duplicates'}).")
@@ -120,7 +119,7 @@ class OnboardingSubmission(BaseModel):
         return self
 
     def to_storage_record(self) -> dict[str, Any]:
-        record = self.model_dump(exclude={"coaches"})
+        record = self.model_dump(exclude={"coach"})
         for field in ("height", "weight"):  # whole numbers stay integers, as in existing rows
             if isinstance(record[field], float) and record[field].is_integer():
                 record[field] = int(record[field])
@@ -141,13 +140,19 @@ class CoachOptionsRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class CoachSwitchRequest(BaseModel):
+    """The coach an athlete switches to from the dashboard: a coach's name ("Coach Brad") or catalog key ("brad")."""
+
+    coach: str = Field(min_length=1, max_length=40)
+
+
 class OnboardingSubmissionResponse(BaseModel):
     message: str
     user_key: str
     profile_id: str | None = None
-    selected_coaches: list[str] = Field(default_factory=list)
-    coach_pairing: dict[str, Any] = Field(default_factory=dict)
-    coach_profiles: list[dict[str, Any]] = Field(default_factory=list)
+    coach: str
+    coach_match: dict[str, Any] = Field(default_factory=dict)
+    coach_profile: dict[str, Any] = Field(default_factory=dict)
 
 
 class CheckoutSessionRequest(BaseModel):
@@ -174,7 +179,7 @@ class CoachChatMessage(BaseModel):
 
 class CoachChatRequest(BaseModel):
     user_key: str
-    selected_coaches: list[str] = Field(min_length=1, max_length=2)
+    selected_coaches: list[str] = Field(min_length=1, max_length=1)
     active_coach: str | None = None
     message: str = Field(min_length=1, max_length=4000)
     history: list[CoachChatMessage] = Field(default_factory=list, max_length=20)

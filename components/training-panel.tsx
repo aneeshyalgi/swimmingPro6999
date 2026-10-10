@@ -1,10 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { z } from "zod"
 import {
   Activity, BookMarked, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock, Copy, Download, Dumbbell, MoreHorizontal, Pencil, Trash2,
-  Flag, Heart, Layers, LibraryBig, MapPin, Moon, RotateCcw, Sparkles, Star,
+  Flag, Heart, Layers, LibraryBig, MapPin, Maximize2, Moon, RotateCcw, Sparkles, Star,
   Target, Timer, Trophy, Waves, X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -26,6 +26,8 @@ import {
   todayISO, zoneTone,
 } from "@/components/training-ui"
 import { WorkoutCalendar } from "@/components/workout-calendar"
+import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
+import { CalendarDay, compactMeters } from "@/components/calendar-day"
 import { GUIDE_SUBTAB, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { TrainingItemEditor, type EditTarget } from "@/components/training-item-editor"
 import { cn } from "@/lib/utils"
@@ -70,10 +72,21 @@ const subTabs = [
 
 /** `guide`: where the dashboard guide is pointing; opens the matching sub-tab so the spotlight can find its button. */
 /** `onGuideEvent`: tells the guided setup when the user starts or finishes a step it is walking them through. */
-export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
+/** `builderRequest`: set when the sidebar's Workout Builder is chosen; opens a new workout in the Gym week, then
+ *  `onBuilderOpened` lets the dashboard clear it. */
+export function TrainingPanel({ onChanged, guide, onGuideEvent, builderRequest, onBuilderOpened }: {
   onChanged: () => Promise<void>; guide?: GuideTarget | null; onGuideEvent?: (event: GuideEvent) => void
+  builderRequest?: number; onBuilderOpened?: () => void
 }) {
-  const [subTab, setSubTab] = useState<string>(() => (guide ? GUIDE_SUBTAB[guide] : "week"))
+  const [subTab, setSubTab] = useState<string>(() => (guide ? GUIDE_SUBTAB[guide] : builderRequest ? "library" : "week"))
+  // The latest Workout Builder request the Gym week has not opened yet.
+  const [pendingBuilder, setPendingBuilder] = useState(builderRequest ?? 0)
+  const [seenBuilder, setSeenBuilder] = useState(builderRequest ?? 0)
+  if (builderRequest && builderRequest !== seenBuilder) {
+    setSeenBuilder(builderRequest)
+    setPendingBuilder(builderRequest)
+    setSubTab("library")
+  }
   const [weekStart, setWeekStart] = useState(() => mondayISO())
   const [week, setWeek] = useState<TrainingWeek | null>(null)
   const [meets, setMeets] = useState<CompetitionData | null>(null)
@@ -84,10 +97,16 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const [createMeet, setCreateMeet] = useState(false)
   const [dateAction, setDateAction] = useState<{ mode: "move" | "duplicate"; item: WeekItem; date: string } | null>(null)
   const [deleting, setDeleting] = useState<WeekItem | null>(null)
+  const [deletingMeet, setDeletingMeet] = useState<Competition | null>(null)
   const [editing, setEditing] = useState<EditTarget | null>(null)
   const [resultKey, setResultKey] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [quiet, setQuiet] = useState(false)
+  // The day open in the full-screen view, and the calendar tile it grew out of.
+  const [focusDate, setFocusDate] = useState<string | null>(null)
+  const [focusOrigin, setFocusOrigin] = useState<{ x: number; y: number } | null>(null)
+  // The workout open in the full-screen workout view.
+  const [focusSession, setFocusSession] = useState<string | null>(null)
   const mounted = useRef(false)
   const inFlight = useRef(false)
   const activeWeek = useRef(weekStart)
@@ -210,6 +229,15 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       else await trainingRequest(`/week/${item.kind}?date=${item.date}`, weekSchema, { method: "DELETE" })
     }, `“${item.title}” deleted.`)
   }
+  const removeMeet = async () => {
+    if (!deletingMeet) return
+    const meet = deletingMeet
+    setDeletingMeet(null)
+    if (resultKey?.startsWith(`${meet.id}:`)) setResultKey(null)
+    await perform(async () => {
+      await trainingRequest(`/competitions/${meet.id}`, z.object({ deleted: z.string() }), { method: "DELETE" })
+    }, `“${meet.name}” deleted. Your calendar and countdown are updated.`)
+  }
   const exportItem = async (item: WeekItem) => {
     setError(null); setNotice(null)
     try {
@@ -224,6 +252,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const openEditor = (item: WeekItem) => {
     const day = week?.days.find((entry) => entry.date === item.date)
     if (!day || item.completed) return
+    setFocusDate(null)
+    setFocusSession(null)
     if (item.kind === "swim") {
       const swim = day.workouts.find((entry) => entry.key === item.key)
       if (swim) setEditing({ kind: "swim", key: swim.key, date: day.date, workout: swim.workout })
@@ -249,6 +279,139 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       </DropdownMenuContent>
     </DropdownMenu>
   )
+
+  type Day = TrainingWeek["days"][number]
+  /** Ticked-off progress for a day: each swim, the strength session and the day's mobility count once. */
+  const dayProgress = (day: Day) => {
+    const hasMobility = day.mobility.length > 0
+    return {
+      total: day.workouts.length + (day.strength ? 1 : 0) + (hasMobility ? 1 : 0),
+      done: day.workouts.filter((item) => item.completed).length + (day.strength && day.strength_completed ? 1 : 0) + (hasMobility && day.mobility_completed ? 1 : 0),
+    }
+  }
+
+  /** A swim, strength session or day of mobility: what its card, the day view and the workout view each show. */
+  type Session = {
+    id: string; date: string; label: string; title: string; completed: boolean; className?: string
+    header: ReactNode; body: ReactNode; menu: ReactNode; chips: ReactNode; onToggle: () => void
+  }
+  const chip = (content: ReactNode, tone = "border-white/10 bg-white/[0.04] text-slate-300") =>
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold tabular-nums", tone)}>{content}</span>
+  const doneChip = (completed: boolean) => completed
+    ? chip(<><CheckCircle2 className="h-3.5 w-3.5" />Completed</>, "border-emerald-300/40 bg-emerald-400/15 text-emerald-100")
+    : chip(<><span className="h-1.5 w-1.5 rounded-full bg-slate-500" />Not completed</>)
+  const daySessionList = (day: Day): Session[] => {
+    const sessions: Session[] = day.workouts.map((item, index) => {
+      const label = index === 0 ? "First swim" : index === 1 ? "Second swim" : `Additional swim ${index + 1}`
+      return {
+        id: `swim:${item.key}`, date: day.date, label, title: item.workout.title, completed: item.completed,
+        className: cn(item.completed && "border-emerald-400/25"),
+        menu: itemMenu({ kind: "swim", key: item.key, date: day.date, title: item.workout.title, completed: item.completed }),
+        onToggle: () => void toggleSwim(item),
+        chips: <>{chip(<><Waves className="h-3.5 w-3.5" />{item.distance_meters.toLocaleString()} m</>, "border-accent/25 bg-accent/10 text-cyan-100")}{doneChip(item.completed)}</>,
+        header: <div className="flex items-center gap-3">
+          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent")}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Waves className="h-5 w-5" />}</span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}{item.completed && " · Completed"}</p>
+            <p className="truncate font-semibold text-white">{item.workout.title}</p>
+            <ZoneStack className="mt-2 h-1.5" entries={zoneEntries(item.zones)} />
+          </div>
+          <span className="shrink-0 text-right"><span className="block text-sm font-bold tabular-nums text-cyan-100">{item.distance_meters.toLocaleString()}</span><span className="text-[10px] text-slate-500">metres</span></span>
+        </div>,
+        body: <><ZoneStack className="mb-5 h-2" entries={zoneEntries(item.zones)} /><SwimWorkoutDetails workout={item.workout} />{workoutActions(item)}</>,
+      }
+    })
+    if (day.strength) {
+      const strength = day.strength
+      sessions.push({
+        id: `strength:${day.date}`, date: day.date, label: "Strength", title: strength.title, completed: day.strength_completed, className: "border-violet-400/15",
+        menu: itemMenu({ kind: "strength", date: day.date, title: strength.title, completed: day.strength_completed }),
+        onToggle: () => void toggleLegacyStrength(day.date, day.strength_completed),
+        chips: <>{chip(<><Clock className="h-3.5 w-3.5" />{strength.estimated_duration_minutes} min</>, "border-violet-300/25 bg-violet-400/10 text-violet-100")}{doneChip(day.strength_completed)}</>,
+        header: <div className="flex items-center gap-3">
+          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300")}><Dumbbell className="h-5 w-5" /></span>
+          <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Strength</p><p className="truncate font-semibold text-white">{strength.title}</p></div>
+          <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400"><Clock className="h-3.5 w-3.5" />{strength.estimated_duration_minutes} min</span>
+        </div>,
+        body: <>
+          <p className="text-sm leading-6 text-slate-300">{strength.objective}</p>
+          <div className="mt-4 grid gap-3">
+            {strength.exercises.map((exercise, i) => <div key={i} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] p-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2"><h5 className="font-semibold text-white">{exercise.exercise}</h5><span className="rounded-full bg-violet-400/15 px-2.5 py-0.5 text-xs font-semibold text-violet-200">{exercise.sets} × {exercise.repetitions}</span></div>
+              <p className="mt-2 text-slate-400">{exercise.load} · Rest {exercise.rest_seconds}s{exercise.tempo && ` · Tempo ${exercise.tempo}`}</p>
+              <ol className="mt-3 space-y-1.5 text-slate-400">{exercise.demonstration.map((step, j) => <li key={j} className="flex gap-2.5"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-[10px] font-bold text-slate-300">{j + 1}</span>{step}</li>)}</ol>
+            </div>)}
+          </div>
+          <div className="mt-4 border-t border-white/[0.07] pt-4">
+            <Button size="sm" variant="outline" disabled={busy || day.strength_completed} onClick={() => openEditor({ kind: "strength", date: day.date, title: strength.title, completed: day.strength_completed })}
+              title={day.strength_completed ? "Untick it to edit" : undefined} className="rounded-full border-accent/30 bg-accent/10 text-cyan-100 hover:bg-accent/20"><Pencil className="mr-1.5 h-4 w-4" />Edit strength</Button>
+          </div>
+        </>,
+      })
+    }
+    if (day.mobility.length) {
+      const minutes = day.mobility.reduce((sum, item) => sum + item.duration_minutes, 0)
+      const count = `${day.mobility.length} exercise${day.mobility.length === 1 ? "" : "s"}`
+      sessions.push({
+        id: `mobility:${day.date}`, date: day.date, label: "Mobility", title: `${day.day_name} mobility`, completed: day.mobility_completed,
+        className: cn("border-emerald-400/15", day.mobility_completed && "border-emerald-400/30"),
+        menu: itemMenu({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed }),
+        onToggle: () => void toggleMobility(day.date, day.mobility_completed),
+        chips: <>{chip(<><Heart className="h-3.5 w-3.5" />{count}</>, "border-emerald-300/25 bg-emerald-400/10 text-emerald-100")}{chip(<><Clock className="h-3.5 w-3.5" />{minutes} min</>)}{doneChip(day.mobility_completed)}</>,
+        header: <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300">{day.mobility_completed ? <CheckCircle2 className="h-5 w-5" /> : <Heart className="h-5 w-5" />}</span>
+          <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mobility{day.mobility_completed && " · Completed"}</p><p className="font-semibold text-white">{count}</p></div>
+          <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400"><Clock className="h-3.5 w-3.5" />{minutes} min</span>
+        </div>,
+        body: <>
+          <div className="grid gap-3">{day.mobility.map((item, i) => <div key={i} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] p-4 text-sm">
+            <p className="font-medium text-white">{item.exercise}<span className="ml-2 text-xs font-normal text-slate-500">{item.category} · {item.duration_minutes} min</span></p>
+            <ul className="mt-2 space-y-1 text-slate-400">{item.instructions.map((instruction, j) => <li key={j} className="flex gap-2"><span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-emerald-300" />{instruction}</li>)}</ul>
+          </div>)}</div>
+          <div className="mt-4 border-t border-white/[0.07] pt-4">
+            <Button size="sm" variant="outline" disabled={busy || day.mobility_completed} onClick={() => openEditor({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed })}
+              title={day.mobility_completed ? "Untick it to edit" : undefined} className="rounded-full border-accent/30 bg-accent/10 text-cyan-100 hover:bg-accent/20"><Pencil className="mr-1.5 h-4 w-4" />Edit mobility</Button>
+          </div>
+        </>,
+      })
+    }
+    return sessions
+  }
+  /** Open one workout full screen, growing out of the card that was clicked. */
+  const openSession = (id: string, element: HTMLElement) => {
+    setFocusOrigin(tileCentre(element))
+    setFocusDate(null)
+    setFocusSession(id)
+  }
+  const tickHint = (date: string) => (date > today ? "You can tick this off on the day" : undefined)
+  /** `expanded`: the full-screen day view, where every card is open; on the page each card opens full screen instead. */
+  const sessionRow = (session: Session, expanded: boolean) => (
+    <CompletionRow key={session.id} checked={session.completed} locked={session.date > today} busy={busy} hint={tickHint(session.date)} label={session.title} onToggle={session.onToggle}>
+      <Expander className={session.className} actions={session.menu} header={session.header}
+        {...(expanded ? { defaultOpen: true } : { onOpen: (event) => openSession(session.id, event.currentTarget) })}>
+        {session.body}
+      </Expander>
+    </CompletionRow>
+  )
+  /** A day's meets, swims, strength, mobility and recovery. `expanded` opens every card (the full-screen day view). */
+  const daySessions = (day: Day, expanded = false) => (
+    <div className="space-y-3">
+      {day.competitions.map((meet) => <div key={meet.id} className="relative overflow-hidden rounded-2xl border border-amber-400/30 bg-[linear-gradient(135deg,rgba(251,191,36,0.14),rgba(251,191,36,0.03))] p-4 text-sm">
+        <p className="flex items-center gap-2 font-semibold text-amber-100"><Flag className="h-4 w-4 text-amber-300" />{meet.name}<span className="rounded-full bg-amber-300/20 px-2 py-0.5 text-[10px] font-bold text-amber-200">Priority {meet.priority}</span></p>
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-amber-100/70"><MapPin className="h-3.5 w-3.5" />{meet.location} · {meet.pool_length}m · {meet.events.join(", ")}</p>
+      </div>)}
+      {day.rest && !day.workouts.length && !day.strength && <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm text-slate-300"><Moon className="h-5 w-5 text-slate-400" />Rest / recovery day</div>}
+      {daySessionList(day).map((session) => sessionRow(session, expanded))}
+      {day.recovery.length > 0 && <div className="pt-1">
+        <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recovery</h5>
+        <ul className="flex flex-wrap gap-2">{day.recovery.map((item, i) => <li key={i} className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/15 bg-amber-200/[0.06] px-3 py-1 text-xs text-amber-50/80"><Moon className="h-3 w-3 text-amber-200" />{item}</li>)}</ul>
+      </div>}
+    </div>
+  )
+  const focusIndex = week?.days.findIndex((day) => day.date === focusDate) ?? -1
+  const focusDay = focusIndex >= 0 ? week!.days[focusIndex] : null
+  const weekSessions = week?.days.flatMap(daySessionList) ?? []
+  const openWorkout = weekSessions.find((session) => session.id === focusSession) ?? null
 
   const generateWeek = async () => {
     setGenerating(true)
@@ -321,30 +484,25 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                 {(week?.days ?? Array.from({ length: 7 }, () => null)).map((day, idx) => {
                   if (!day) return <DayTileSkeleton key={idx} index={idx} />
                   const meters = dayMeters[idx]
-                  const isToday = day.date === today
+                  const isRest = day.rest && !day.workouts.length && !day.strength
                   return (
-                    <button key={day.date} type="button" onClick={() => document.getElementById(`day-${day.date}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                      className={cn("group flex h-28 flex-col items-center justify-between rounded-2xl border px-1 py-2.5 transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/40 hover:bg-accent/[0.06]",
-                        isToday ? "border-accent/50 bg-accent/10 shadow-[0_0_0_1px_rgba(87,229,234,0.15),0_10px_30px_rgba(87,229,234,0.15)]" : "border-white/[0.08] bg-black/20")}
-                      aria-label={`${day.day_name} ${day.date}${meters ? `, ${meters} metres` : ""}`}>
-                      <span className={cn("text-[10px] font-semibold uppercase tracking-wider", isToday ? "text-accent" : "text-slate-500")}>{day.day_name.slice(0, 3)}</span>
-                      <span className="text-base font-bold text-white sm:text-lg">{Number(day.date.slice(8))}</span>
-                      <span className="flex h-8 w-2 items-end overflow-hidden rounded-full bg-white/[0.06] sm:w-3">
-                        <span className="w-full rounded-full bg-gradient-to-t from-sky-400 to-cyan-200 transition-[height] duration-1000 ease-out" style={{ height: `${(meters / maxDayMeters) * 100}%` }} />
-                      </span>
-                      <span className="flex h-3 items-center gap-0.5">
+                    <CalendarDay key={day.date} tone="swim" index={idx} date={day.date} dayName={day.day_name} isToday={day.date === today} past={day.date < today}
+                      level={meters / maxDayMeters} amount={meters ? compactMeters(meters) : null} unit="metres" {...dayProgress(day)}
+                      emptyLabel={day.competitions.length ? "Meet" : day.strength ? "Gym" : day.mobility.length ? "Mobility" : isRest ? "Rest" : "Free"}
+                      onOpen={(event) => { setFocusOrigin(tileCentre(event.currentTarget)); setFocusDate(day.date) }}
+                      icons={<>
                         {day.competitions.length > 0 && <Flag className="h-3 w-3 text-amber-300" />}
                         {day.strength && <Dumbbell className={cn("h-3 w-3", day.strength_completed ? "text-emerald-300" : "text-violet-300")} />}
                         {day.mobility.length > 0 && <Heart className="hidden h-3 w-3 text-emerald-300 sm:block" />}
-                        {day.rest && !day.workouts.length && !day.strength && <Moon className="h-3 w-3 text-slate-400" />}
-                      </span>
-                    </button>
+                        {isRest && <Moon className="h-3 w-3 text-slate-400" />}
+                      </>} />
                   )
                 })}
               </div>
+              {week && <p className="relative mt-3 flex items-center gap-1.5 text-[11px] text-slate-400"><Maximize2 className="h-3 w-3" />Tap a day to open its sessions full screen</p>}
             </section>
           </Reveal>
-          {generating && <GenerationProgress title="Your coaches are building this week" subtitle="This usually takes 20–40 seconds. Every session is checked against your onboarding before it's saved." steps={generationSteps} />}
+          {generating && <GenerationProgress title="Your coach is building this week" subtitle="This usually takes 20–40 seconds. Every session is checked against your onboarding before it's saved." steps={generationSteps} />}
           <p className="px-1 text-xs text-slate-500">Monday-Sunday · Calendar dates use UTC · Totals are planned, not proof of completion. Saved sessions and scheduled workouts are preserved.</p>
 
           {loading && !week && <>
@@ -407,12 +565,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
             <p className="flex items-center gap-2 px-1 text-xs text-slate-500"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />Tick off each swim and strength workout as you finish it. Tap again to untick.</p>
             <TwoColumnFlow weights={week.days.map(dayWeight)} items={week.days.map((day, dayIndex) => {
                 const isToday = day.date === today
-                const future = day.date > today
-                const tickHint = future ? "You can tick this off on the day" : undefined
-                const hasMobility = day.mobility.length > 0
-                const total = day.workouts.length + (day.strength ? 1 : 0) + (hasMobility ? 1 : 0)
-                const done = day.workouts.filter((item) => item.completed).length
-                  + (day.strength && day.strength_completed ? 1 : 0) + (hasMobility && day.mobility_completed ? 1 : 0)
+                const { total, done } = dayProgress(day)
                 return <Reveal key={day.date} index={9 + dayIndex}>
                   <div id={`day-${day.date}`} className="scroll-mt-32">
                     <Tile glow={isToday} className={cn(total > 0 && done === total && "border-emerald-400/30")}>
@@ -434,66 +587,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                           <p className="mt-1 text-sm leading-6 text-slate-400">{day.objective}</p>
                         </div>
                       </div>
-                      <div className="space-y-3">
-                        {day.competitions.map((meet) => <div key={meet.id} className="relative overflow-hidden rounded-2xl border border-amber-400/30 bg-[linear-gradient(135deg,rgba(251,191,36,0.14),rgba(251,191,36,0.03))] p-4 text-sm">
-                          <p className="flex items-center gap-2 font-semibold text-amber-100"><Flag className="h-4 w-4 text-amber-300" />{meet.name}<span className="rounded-full bg-amber-300/20 px-2 py-0.5 text-[10px] font-bold text-amber-200">Priority {meet.priority}</span></p>
-                          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-amber-100/70"><MapPin className="h-3.5 w-3.5" />{meet.location} · {meet.pool_length}m · {meet.events.join(", ")}</p>
-                        </div>)}
-                        {day.rest && !day.workouts.length && !day.strength && <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm text-slate-300"><Moon className="h-5 w-5 text-slate-400" />Rest / recovery day</div>}
-                        {day.workouts.map((item, index) => <CompletionRow key={item.key} checked={item.completed} locked={future} busy={busy} hint={tickHint} label={item.workout.title} onToggle={() => void toggleSwim(item)}>
-                          <Expander className={cn(item.completed && "border-emerald-400/25")} actions={itemMenu({ kind: "swim", key: item.key, date: day.date, title: item.workout.title, completed: item.completed })} header={
-                          <div className="flex items-center gap-3">
-                            <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent")}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Waves className="h-5 w-5" />}</span>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{index === 0 ? "First swim" : index === 1 ? "Second swim" : `Additional swim ${index + 1}`}{item.completed && " · Completed"}</p>
-                              <p className="truncate font-semibold text-white">{item.workout.title}</p>
-                              <ZoneStack className="mt-2 h-1.5" entries={zoneEntries(item.zones)} />
-                            </div>
-                            <span className="shrink-0 text-right"><span className="block text-sm font-bold tabular-nums text-cyan-100">{item.distance_meters.toLocaleString()}</span><span className="text-[10px] text-slate-500">metres</span></span>
-                          </div>}>
-                          <SwimWorkoutDetails workout={item.workout} />{workoutActions(item)}
-                        </Expander></CompletionRow>)}
-                        {day.strength && <CompletionRow checked={day.strength_completed} locked={future} busy={busy} hint={tickHint} label={day.strength.title} onToggle={() => void toggleLegacyStrength(day.date, day.strength_completed)}>
-                          <Expander className="border-violet-400/15" actions={itemMenu({ kind: "strength", date: day.date, title: day.strength.title, completed: day.strength_completed })} header={
-                          <div className="flex items-center gap-3">
-                            <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300")}><Dumbbell className="h-5 w-5" /></span>
-                            <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Strength</p><p className="truncate font-semibold text-white">{day.strength.title}</p></div>
-                            <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400"><Clock className="h-3.5 w-3.5" />{day.strength.estimated_duration_minutes} min</span>
-                          </div>}>
-                          <p className="text-sm leading-6 text-slate-300">{day.strength.objective}</p>
-                          <div className="mt-4 grid gap-3">
-                            {day.strength.exercises.map((exercise, i) => <div key={i} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] p-4 text-sm">
-                              <div className="flex flex-wrap items-center justify-between gap-2"><h5 className="font-semibold text-white">{exercise.exercise}</h5><span className="rounded-full bg-violet-400/15 px-2.5 py-0.5 text-xs font-semibold text-violet-200">{exercise.sets} × {exercise.repetitions}</span></div>
-                              <p className="mt-2 text-slate-400">{exercise.load} · Rest {exercise.rest_seconds}s{exercise.tempo && ` · Tempo ${exercise.tempo}`}</p>
-                              <ol className="mt-3 space-y-1.5 text-slate-400">{exercise.demonstration.map((step, j) => <li key={j} className="flex gap-2.5"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-[10px] font-bold text-slate-300">{j + 1}</span>{step}</li>)}</ol>
-                            </div>)}
-                          </div>
-                          <div className="mt-4 border-t border-white/[0.07] pt-4">
-                            <Button size="sm" variant="outline" disabled={busy || day.strength_completed} onClick={() => openEditor({ kind: "strength", date: day.date, title: day.strength!.title, completed: day.strength_completed })}
-                            title={day.strength_completed ? "Untick it to edit" : undefined} className="rounded-full border-accent/30 bg-accent/10 text-cyan-100 hover:bg-accent/20"><Pencil className="mr-1.5 h-4 w-4" />Edit strength</Button>
-                          </div>
-                        </Expander></CompletionRow>}
-                        {hasMobility && <CompletionRow checked={day.mobility_completed} locked={future} busy={busy} hint={tickHint} label={`${day.day_name} mobility`} onToggle={() => void toggleMobility(day.date, day.mobility_completed)}>
-                          <Expander className={cn("border-emerald-400/15", day.mobility_completed && "border-emerald-400/30")} actions={itemMenu({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed })} header={
-                          <div className="flex items-center gap-3">
-                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300">{day.mobility_completed ? <CheckCircle2 className="h-5 w-5" /> : <Heart className="h-5 w-5" />}</span>
-                            <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mobility{day.mobility_completed && " · Completed"}</p><p className="font-semibold text-white">{day.mobility.length} exercise{day.mobility.length === 1 ? "" : "s"}</p></div>
-                            <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400"><Clock className="h-3.5 w-3.5" />{day.mobility.reduce((sum, item) => sum + item.duration_minutes, 0)} min</span>
-                          </div>}>
-                          <div className="grid gap-3">{day.mobility.map((item, i) => <div key={i} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] p-4 text-sm">
-                            <p className="font-medium text-white">{item.exercise}<span className="ml-2 text-xs font-normal text-slate-500">{item.category} · {item.duration_minutes} min</span></p>
-                            <ul className="mt-2 space-y-1 text-slate-400">{item.instructions.map((instruction, j) => <li key={j} className="flex gap-2"><span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-emerald-300" />{instruction}</li>)}</ul>
-                          </div>)}</div>
-                          <div className="mt-4 border-t border-white/[0.07] pt-4">
-                            <Button size="sm" variant="outline" disabled={busy || day.mobility_completed} onClick={() => openEditor({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed })}
-                            title={day.mobility_completed ? "Untick it to edit" : undefined} className="rounded-full border-accent/30 bg-accent/10 text-cyan-100 hover:bg-accent/20"><Pencil className="mr-1.5 h-4 w-4" />Edit mobility</Button>
-                          </div>
-                        </Expander></CompletionRow>}
-                        {day.recovery.length > 0 && <div className="pt-1">
-                          <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recovery</h5>
-                          <ul className="flex flex-wrap gap-2">{day.recovery.map((item, i) => <li key={i} className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/15 bg-amber-200/[0.06] px-3 py-1 text-xs text-amber-50/80"><Moon className="h-3 w-3 text-amber-200" />{item}</li>)}</ul>
-                        </div>}
-                      </div>
+                      {daySessions(day)}
                     </Tile>
                   </div>
                 </Reveal>
@@ -503,7 +597,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         </TabsContent>
 
         <TabsContent value="library" className="mt-0 space-y-5">
-          <WorkoutCalendar onChanged={onChanged} onGuideEvent={onGuideEvent} />
+          <WorkoutCalendar onChanged={onChanged} onGuideEvent={onGuideEvent} openBuilder={pendingBuilder > 0} onBuilderOpened={() => { setPendingBuilder(0); onBuilderOpened?.() }} />
         </TabsContent>
 
         <TabsContent value="competitions" className="mt-0 space-y-5">
@@ -523,7 +617,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
             <LoadingLane tone="meets" title="Loading your competitions" messages={["Opening your meet calendar", "Pulling race plans", "Checking results against targets"]} />
             <CompetitionSkeleton />
           </>}
-          {meets?.competitions.map((meet, idx) => <Reveal key={meet.id} index={1 + idx}><CompetitionCard meet={meet} busy={busy} resultKey={resultKey} setResultKey={setResultKey} perform={async (operation, message) => { await perform(operation, message) }} /></Reveal>)}
+          {meets?.competitions.map((meet, idx) => <Reveal key={meet.id} index={1 + idx}><CompetitionCard meet={meet} busy={busy} resultKey={resultKey} setResultKey={setResultKey} onDelete={() => setDeletingMeet(meet)} perform={async (operation, message) => { await perform(operation, message) }} /></Reveal>)}
           {!loading && !meets?.competitions.length && <EmptyState icon={Trophy} title="No competitions recorded" body="Add a meet to build race-specific plans and track planned versus actual results." />}
         </TabsContent>
       </Tabs>
@@ -556,13 +650,79 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={!!deletingMeet} onOpenChange={(open) => { if (!open) setDeletingMeet(null) }}>
+        <AlertDialogContent className="border-white/10 bg-[#0d151c]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Delete this competition?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-slate-400">
+                <p>“{deletingMeet?.name}” on {deletingMeet && shortDate(deletingMeet.date, { day: "numeric", month: "long", year: "numeric" })} will be removed from your competitions, calendar and countdown.</p>
+                {!!deletingMeet && (deletingMeet.races.length > 0 || deletingMeet.results.length > 0) && (
+                  <p className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-amber-100">
+                    {(() => {
+                      const results = deletingMeet.results.length
+                      const plans = deletingMeet.races.length > 0 ? "Its race plans" : ""
+                      if (!results) return "Its race plans are deleted too."
+                      const recorded = results === 1 ? "the result you recorded there" : `the ${results} results you recorded there`
+                      return `${plans ? `${plans} and ${recorded} are` : `${recorded.charAt(0).toUpperCase()}${recorded.slice(1)} ${results === 1 ? "is" : "are"}`} deleted too, so ${results === 1 ? "it leaves" : "they leave"} your race history and PBs.`
+                    })()}
+                  </p>
+                )}
+                <p>Swim weeks you&apos;ve already generated keep their sessions. This can&apos;t be undone.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full">Cancel</AlertDialogCancel>
+            <AlertDialogAction className="rounded-full bg-rose-500 text-white hover:bg-rose-400" onClick={() => void removeMeet()}>Delete competition</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <DayFocus tone="swim" eyebrow="Swim week" date={focusDay ? focusDate : null} origin={focusOrigin}
+        days={(week?.days ?? []).map((day) => ({ date: day.date, day_name: day.day_name, ...dayProgress(day) }))}
+        onDate={setFocusDate} onClose={() => setFocusDate(null)}
+        summary={focusDay && <>
+          {focusDay.date === today && <span className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-accent-foreground">Today</span>}
+          {dayMeters[focusIndex] > 0 && <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-3 py-1 text-xs font-semibold tabular-nums text-cyan-100"><Waves className="h-3.5 w-3.5" />{dayMeters[focusIndex].toLocaleString()} m</span>}
+          {(() => {
+            const { total, done } = dayProgress(focusDay)
+            if (!total) return null
+            return <span key={`${done}/${total}`} className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold tabular-nums", done > 0 && "chip-pop",
+              done === total ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-white/[0.04] text-slate-300")}>
+              {done === total ? <><Trophy className="h-3.5 w-3.5 text-amber-200" />Day complete</> : <><CheckCircle2 className="h-3.5 w-3.5" />{done}/{total} done</>}
+            </span>
+          })()}
+        </>}>
+        {focusDay && <>
+          {focusDay.objective && <p className="mb-6 text-[15px] leading-7 text-slate-300">{focusDay.objective}</p>}
+          {daySessions(focusDay, true)}
+          {!focusDay.competitions.length && !focusDay.workouts.length && !focusDay.strength && !focusDay.mobility.length && !focusDay.rest && !focusDay.recovery.length &&
+            <EmptyState icon={CalendarDays} title="Nothing planned for this day" body={week?.generated ? "This day has no sessions in your swim week." : "Generate your swim week to fill this day with sessions."} />}
+        </>}
+      </DayFocus>
+
+      <WorkoutFocus tone="swim" id={openWorkout ? focusSession : null} origin={focusOrigin}
+        sessions={weekSessions.map((session) => ({ id: session.id, title: session.title, eyebrow: `${shortDate(session.date, { weekday: "short", day: "numeric", month: "short" })} · ${session.label}` }))}
+        onSelect={setFocusSession} onClose={() => setFocusSession(null)} summary={openWorkout?.chips}>
+        {openWorkout && <CompletionRow checked={openWorkout.completed} locked={openWorkout.date > today} busy={busy} hint={tickHint(openWorkout.date)} label={openWorkout.title} onToggle={openWorkout.onToggle}>
+          <div className={cn("rounded-2xl border border-white/10 bg-white/[0.03] p-5 sm:p-6", openWorkout.className)}>
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{openWorkout.completed ? "Ticked off" : openWorkout.date > today ? "Tick it off on the day" : "Tick it off when you finish"}</p>
+              {openWorkout.menu}
+            </div>
+            {openWorkout.body}
+          </div>
+        </CompletionRow>}
+      </WorkoutFocus>
     </div>
   )
 }
 
 const generationSteps = [
   "Reading your onboarding profile and goals",
-  "Applying your coaches' methods",
+  "Applying your coach's methods",
   "Laying out the week around your availability",
   "Writing each swim session",
   "Building strength work for your equipment",
@@ -575,9 +735,10 @@ const priorityTones: Record<string, string> = {
   C: "border-white/15 bg-white/[0.05] text-slate-300",
 }
 
-function CompetitionCard({ meet, busy, resultKey, setResultKey, perform }: {
+function CompetitionCard({ meet, busy, resultKey, setResultKey, onDelete, perform }: {
   meet: Competition; busy: boolean; resultKey: string | null
   setResultKey: (key: string | null) => void
+  onDelete: () => void
   perform: (operation: () => Promise<void>, message: string) => Promise<void>
 }) {
   const past = meet.date < new Date().toISOString().slice(0, 10)
@@ -599,11 +760,15 @@ function CompetitionCard({ meet, busy, resultKey, setResultKey, perform }: {
         </div>
       </div>
       {!past && <div className="text-right"><p className="text-3xl font-bold tabular-nums text-white">{days <= 0 ? "Today" : days}</p>{days > 0 && <p className="text-xs text-slate-400">day{days === 1 ? "" : "s"} to go</p>}</div>}
+      <button type="button" onClick={onDelete} disabled={busy} aria-label={`Delete ${meet.name}`} title="Delete competition"
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.03] text-slate-400 transition-colors hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-200 disabled:pointer-events-none disabled:opacity-40">
+        <Trash2 className="h-4 w-4" />
+      </button>
     </div>
     <div className="relative p-5 sm:p-6">
       {!meet.races.length && <Button size="sm" className="mb-5 rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950" disabled={busy} onClick={() => perform(async () => {
         await trainingRequest(`/competitions/${meet.id}/plan`, competitionSchema, { method: "POST" })
-      }, "Race plans saved from your onboarding data and your coaches' methods.")}><Sparkles className="mr-1.5 h-4 w-4" />Generate Individual Race Plans</Button>}
+      }, "Race plans saved from your onboarding data and your coach's methods.")}><Sparkles className="mr-1.5 h-4 w-4" />Generate Individual Race Plans</Button>}
       <TwoColumnFlow gap={4} weights={meet.events.map((event) => (meet.races.some((item) => item.event === event) ? 3 : 1) + (meet.results.some((item) => item.result.event === event) ? 2 : 0))}
         items={meet.events.map((event) => {
           const race = meet.races.find((item) => item.event === event)

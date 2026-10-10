@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react"
 import Link from "next/link"
-import { ArrowLeft, CalendarDays, Check, FileText, Loader2, Mail, Repeat, XCircle } from "lucide-react"
+import { ArrowLeft, BookOpen, CalendarDays, Check, FileText, Loader2, Repeat, UserRoundCheck, XCircle } from "lucide-react"
 import { SiteNavbar } from "@/components/site-navbar"
 import { PlanCover } from "@/components/plan-store/plan-cover"
-import { ACCENT_COLORS, formatPrice, verifyPlanPurchase, type PlanPurchase } from "@/lib/plan-store"
+import { ACCENT_COLORS, formatPrice, readerHref, verifyPlanPurchase, type PlanPurchase } from "@/lib/plan-store"
 
 const CONFETTI_COLORS = ["#67e8f9", "#a78bfa", "#34d399", "#fbbf24", "#fb7185", "#e0f2fe"]
 
@@ -69,7 +69,7 @@ export default function PlanPurchaseSuccessPage() {
         )}
 
         {(state.status === "paid" || state.status === "pending") && (() => {
-          const { plan, email, amount_total } = state.purchase
+          const { plan, amount_total, account } = state.purchase
           const color = ACCENT_COLORS[plan.accent]
           const paid = state.status === "paid"
           return (
@@ -108,17 +108,25 @@ export default function PlanPurchaseSuccessPage() {
                   </div>
                   {paid && (
                     <div className="flex items-start gap-3 border-t border-white/[0.06] bg-cyan-300/[0.04] px-5 py-4">
-                      <Mail className="mt-0.5 h-4 w-4 shrink-0 text-cyan-200" />
-                      <p className="text-sm leading-6 text-slate-300">
-                        {email ? <>We&apos;ll send your PDF to <span className="font-semibold text-white">{email}</span>.</> : <>We&apos;ll send your PDF to the email you used at checkout.</>}
-                      </p>
+                      <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-cyan-200" />
+                      <p className="text-sm leading-6 text-slate-300">Ready to read now, as an interactive book: turn the pages, search any set and tick off sessions as you train.</p>
+                    </div>
+                  )}
+                  {paid && account && (
+                    <div className="flex items-start gap-3 border-t border-white/[0.06] px-5 py-4">
+                      <UserRoundCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                      <p className="text-sm leading-6 text-slate-300">Saved to your SwimGPT account, with every plan you buy.</p>
                     </div>
                   )}
                 </div>
 
                 <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row lg:justify-start">
-                  <Link href="/training-plans" className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.04] px-5 text-sm font-medium text-white transition-colors hover:bg-white/[0.09]"><ArrowLeft className="h-4 w-4" />More plans</Link>
-                  <Link href="/dashboard" className="inline-flex h-11 items-center justify-center rounded-full bg-accent px-6 text-sm font-semibold text-accent-foreground shadow-[0_12px_30px_rgba(87,229,234,0.3)] transition-transform hover:-translate-y-0.5">Go to my dashboard</Link>
+                  {paid && account && (
+                    <Link href={readerHref(plan.id)} className="store-cta inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[linear-gradient(135deg,#6ee7b7,#34d399)] px-7 text-[15px] font-semibold text-emerald-950 shadow-[0_14px_34px_rgba(52,211,153,0.35)] transition-transform hover:-translate-y-0.5">
+                      <BookOpen className="h-4 w-4" />Open your plan
+                    </Link>
+                  )}
+                  <Link href="/training-plans" className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.04] px-5 text-sm font-medium text-white transition-colors hover:bg-white/[0.09]"><ArrowLeft className="h-4 w-4" />More plans</Link>
                 </div>
               </div>
             </div>

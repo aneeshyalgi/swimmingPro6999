@@ -9,8 +9,8 @@ import { cn } from "@/lib/utils"
 
 /*
  * Landing-page coach matcher. A compact mirror of the backend coach catalog and its ranking rules
- * (backend/app/context.py select_coaches): same main events, swimmer-type fit and weekly session orders,
- * so the team a visitor sees here is the team onboarding would recommend.
+ * (backend/app/context.py recommended_coach): same main events, swimmer-type fit and weekly session orders,
+ * so the coach a visitor sees here is the coach onboarding would recommend. Athletes train with one coach.
  */
 
 type Coach = {
@@ -82,7 +82,7 @@ function swimmerType(events: string[]) {
   return "sprinter"
 }
 
-function rankTeam(events: string[]) {
+function rankCoaches(events: string[]) {
   const type = swimmerType(events)
   const fit = Object.fromEntries(COACHES.map((coach) => {
     const matched = events.filter((event) => coach.main.includes(event))
@@ -90,23 +90,15 @@ function rankTeam(events: string[]) {
     const affinity = coach.types.includes(type) ? 2 : coach.adjacent.includes(type) ? 1 : 0
     return [coach.key, { matched, supporting, affinity, specificity: matched.length / coach.main.length }]
   }))
-  const lead = (key: string) => [fit[key].matched.length, fit[key].affinity, fit[key].supporting.length, fit[key].specificity, -ORDER.indexOf(key)]
+  const rank = (key: string) => [fit[key].matched.length, fit[key].affinity, fit[key].supporting.length, fit[key].specificity, -ORDER.indexOf(key)]
   const compare = (a: number[], b: number[]) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return b[i] - a[i]; return 0 }
-  const pairRank = ([a, b]: string[]) => {
-    const covered = events.filter((event) => COACHES.find((c) => c.key === a)!.main.includes(event) || COACHES.find((c) => c.key === b)!.main.includes(event)).length
-    return [covered, fit[a].matched.length + fit[b].matched.length, fit[a].affinity + fit[b].affinity, fit[a].supporting.length + fit[b].supporting.length,
-      fit[a].specificity + fit[b].specificity, -(ORDER.indexOf(a) + ORDER.indexOf(b))]
-  }
-  const pairs = ORDER.flatMap((a, i) => ORDER.slice(i + 1).map((b) => [a, b]))
-  const best = pairs.sort((x, y) => compare(pairRank(x), pairRank(y)))[0]
-  const team = [...best].sort((a, b) => compare(lead(a), lead(b)))
-  const rest = ORDER.filter((key) => !team.includes(key)).sort((a, b) => compare(lead(a), lead(b)))
+  const order = [...ORDER].sort((a, b) => compare(rank(a), rank(b)))
   const percent = (key: string) => {
     if (!events.length) return 0
     const f = fit[key]
     return Math.max(6, Math.min(99, Math.round(((f.matched.length + 0.5 * f.supporting.length) / events.length) * 72 + f.affinity * 13.5)))
   }
-  return { order: [...team, ...rest], fit, percent, type }
+  return { order, fit, percent, type }
 }
 
 function useCount(target: number, ms = 700) {
@@ -138,8 +130,8 @@ export function CoachShowcase() {
   const { ref: headRef, inView: headIn } = useInView<HTMLDivElement>(0.4)
   const { ref: stageView, inView } = useInView<HTMLDivElement>(0.2)
   const { ref: proofRef, inView: proofIn } = useInView<HTMLDivElement>(0.3)
-  const ranking = useMemo(() => rankTeam(events), [events])
-  const [head, second] = ranking.order.map((key) => COACHES.find((coach) => coach.key === key)!)
+  const ranking = useMemo(() => rankCoaches(events), [events])
+  const match = COACHES.find((coach) => coach.key === ranking.order[0])!
 
   // A ghost cursor demos the matcher until the visitor takes over.
   useEffect(() => {
@@ -182,11 +174,9 @@ export function CoachShowcase() {
     event.currentTarget.style.setProperty("--my", `${event.clientY - rect.top}px`)
   }
 
-  // Head coach's week with the second coach's sessions on days 2 and 5 (as the swim planner blends two programs).
-  const week = head.week.map((session, index) => (index === 1 || index === 4)
-    ? { coach: second, session: second.week[index === 1 ? 0 : 1] }
-    : { coach: head, session })
-  const weekKey = `${head.key}-${second.key}`
+  // The matched coach's own weekly order (as the swim planner uses it).
+  const week = match.week.map((session) => ({ coach: match, session }))
+  const weekKey = match.key
 
   return (
     <section id="coaches" className="relative overflow-hidden py-28">
@@ -199,12 +189,12 @@ export function CoachShowcase() {
         {/* Heading */}
         <div ref={headRef} className={cn("mx-auto max-w-3xl text-center", headIn && "cs-in")}>
           <div className="cs-reveal mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-400/25 bg-cyan-400/5 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-cyan-300">
-            <Crown className="h-3.5 w-3.5" />Your coaching team
+            <Crown className="h-3.5 w-3.5" />Your coach
           </div>
           <h2 className="cs-reveal text-balance text-4xl font-bold tracking-tight text-white [--d:80ms] md:text-6xl">
             Five elite coaching systems.{" "}
             <span className="cs-shine relative inline-block">
-              Two are yours.
+              One is yours.
               <svg aria-hidden viewBox="0 0 300 20" preserveAspectRatio="none" className="cs-underline absolute -bottom-2 left-0 h-3 w-full">
                 <path d="M4 14 C 70 4, 150 4, 296 10" fill="none" stroke="url(#cs-ul)" strokeWidth="5" strokeLinecap="round" pathLength={1} />
                 <defs><linearGradient id="cs-ul" x1="0" x2="1"><stop offset="0" stopColor="#67e8f9" /><stop offset="1" stopColor="#a78bfa" /></linearGradient></defs>
@@ -213,7 +203,7 @@ export function CoachShowcase() {
           </h2>
           <p className="cs-reveal mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-400 [--d:160ms]">
             Not an AI making sets up. Every session comes from a real elite program, written set by set, then fitted to your PBs, your pool and your week.{" "}
-            <span className="text-slate-200">Pick your events and watch your team assemble.</span>
+            <span className="text-slate-200">Pick your events and watch your coach get matched.</span>
           </p>
         </div>
 
@@ -266,9 +256,9 @@ export function CoachShowcase() {
 
             {/* 2 · team */}
             <div className="cs-reveal min-w-0 [--d:300ms]">
-              <StepLabel n={2} text="Your coaching team" />
+              <StepLabel n={2} text="Your coach" />
               <div className="relative mt-4 h-[436px]">
-                <div aria-hidden className="cs-team-frame absolute inset-x-0 top-0 h-[172px] rounded-3xl">
+                <div aria-hidden className="cs-team-frame absolute inset-x-0 top-0 h-[86px] rounded-3xl">
                   <span className="absolute -top-2.5 left-5 rounded-full bg-[#0a141b] px-2 text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-300">Matched to you</span>
                 </div>
                 {COACHES.map((coach) => {
@@ -282,10 +272,9 @@ export function CoachShowcase() {
           {/* 3 · week */}
           <div className="cs-reveal relative mt-8 [--d:400ms]">
             <div className="flex flex-wrap items-end justify-between gap-3">
-              <StepLabel n={3} text="Your week, from their real programs" />
-              <p className="flex items-center gap-3 text-xs text-slate-400">
-                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: head.tone }} />{head.name}</span>
-                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: second.tone }} />{second.name}</span>
+              <StepLabel n={3} text="Your week, from their real program" />
+              <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                <span className="h-2 w-2 rounded-full" style={{ background: match.tone }} />{match.name}
               </p>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-7">
@@ -313,12 +302,12 @@ export function CoachShowcase() {
             </div>
             <div className="mt-7 flex flex-col items-center justify-between gap-4 border-t border-white/[0.07] pt-6 sm:flex-row">
               <p className="text-center text-sm text-slate-400 sm:text-left">
-                Every set is paced from <span className="text-white">your</span> PBs and fitted to <span className="text-white">your</span> session length. Pick any coaches you like during setup.
+                Every set is paced from <span className="text-white">your</span> PBs and fitted to <span className="text-white">your</span> session length. Choose any one of the five coaches during setup.
               </p>
               <Link href="/auth?mode=signup"
                 className="cs-cta group relative inline-flex shrink-0 items-center overflow-hidden rounded-full px-6 py-3 text-sm font-semibold text-slate-950">
                 <span aria-hidden className="cs-cta-sheen" />
-                <span className="relative flex items-center">Build my coaching team<ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" /></span>
+                <span className="relative flex items-center">Choose my coach<ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" /></span>
               </Link>
             </div>
           </div>
@@ -376,11 +365,11 @@ function StepLabel({ n, text }: { n: number; text: string }) {
 
 function CoachRow({ coach, rank, percent, matched }: { coach: Coach; rank: number; percent: number; matched: string[] }) {
   const shown = useCount(percent)
-  const onTeam = rank < 2
+  const onTeam = rank === 0
   return (
     <div className={cn("cs-row absolute inset-x-0 top-0 flex h-[76px] items-center gap-2.5 rounded-2xl border px-3 sm:gap-3.5 sm:px-4",
       onTeam ? "border-white/15 bg-white/[0.06]" : "border-white/[0.05] bg-white/[0.015] opacity-55")}
-      style={{ transform: `translateY(${rank * 86 + (rank >= 2 ? 6 : 0) + 4}px) scale(${onTeam ? 1 : 0.97})`, "--glow": coach.glow, zIndex: 5 - rank } as CSSProperties}>
+      style={{ transform: `translateY(${rank * 86 + (rank >= 1 ? 6 : 0) + 4}px) scale(${onTeam ? 1 : 0.97})`, "--glow": coach.glow, zIndex: 5 - rank } as CSSProperties}>
       {onTeam && <span aria-hidden className="cs-row-glow absolute inset-0 rounded-2xl" />}
       <CoachAvatar name={coach.name} className={cn("relative h-10 w-10 transition-transform duration-500 sm:h-12 sm:w-12", onTeam && "scale-105")} />
       <div className="relative min-w-0 flex-1">
@@ -388,7 +377,7 @@ function CoachRow({ coach, rank, percent, matched }: { coach: Coach; rank: numbe
           <p className="truncate font-semibold text-white">{coach.name}</p>
           {onTeam && (
             <span key={`${coach.key}-${rank}`} className="cs-pop shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-950" style={{ background: coach.tone }}>
-              {rank === 0 ? <>Head<span className="hidden sm:inline"> coach</span></> : "Second"}
+              <span className="sm:hidden">Match</span><span className="hidden sm:inline">Your coach</span>
             </span>
           )}
         </div>

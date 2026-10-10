@@ -1,9 +1,6 @@
-"""Which coach session each swim of the week is: the coaches' own weekly order and session library, chosen in code.
+"""Which coach session each swim of the week is: the coach's own weekly order and session library, chosen in code.
 
-The athlete's two coaches share the week:
-  * the lead coach's weekly order for the athlete's number of swims is the backbone;
-  * the second coach takes evenly spaced days: in proportion to the athlete's events only they cover, otherwise one
-    day in three (their methods complement the lead coach), using the opening sessions of their own weekly order;
+  * the athlete's coach's weekly order for their number of swims sets the week;
   * each session type rotates through that coach's numbered sessions from week to week;
   * within two weeks of an A or B meet the coach's written taper sessions are used where they exist.
 The AI then adapts each chosen session to the athlete (main stroke, pace, pool, time) without changing what it trains.
@@ -14,9 +11,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from app.coach_programs import CoachProgram, render_session, session_label, session_volume, swim_order
+from app.coach_programs import CoachProgram, program_for, render_session, session_label, session_volume, swim_order
 from app.coach_sessions import Session
-from app.context import resolve_coaches
 
 TAPER_WINDOW_DAYS = 13          # taper sessions for meets in this week or the next
 TAPER_PRIORITIES = ("A", "B")
@@ -47,34 +43,17 @@ def taper_meet(competitions: list[dict[str, Any]], week_start: date) -> dict[str
     return min(meets, key=lambda meet: meet["date"]) if meets else None
 
 
-def second_coach_days(events: list[str], lead: CoachProgram, second: CoachProgram | None, swims: int) -> int:
-    if second is None or swims < 3:
-        return 0
-    only_second = [event for event in events if event in second.main_events and event not in lead.main_events]
-    if only_second:
-        share = round(swims * len(only_second) / max(1, len(events)))
-        return min(max(1, share), swims // 2)
-    return swims // 3
-
-
-def assign_week(coach_names: list[str], events: list[str], week_start: date, swims: int, taper: bool = False) -> list[SwimAssignment]:
-    """The coach session for each of the week's swims, in order."""
-    programs = resolve_coaches(coach_names)
-    if not programs or swims <= 0:
+def assign_week(coach_name: str, week_start: date, swims: int, taper: bool = False) -> list[SwimAssignment]:
+    """The coach session for each of the week's swims, in the coach's weekly order."""
+    coach = program_for(coach_name)
+    if coach is None or swims <= 0:
         return []
-    lead, second = programs[0], programs[1] if len(programs) > 1 else None
-    plan = [(lead, kind) for kind in swim_order(lead, swims)]
-    extra = second_coach_days(events, lead, second, swims)
-    if extra and second:
-        positions = [int((index + 0.5) * swims / extra) for index in range(extra)]
-        for position, kind in zip(positions, swim_order(second, extra)):
-            plan[position] = (second, kind)
     week_number = week_start.isocalendar()[1]
-    seen: dict[tuple[str, str], int] = {}
+    seen: dict[str, int] = {}
     assignments = []
-    for coach, kind in plan:
-        occurrence = seen.get((coach.key, kind), 0)
-        seen[(coach.key, kind)] = occurrence + 1
+    for kind in swim_order(coach, swims):
+        occurrence = seen.get(kind, 0)
+        seen[kind] = occurrence + 1
         pool = coach.sessions_of(kind, taper)
         use_taper = taper and any(item.type == kind for item in coach.taper)
         session = pool[(week_number + occurrence) % len(pool)]

@@ -18,7 +18,7 @@ ADVANCED = {variant.name for family in FAMILIES.values() for variant in family.v
 
 def athlete(**overrides) -> Athlete:
     values = dict(age=20, gender="male", weight_kg=75, events=["100m Freestyle"], swimmer_type="sprinter",
-                  coaches=["Coach Timothy", "Coach Brad"], facility="Full Gym Access", gym_sessions=3, swim_sessions=6,
+                  coach="Coach Timothy", facility="Full Gym Access", gym_sessions=3, swim_sessions=6,
                   years_swimming=4, started=MONDAY)
     values.update(overrides)
     return Athlete(**values)
@@ -73,7 +73,7 @@ class SystemEncodingTests(unittest.TestCase):
 class GeneratedWeekTests(unittest.TestCase):
     def test_every_combination_is_valid_and_uses_only_available_equipment(self):
         for coach, facility, age, completed in product(COACH_NAMES.values(), FACILITIES, (12, 20), (0, 12, 40)):
-            subject = athlete(coaches=[coach], facility=facility, age=age, completed_sessions=completed)
+            subject = athlete(coach=coach, facility=facility, age=age, completed_sessions=completed)
             names = {variant.name: variant for family in FAMILIES.values() for variant in family.variants}
             for session in plan_week(subject, MONDAY, WEEK, MONDAY):
                 with self.subTest(coach=coach, facility=facility, age=age, completed=completed, day=session.day):
@@ -99,7 +99,7 @@ class GeneratedWeekTests(unittest.TestCase):
         self.assertTrue(all(session.day >= thursday for session in sessions))
 
     def test_distance_program_keeps_power_with_two_sessions(self):
-        sessions = strength(plan_week(athlete(coaches=["Coach Tony"], gym_sessions=2), MONDAY, WEEK, MONDAY))
+        sessions = strength(plan_week(athlete(coach="Coach Tony", gym_sessions=2), MONDAY, WEEK, MONDAY))
         self.assertEqual([session.meta["session"] for session in sessions], ["tony-1", "tony-3"])
 
     def test_tony_skips_rotation_volume_unless_restricted(self):
@@ -107,13 +107,13 @@ class GeneratedWeekTests(unittest.TestCase):
             sessions = plan_week(subject, MONDAY, WEEK, MONDAY)
             return any("T-spine rotation" in text for session in sessions
                        for text in [*session.workout["warm_up"], *(item["exercise"] for item in session.workout["exercises"])])
-        self.assertFalse(rotation_work(athlete(coaches=["Coach Tony"], events=["1500m Freestyle"])))
-        self.assertTrue(rotation_work(athlete(coaches=["Coach Tony"], events=["1500m Freestyle"],
+        self.assertFalse(rotation_work(athlete(coach="Coach Tony", events=["1500m Freestyle"])))
+        self.assertTrue(rotation_work(athlete(coach="Coach Tony", events=["1500m Freestyle"],
                                               assessment={"mobility": {"t_spine_rotation": "restricted"}})))
-        self.assertTrue(rotation_work(athlete(coaches=["Coach Pete"])))
+        self.assertTrue(rotation_work(athlete(coach="Coach Pete")))
 
     def test_stroke_demands_shape_mobility(self):
-        session = strength(plan_week(athlete(coaches=["Coach Pete"], events=["200m Breaststroke"]), MONDAY, WEEK, MONDAY))[0]
+        session = strength(plan_week(athlete(coach="Coach Pete", events=["200m Breaststroke"]), MONDAY, WEEK, MONDAY))[0]
         warm_up = " ".join(session.workout["warm_up"])
         self.assertIn("Hip IR/ER", warm_up)
         self.assertIn("Ankle", warm_up)
@@ -129,7 +129,7 @@ class PeriodisationTests(unittest.TestCase):
         self.assertEqual(training_block(athlete(competitions=self.meet(5, "C")), MONDAY).key, "W1-2")
 
     def test_race_week_is_a_microdose_away_from_the_meet(self):
-        sessions = plan_week(athlete(coaches=["Coach Pete"], competitions=self.meet(5)), MONDAY, WEEK, MONDAY)
+        sessions = plan_week(athlete(coach="Coach Pete", competitions=self.meet(5)), MONDAY, WEEK, MONDAY)
         hard = strength(sessions)
         self.assertLessEqual(len(hard), 2)
         self.assertTrue(all(session.meta["session"] == "pete-3" for session in hard))
@@ -215,7 +215,7 @@ class DocumentFidelityTests(unittest.TestCase):
 
     def test_t_spine_rotation_priority_is_timothy_pete_robert_tony(self):
         def volume(coach):
-            week = plan_week(athlete(coaches=[coach], events=["100m Freestyle"]), MONDAY, WEEK, MONDAY)
+            week = plan_week(athlete(coach=coach, events=["100m Freestyle"]), MONDAY, WEEK, MONDAY)
             return sum(1 for session in week for line in [*session.workout["warm_up"], *session.workout["cool_down"],
                        *(item["exercise"] for item in session.workout["exercises"])] if "T-spine rotation" in line)
         counts = [volume(name) for name in ("Coach Timothy", "Coach Pete", "Coach Robert", "Coach Tony")]
@@ -240,6 +240,19 @@ class GymWeekSavingTests(unittest.TestCase):
         GymWorkout.model_validate(details["workout"])
         self.assertEqual(details["source_files"], ["SwimGPT Strength & Mobility System"])
         self.assertEqual(details["strength_system"]["coach"], "Coach Timothy")
+
+
+class CoachWithoutGymProgramTests(unittest.TestCase):
+    def test_brads_athletes_follow_swimgpts_system_without_another_coachs_name(self):
+        week = plan_week(athlete(coach="Coach Brad"), MONDAY, WEEK, MONDAY)
+        session = strength(week)[0]
+        self.assertEqual(session.meta["coach"], "Coach Timothy")   # the sprint system, for a sprinter with a gym
+        self.assertEqual(session.brief["coach"], "Coach Brad")     # the AI writer speaks as the athlete's own coach
+        self.assertTrue(session.workout["rationale"].startswith("Coach Brad has no written gym program"))
+        for item in week:
+            text = f"{item.workout['rationale']} {item.workout['coaching_notes']}"
+            for other in ("Coach Timothy", "Coach Pete", "Coach Robert", "Coach Tony"):
+                self.assertNotIn(other, text)
 
 
 if __name__ == "__main__":

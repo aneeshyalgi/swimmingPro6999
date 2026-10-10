@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd --create-home --uid 10001 appuser
 COPY --chown=appuser:appuser app/*.py ./app/
+# The premade training plans' books (scripts/build_plan_books.py), served only to their buyers.
+COPY --chown=appuser:appuser plan_books/ ./plan_books/
 
 USER appuser
 EXPOSE 8000

@@ -544,7 +544,7 @@ function PlayerShell({ src, title, origin, leaving, onClose }: {
               <div className="dp-end absolute inset-0 flex flex-col items-center justify-center bg-slate-950/60 px-6 text-center backdrop-blur-md">
                 <p className="dp-end-item text-[11px] font-medium uppercase tracking-[0.24em] text-cyan-300" style={{ "--i": 0 } as CSSProperties}>That&apos;s SwimGPT</p>
                 <h3 className="dp-end-item mt-3 text-balance text-2xl font-bold tracking-tight text-white sm:text-4xl" style={{ "--i": 1 } as CSSProperties}>
-                  Ready to meet your coaching team?
+                  Ready to meet your coach?
                 </h3>
                 <div className="dp-end-item mt-7 flex flex-col gap-3 sm:flex-row" style={{ "--i": 2 } as CSSProperties}>
                   <Link

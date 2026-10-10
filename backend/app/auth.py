@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from gotrue.errors import AuthApiError
 
 from app.db import get_supabase_client
+from app.payments import is_paid
 from app.swim_times import with_display_times
 
 
@@ -41,8 +42,14 @@ def latest_profile_row(auth_user_id: str) -> dict[str, Any] | None:
 
 
 def get_authenticated_profile(authorization: str | None) -> dict[str, Any]:
+    """The signed-in athlete's profile, for the dashboard and every feature in it: only a paid profile gets one."""
     user = get_authenticated_user(authorization)
     row = latest_profile_row(user.id)
     if row is None:
         raise HTTPException(status_code=404, detail="Complete onboarding to create your athlete profile.")
-    return with_display_times(row)
+    if not is_paid(row):
+        raise HTTPException(status_code=402, detail="Activate your coaching plan to open your dashboard.")
+    profile = with_display_times(row)
+    # An athlete has one coach. Profiles saved when athletes had two keep only their head coach.
+    profile["recommended_coaches"] = (row.get("recommended_coaches") or [])[:1]
+    return profile

@@ -1,11 +1,13 @@
 "use client"
 
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react"
-import { Check, CreditCard, Download, Eye, MousePointerClick, ShieldCheck, Sparkles } from "lucide-react"
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react"
+import Link from "next/link"
+import { ArrowRight, BookOpen, Check, CreditCard, Eye, MousePointerClick, ShieldCheck, Sparkles } from "lucide-react"
 import { PlanCover, Tilt } from "@/components/plan-store/plan-cover"
 import { BuyButton, sessionTone } from "@/components/plan-store/plan-preview"
 import { useInView } from "@/components/landing/use-in-view"
-import { ACCENT_COLORS, formatPrice, type StorePlan } from "@/lib/plan-store"
+import { readProgress, type ReadingProgress } from "@/lib/plan-book"
+import { ACCENT_COLORS, formatPrice, prefetchPlanPreview, readerHref, type StorePlan } from "@/lib/plan-store"
 import { cn } from "@/lib/utils"
 
 const LIQUID_EASE = "cubic-bezier(0.76, 0, 0.24, 1)"
@@ -73,7 +75,7 @@ export function HeroStack({ plans, onPick }: { plans: StorePlan[]; onPick: (plan
             <div className="store-fan-item" style={{ "--fx": slot.fx, "--fy": slot.fy, "--fr": slot.fr } as CSSProperties}>
               <div className="store-bob" style={{ "--bob-delay": slot.bob } as CSSProperties}>
                 <Tilt max={14}>
-                  <button type="button" onClick={() => onPick(plan)} aria-label={`Preview ${plan.title}`} className="block w-full rounded-[14px] transition-shadow hover:shadow-[0_0_0_2px_rgba(87,229,234,0.6)]">
+                  <button type="button" onClick={() => onPick(plan)} onPointerEnter={() => prefetchPlanPreview(plan.id)} aria-label={`Preview ${plan.title}`} className="block w-full rounded-[14px] transition-shadow hover:shadow-[0_0_0_2px_rgba(87,229,234,0.6)]">
                     <PlanCover plan={plan} size="sm" className="store-glint" />
                   </button>
                 </Tilt>
@@ -87,19 +89,21 @@ export function HeroStack({ plans, onPick }: { plans: StorePlan[]; onPick: (plan
         <span className="text-xs leading-4"><span className="block font-semibold text-white">Secure checkout</span><span className="text-slate-400">Powered by Stripe</span></span>
       </div>
       <div className="store-deal absolute right-0 top-8 z-10 hidden items-center gap-2 rounded-2xl border border-white/10 bg-[#0b141c]/85 px-3 py-2 shadow-xl backdrop-blur sm:flex" style={{ "--deal-delay": "1050ms" } as CSSProperties}>
-        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-400/15"><Download className="h-4 w-4 text-cyan-200" /></span>
-        <span className="text-xs leading-4"><span className="block font-semibold text-white">Print-ready PDF</span><span className="text-slate-400">Phone, tablet or pool deck</span></span>
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-400/15"><BookOpen className="h-4 w-4 text-cyan-200" /></span>
+        <span className="text-xs leading-4"><span className="block font-semibold text-white">Interactive book</span><span className="text-slate-400">Any phone, tablet or laptop</span></span>
       </div>
     </div>
   )
 }
 
 /** The bestseller, spotlit: big cover, its sample week drawn as an intensity chart, and the buy button. */
-export function FeaturedPlan({ plan, buying, onPreview, onBuy }: { plan: StorePlan; buying: boolean; onPreview: () => void; onBuy: () => void }) {
+export function FeaturedPlan({ plan, buying, owned, onPreview, onBuy }: {
+  plan: StorePlan; buying: boolean; owned?: boolean; onPreview: () => void; onBuy: () => void
+}) {
   const color = ACCENT_COLORS[plan.accent]
   const { ref, inView } = useInView<HTMLDivElement>(0.2)
   return (
-    <div ref={ref} className="store-border rounded-[34px] p-px" style={{ "--accent-rgb": color.rgb } as CSSProperties}>
+    <div ref={ref} onPointerEnter={() => prefetchPlanPreview(plan.id)} className="store-border rounded-[34px] p-px" style={{ "--accent-rgb": color.rgb } as CSSProperties}>
       <div className="relative overflow-hidden rounded-[33px] bg-[linear-gradient(135deg,#0b1720,#070c12_55%,#0d1220)] p-6 sm:p-10">
         <div className="pointer-events-none absolute -left-24 top-1/2 h-96 w-96 -translate-y-1/2 rounded-full blur-[100px]" style={{ background: `rgba(${color.rgb},0.22)` }} />
         <div className="relative grid items-center gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
@@ -142,11 +146,13 @@ export function FeaturedPlan({ plan, buying, onPreview, onBuy }: { plan: StorePl
               ))}
             </ul>
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <BuyButton plan={plan} buying={buying} onBuy={onBuy} className="w-full sm:w-auto" />
+              <BuyButton plan={plan} buying={buying} owned={owned} onBuy={onBuy} className="w-full sm:w-auto" />
               <button type="button" onClick={onPreview} className="inline-flex h-12 w-full items-center justify-center gap-2 sm:w-auto rounded-full border border-white/12 bg-white/[0.04] px-6 text-[15px] font-medium text-white transition-colors hover:bg-white/[0.09]">
                 <Eye className="h-4 w-4" />Look inside
               </button>
-              <span className="text-sm text-slate-500">{formatPrice(plan.price, plan.currency)} once · no subscription</span>
+              {owned
+                ? <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-300"><Check className="h-4 w-4" strokeWidth={3} />Purchased · in your library</span>
+                : <span className="text-sm text-slate-500">{formatPrice(plan.price, plan.currency)} once · no subscription</span>}
             </div>
           </div>
         </div>
@@ -159,8 +165,8 @@ export function FeaturedPlan({ plan, buying, onPreview, onBuy }: { plan: StorePl
 export function HowItWorks() {
   const steps = [
     { icon: MousePointerClick, title: "Pick your plan", body: "Look inside any plan first: the cover, a sample week and what's included." },
-    { icon: CreditCard, title: "Pay once with Stripe", body: "Checkout runs on Stripe, so your card details never touch SwimGPT. No subscription." },
-    { icon: Download, title: "Train from the PDF", body: "Every session written out with send-offs. Read it on your phone or print it for the pool deck." },
+    { icon: CreditCard, title: "Pay once with Stripe", body: "Log in with a free SwimGPT account, then pay on Stripe: your card details never touch SwimGPT. No subscription." },
+    { icon: BookOpen, title: "Read it in SwimGPT", body: "Your plan opens as an interactive book in your account: turn the pages, search any set and tick off sessions, on any device." },
   ]
   const { ref, inView } = useInView<HTMLDivElement>(0.3)
   return (
@@ -176,6 +182,53 @@ export function HowItWorks() {
           <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-slate-400">{step.body}</p>
         </div>
       ))}
+    </div>
+  )
+}
+
+/** The plans this account owns, with where the reader got to and the sessions ticked off (this browser's record). */
+export function YourPlans({ plans, userId }: { plans: StorePlan[]; userId: string | null }) {
+  const [progress, setProgress] = useState<Record<string, ReadingProgress | null>>({})
+  useEffect(() => {
+    if (userId) setProgress(Object.fromEntries(plans.map((plan) => [plan.id, readProgress(userId, plan.id)])))
+  }, [plans, userId])
+  return (
+    <div className="dash-reveal rounded-[30px] border border-emerald-300/15 bg-[linear-gradient(135deg,rgba(16,40,36,0.55),rgba(8,14,20,0.9)_60%)] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-7">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300"><BookOpen className="h-3.5 w-3.5" />Your library</p>
+          <h2 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">Your plans</h2>
+        </div>
+        <p className="text-sm text-slate-400">Bought with this account. Open one to keep training.</p>
+      </div>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {plans.map((plan, index) => {
+          const saved = progress[plan.id]
+          const sessions = plan.weeks * plan.sessions_per_week
+          const done = Math.min(saved?.done.length ?? 0, sessions)
+          const color = ACCENT_COLORS[plan.accent]
+          return (
+            <Link key={plan.id} href={readerHref(plan.id)} aria-label={`${saved ? "Continue" : "Open"} ${plan.title}`}
+              className="dash-reveal group flex gap-4 rounded-[22px] border border-white/[0.08] bg-black/25 p-3 transition-all duration-300 hover:-translate-y-0.5 hover:border-emerald-300/30 hover:bg-black/35"
+              style={{ "--reveal-delay": `${120 + index * 80}ms` } as CSSProperties}>
+              <div className="w-[82px] shrink-0 self-start transition-transform duration-500 group-hover:-rotate-2 group-hover:scale-[1.03]"><PlanCover plan={plan} size="xs" className="rounded-[10px] shadow-[0_12px_28px_rgba(0,0,0,0.5)]" /></div>
+              <div className="flex min-w-0 flex-1 flex-col py-1">
+                <p className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300"><Check className="h-3 w-3" strokeWidth={3.5} />Purchased</p>
+                <h3 className="mt-1 truncate text-base font-semibold text-white">{plan.title}</h3>
+                <p className="mt-0.5 truncate text-xs text-slate-400">
+                  {saved && saved.page > 0 ? `Page ${saved.page + 1} of ${plan.pages}` : `${plan.pages} pages`} · {done}/{sessions} sessions done
+                </p>
+                <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
+                  <div className="h-full rounded-full" style={{ width: `${(done / sessions) * 100}%`, background: `linear-gradient(90deg, ${color.main}, #6ee7b7)` }} />
+                </div>
+                <span className="mt-auto inline-flex items-center gap-1.5 pt-3 text-sm font-semibold text-emerald-200 transition-colors group-hover:text-white">
+                  {saved && saved.page > 0 ? "Continue reading" : "Open plan"}<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </span>
+              </div>
+            </Link>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -39,42 +39,91 @@ export const CONNECTIONS = [
 const KEY_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 const VISIBLE = 0.35
 
+let filesetPromise: ReturnType<typeof FilesetResolver.forVisionTasks> | null = null
+const fileset = () => {
+  if (!filesetPromise) {
+    filesetPromise = FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm")
+    filesetPromise.catch(() => { filesetPromise = null })
+  }
+  return filesetPromise
+}
+
+/** MediaPipe announces its CPU backend through console.error; hide that one notice until the returned restore runs. */
+function muteXnnpackNotice() {
+  const original = console.error
+  console.error = (...args: unknown[]) => {
+    if (!args.some((arg) => typeof arg === "string" && arg.includes("XNNPACK"))) original(...args)
+  }
+  return () => { console.error = original }
+}
+
+async function createLandmarker(runningMode: "VIDEO" | "IMAGE", delegates: ("GPU" | "CPU")[]) {
+  const vision = await fileset()
+  const options = {
+    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task" },
+    runningMode, numPoses: 1,
+    minPoseDetectionConfidence: 0.55, minPosePresenceConfidence: 0.55, minTrackingConfidence: 0.55,
+  }
+  for (const [index, delegate] of delegates.entries()) {
+    const restore = muteXnnpackNotice()
+    try {
+      return await PoseLandmarker.createFromOptions(vision, { ...options, baseOptions: { ...options.baseOptions, delegate } })
+    } catch (failure) {
+      if (index === delegates.length - 1) throw failure
+      console.warn(`${delegate} pose delegate unavailable; trying ${delegates[index + 1]}.`, failure)
+    } finally {
+      restore()
+    }
+  }
+  throw new Error("No pose delegate available.")
+}
+
 let landmarkerPromise: Promise<PoseLandmarker> | null = null
 
+/** The pose model for tracking a playing or scanned clip, frame after frame. */
 export function getPoseLandmarker() {
   if (!landmarkerPromise) {
-    landmarkerPromise = (async () => {
-      const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm")
-      const options = {
-        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task" },
-        runningMode: "VIDEO" as const, numPoses: 1,
-        minPoseDetectionConfidence: 0.55, minPosePresenceConfidence: 0.55, minTrackingConfidence: 0.55,
-      }
-      try {
-        return await PoseLandmarker.createFromOptions(vision, { ...options, baseOptions: { ...options.baseOptions, delegate: "GPU" } })
-      } catch (gpuError) {
-        console.warn("GPU pose delegate unavailable; using CPU.", gpuError)
-        return PoseLandmarker.createFromOptions(vision, { ...options, baseOptions: { ...options.baseOptions, delegate: "CPU" } })
-      }
-    })()
+    landmarkerPromise = createLandmarker("VIDEO", ["GPU", "CPU"])
     landmarkerPromise.catch(() => { landmarkerPromise = null })
   }
   return landmarkerPromise
 }
 
+let stillLandmarkerPromise: Promise<PoseLandmarker> | null = null
+
+/**
+ * A second pose model for one-off stills (stroke recognition samples the clip on its own). Kept apart from the
+ * tracking model, which follows the body from one frame to the next and would be thrown by frames out of sequence.
+ */
+export function getStillPoseLandmarker() {
+  if (!stillLandmarkerPromise) {
+    stillLandmarkerPromise = createLandmarker("IMAGE", ["CPU"])
+    stillLandmarkerPromise.catch(() => { stillLandmarkerPromise = null })
+  }
+  return stillLandmarkerPromise
+}
+
+/** Detects a pose in one still: landmarks in the frame (0-1) and in metres around the hips, or null. */
+export function detectStill(landmarker: PoseLandmarker, source: HTMLCanvasElement): { image: PosePoint[]; world: PosePoint[] } | null {
+  const restore = muteXnnpackNotice()
+  try {
+    const result = landmarker.detect(source)
+    return result.landmarks[0]?.length && result.worldLandmarks[0]?.length ? { image: result.landmarks[0], world: result.worldLandmarks[0] } : null
+  } finally {
+    restore()
+  }
+}
+
 let lastTimestamp = 0
 /** Runs the landmarker on one frame (timestamps are forced to increase, as VIDEO mode requires). */
 export function detectPose(landmarker: PoseLandmarker, source: HTMLCanvasElement): PosePoint[] | null {
-  const original = console.error
-  console.error = (...args: unknown[]) => {
-    if (!args.some((arg) => typeof arg === "string" && arg.includes("XNNPACK"))) original(...args)
-  }
+  const restore = muteXnnpackNotice()
   try {
     lastTimestamp = Math.max(performance.now(), lastTimestamp + 1)
     const result = landmarker.detectForVideo(source, lastTimestamp)
     return result.landmarks[0]?.length ? result.landmarks[0] : null
   } finally {
-    console.error = original
+    restore()
   }
 }
 

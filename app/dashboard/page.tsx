@@ -1,24 +1,29 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangle,
+  Apple,
+  Brain,
   ChevronLeft,
   ChevronRight,
+  CreditCard,
   Dumbbell,
   Gauge,
   LayoutDashboard,
   Layers,
   LogOut,
   MessageSquare,
+  PencilRuler,
+  Phone,
   RefreshCw,
+  Repeat,
   ScanLine,
   Timer,
-  Users,
   Waves,
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
@@ -27,11 +32,15 @@ import { DashboardOverview } from "@/components/dashboard-overview"
 import { Reveal } from "@/components/dashboard-ui"
 import { WaterBubbles } from "@/components/water-bubbles"
 import { TrainingPanel } from "@/components/training-panel"
+import { NutritionPanel } from "@/components/nutrition/nutrition-panel"
+import { MentalPanel } from "@/components/mental/mental-panel"
 import { PaceCalculator } from "@/components/pace-calculator"
 import { StrokeLab } from "@/components/video-lab/stroke-lab"
 import { CoachAvatar } from "@/components/coach-avatar"
+import { CoachSwitcher, type SwitchReturn } from "@/components/coach-switcher"
 import { GettingStarted, GuideSpotlight, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
+import { SubscriptionDialog } from "@/components/subscription-dialog"
 import { Banner } from "@/components/training-ui"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
 
@@ -41,6 +50,15 @@ const navGroups = [
     items: [
       { value: "overview", label: "Dashboard", icon: LayoutDashboard },
       { value: "swim", label: "Training", icon: Waves },
+      // A shortcut, not a page: opens a new workout in Training → Gym week (see openWorkoutBuilder).
+      { value: "builder", label: "Workout Builder", icon: PencilRuler },
+    ],
+  },
+  {
+    label: "Body & Mind",
+    items: [
+      { value: "nutrition", label: "Nutrition", icon: Apple },
+      { value: "mental", label: "Mental Performance", icon: Brain },
     ],
   },
   {
@@ -52,9 +70,14 @@ const navGroups = [
   },
 ]
 
+/** Directions the Workout Builder's launch sparks fly out in. */
+const SPARKS = [0, 45, 90, 135, 180, 225, 270, 315]
+
 const pageTitles: Record<string, [string, string]> = {
   overview: ["Dashboard", "Your training at a glance"],
   swim: ["Training", "Your plan, schedule and competitions"],
+  nutrition: ["Nutrition", "Your daily fuel plan, built around your training"],
+  mental: ["Mental Performance", "Confidence, focus and calm when it counts"],
   paces: ["Pace Calculator", "Training paces for every zone, for you and your athletes"],
   video: ["Video Analysis", "AI stroke lab: pose tracking, telemetry and a coach brief from your clip"],
 }
@@ -76,7 +99,7 @@ export default function DashboardPage() {
   const [userData, setUserData] = useState<OnboardingData | null>(null)
   const [dashboardPlan, setDashboardPlan] = useState<DashboardPlan | null>(null)
   const [overview, setOverview] = useState<DashboardOverviewData | null>(null)
-  const [coaches, setCoaches] = useState<string[]>([])
+  const [coach, setCoach] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState("overview")
   const [dashboardError, setDashboardError] = useState<string | null>(null)
@@ -85,6 +108,13 @@ export default function DashboardPage() {
   const [userKey, setUserKey] = useState<string | null>(null)
   const [setupStep, setSetupStep] = useState<SetupStep | null>(null)
   const [guideEvent, setGuideEvent] = useState<{ type: GuideEvent; at: number } | null>(null)
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false)
+  const [coachSwitcherOpen, setCoachSwitcherOpen] = useState(false)
+  const [switchReturn, setSwitchReturn] = useState<SwitchReturn | null>(null)
+  // Bumped each time the Workout Builder shortcut is chosen, so the Gym week opens a new workout.
+  const [builderRequest, setBuilderRequest] = useState(0)
+  // Counts Workout Builder clicks; each one replays its launch animation in the nav.
+  const [builderBurst, setBuilderBurst] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -104,6 +134,11 @@ export default function DashboardPage() {
         })
         if (response.status === 401) {
           router.replace("/auth")
+          return
+        }
+        // 402: the monthly plan isn't paid for. The dashboard is only for paying athletes; the payment screen starts it.
+        if (response.status === 402) {
+          router.replace("/subscribe")
           return
         }
         // 404: no profile yet. 409: a profile without a generated plan (setup didn't finish). Both resume onboarding.
@@ -131,7 +166,7 @@ export default function DashboardPage() {
         })
         setDashboardPlan(result.plan.plan)
         setOverview(result.overview)
-        setCoaches(profile.recommended_coaches)
+        setCoach(profile.recommended_coaches[0] ?? null)
         setUserKey(profile.user_key)
         localStorage.setItem("swimgpt_user_key", profile.user_key)
         localStorage.setItem("swimgpt_coaches", JSON.stringify(profile.recommended_coaches))
@@ -145,6 +180,17 @@ export default function DashboardPage() {
     return () => controller.abort()
   }, [router])
 
+  // Stripe returns here after paying for a coach switch (or cancelling it): the switcher reopens to finish it. The
+  // address is cleaned up straight away, so a reload doesn't reopen it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const status = params.get("coach_switch")
+    if (status !== "paid" && status !== "cancelled") return
+    setSwitchReturn(status === "paid" ? { status } : { status, coach: params.get("coach") })
+    setCoachSwitcherOpen(true)
+    window.history.replaceState(window.history.state, "", window.location.pathname)
+  }, [])
+
   const refreshOverview = async () => {
     const { data: { session }, error } = await supabase.auth.getSession()
     if (error) throw error
@@ -156,6 +202,21 @@ export default function DashboardPage() {
     if (!response.ok) throw new Error("Your changes are saved, but the dashboard summary could not refresh. Reload the dashboard.")
     const result = dashboardResponseSchema.parse(await response.json())
     setOverview(result.overview)
+  }
+
+  // A new coach rebuilds the season plan, so the whole dashboard (plan, overview and coach) is reloaded.
+  const refreshAfterCoachSwitch = async (newCoach: string) => {
+    setCoach(newCoach)
+    localStorage.setItem("swimgpt_coaches", JSON.stringify([newCoach]))
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    const response = await fetch(`${apiUrl}/api/dashboard`, { headers: { Authorization: `Bearer ${session.access_token}` } })
+    if (!response.ok) throw new Error(`Dashboard refresh failed (${response.status}).`)
+    const result = dashboardResponseSchema.parse(await response.json())
+    setDashboardPlan(result.plan.plan)
+    setOverview(result.overview)
+    setCoach(result.profile.recommended_coaches[0] ?? newCoach)
   }
 
   const handleSignOut = async () => {
@@ -216,6 +277,13 @@ export default function DashboardPage() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
   const [pageTitle, pageSubtitle] = pageTitles[activeTab] ?? pageTitles.overview
+  /** The Workout Builder shortcut does what Training → Gym week → New workout does. */
+  const changeTab = (value: string) => {
+    if (value !== "builder") { setActiveTab(value); return }
+    setActiveTab("swim")
+    setBuilderRequest(Date.now())
+    setBuilderBurst((count) => count + 1)
+  }
 
   return (
     <div className="min-h-screen bg-[#070b10] text-foreground">
@@ -223,7 +291,7 @@ export default function DashboardPage() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(87,229,234,0.10),transparent_50%),radial-gradient(ellipse_at_bottom_left,rgba(56,120,220,0.10),transparent_55%)]" />
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="relative w-full gap-0">
+      <Tabs value={activeTab} onValueChange={changeTab} activationMode="manual" className="relative w-full gap-0">
         <div className="flex min-h-screen">
           {/* Sidebar */}
           <aside
@@ -278,10 +346,26 @@ export default function DashboardPage() {
                           "data-[state=active]:border-accent/25 data-[state=active]:bg-[linear-gradient(90deg,rgba(87,229,234,0.16),rgba(87,229,234,0.04))] data-[state=active]:text-white data-[state=active]:shadow-[0_0_20px_rgba(87,229,234,0.10)]",
                           "before:absolute before:left-0 before:top-1/2 before:h-0 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent before:transition-all before:duration-300 data-[state=active]:before:h-5",
                           sidebarCollapsed && "justify-center px-0",
+                          item.value === "builder" && "hover:bg-violet-400/[0.07] active:scale-[0.97]",
                         )}
                       >
-                        <item.icon className="h-[18px] w-[18px] shrink-0 transition-colors group-data-[state=active]:text-accent" />
-                        {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                        {item.value === "builder" ? (
+                          <>
+                            {builderBurst > 0 && <span key={builderBurst} aria-hidden className="wb-flash" />}
+                            <span className="relative grid shrink-0 place-items-center">
+                              <item.icon key={`icon-${builderBurst}`} className={cn("h-[18px] w-[18px] text-violet-300 transition-colors group-hover:text-violet-200", builderBurst > 0 && "wb-icon")} />
+                              {builderBurst > 0 && (
+                                <span key={`burst-${builderBurst}`} aria-hidden>
+                                  <span className="wb-ring" />
+                                  <span className="wb-sparks">{SPARKS.map((angle) => <i key={angle} style={{ "--a": `${angle}deg` } as CSSProperties} />)}</span>
+                                </span>
+                              )}
+                            </span>
+                          </>
+                        ) : (
+                          <item.icon className="h-[18px] w-[18px] shrink-0 transition-colors group-data-[state=active]:text-accent" />
+                        )}
+                        {!sidebarCollapsed && <span className="relative truncate">{item.label}</span>}
                       </TabsTrigger>
                     ))}
                   </div>
@@ -290,21 +374,45 @@ export default function DashboardPage() {
             </nav>
 
             <div className="space-y-2 border-t border-white/[0.07] p-3">
-              {coaches.length > 0 && !sidebarCollapsed && (
-                <Link
-                  href="/coach-chat"
-                  className="block rounded-2xl border border-accent/20 bg-[linear-gradient(140deg,rgba(87,229,234,0.12),rgba(255,255,255,0.02))] p-3 transition-colors hover:border-accent/40"
-                >
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Your coaches</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <div className="flex -space-x-2">
-                      {coaches.map((coach) => (
-                        <CoachAvatar key={coach} name={coach} shape="circle" className="h-7 w-7 border-2 border-[#0b1218]" />
-                      ))}
-                    </div>
-                    <p className="min-w-0 flex-1 truncate text-xs text-slate-300">{coaches.join(" · ")}</p>
-                    <MessageSquare className="h-4 w-4 shrink-0 text-accent" />
+              {coach && !sidebarCollapsed && (
+                <div className="dc-card relative overflow-hidden rounded-2xl border border-accent/25 bg-[linear-gradient(140deg,rgba(87,229,234,0.14),rgba(255,255,255,0.02))]">
+                  <Link href="/coach-chat" className="group flex items-center gap-2.5 px-3 pb-2.5 pt-3 transition-colors hover:bg-white/[0.03]" title={`Chat with ${coach}`}>
+                    <span className="relative shrink-0">
+                      <CoachAvatar name={coach} shape="circle" className="h-9 w-9 border-2 border-[#0b1218]" />
+                      <span aria-hidden className="cv-live absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#0b1218] bg-emerald-400" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Your coach</span>
+                      <span className="block truncate text-sm font-semibold text-white">{coach}</span>
+                    </span>
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-accent transition-colors group-hover:border-accent/40 group-hover:bg-accent/10">
+                      <MessageSquare className="h-4 w-4" />
+                      <span className="sr-only">Open chat</span>
+                    </span>
+                  </Link>
+                  <div className="px-3 pb-3">
+                    <Link href="/coach-chat?call=1&from=dashboard" aria-label={`Talk to ${coach} in a live voice call`}
+                      className="dc-call cv-launch group relative flex items-center gap-2.5 overflow-hidden rounded-xl py-2 pl-2 pr-3 text-slate-950 transition-transform duration-300 hover:-translate-y-0.5 active:translate-y-0">
+                      <span aria-hidden className="cv-launch-sheen" />
+                      <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-950/15">
+                        <span aria-hidden className="dc-ring absolute inset-0 rounded-full" />
+                        <Phone className="h-4 w-4 transition-transform duration-300 group-hover:rotate-[-12deg] group-hover:scale-110" strokeWidth={2.4} />
+                      </span>
+                      <span className="relative min-w-0 flex-1 leading-tight">
+                        <span className="block truncate text-sm font-bold">Talk to {coach.replace(/^Coach\s+/i, "")}</span>
+                        <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-950/70">Live voice call</span>
+                      </span>
+                      <span aria-hidden className="dc-eq relative flex h-4 items-end gap-[3px]"><i /><i /><i /><i /></span>
+                    </Link>
                   </div>
+                </div>
+              )}
+              {coach && sidebarCollapsed && (
+                <Link href="/coach-chat?call=1&from=dashboard" title={`Talk to ${coach}`} aria-label={`Talk to ${coach} in a live voice call`}
+                  className="dc-call cv-launch relative mx-auto grid h-11 w-11 place-items-center overflow-hidden rounded-xl text-slate-950 transition-transform hover:scale-105">
+                  <span aria-hidden className="cv-launch-sheen" />
+                  <span aria-hidden className="dc-ring absolute inset-1.5 rounded-lg" />
+                  <Phone className="relative h-5 w-5" strokeWidth={2.4} />
                 </Link>
               )}
               <div className={cn("flex items-center gap-3 rounded-2xl p-2", sidebarCollapsed && "justify-center")}>
@@ -318,6 +426,18 @@ export default function DashboardPage() {
                   </div>
                 )}
               </div>
+              <Button
+                variant="ghost"
+                className={cn(
+                  "w-full rounded-xl text-slate-400 hover:bg-white/[0.06] hover:text-white",
+                  sidebarCollapsed ? "justify-center px-0" : "justify-start",
+                )}
+                onClick={() => setSubscriptionOpen(true)}
+                title="Subscription"
+              >
+                <CreditCard className="h-4 w-4 shrink-0" />
+                {!sidebarCollapsed && <span>Subscription</span>}
+              </Button>
               <Button
                 variant="ghost"
                 className={cn(
@@ -349,14 +469,33 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {coaches.length > 0 && (
-                    <Button asChild variant="outline" size="sm" className="rounded-full border-white/10 bg-white/[0.03] hover:border-accent/40 hover:bg-accent/10">
-                      <Link href="/coach-chat" aria-label="Chat with Coach">
-                        <Users className="h-4 w-4" />
-                        <span className="hidden md:inline">Chat with Coach</span>
+                  {coach && (
+                    <div className="flex h-9 items-center rounded-full border border-white/10 bg-white/[0.03] transition-colors hover:border-white/20">
+                      <Link href="/coach-chat" aria-label={`Chat with ${coach}`}
+                        className="flex h-full items-center gap-2 rounded-l-full pl-1.5 pr-3 text-sm font-medium text-white transition-colors hover:bg-accent/10">
+                        <CoachAvatar key={coach} name={coach} shape="circle" className="h-6 w-6 animate-in fade-in zoom-in-50 duration-500" />
+                        <span className="hidden md:inline">Chat with {coach}</span>
                       </Link>
-                    </Button>
+                      <span aria-hidden className="h-5 w-px bg-white/10" />
+                      <button type="button" onClick={() => setCoachSwitcherOpen(true)} aria-label="Switch coach" title="Switch coach"
+                        className="group flex h-full items-center gap-1.5 rounded-r-full pl-2.5 pr-3 text-sm font-medium text-slate-300 transition-colors hover:bg-accent/10 hover:text-accent">
+                        <Repeat className="h-4 w-4 transition-transform duration-500 ease-out group-hover:rotate-180" />
+                        <span className="hidden xl:inline">Switch</span>
+                      </button>
+                    </div>
                   )}
+                  {/* The sidebar's call button is hidden on smaller screens, so the header carries it there. */}
+                  {coach && (
+                    <Link href="/coach-chat?call=1&from=dashboard" aria-label={`Talk to ${coach} in a live voice call`} title={`Talk to ${coach}`}
+                      className="dc-call cv-launch relative flex h-9 items-center gap-1.5 overflow-hidden rounded-full px-3 text-sm font-semibold text-slate-950 lg:hidden">
+                      <span aria-hidden className="cv-launch-sheen" />
+                      <Phone className="relative h-4 w-4" strokeWidth={2.4} />
+                      <span className="relative hidden sm:inline">Talk</span>
+                    </Link>
+                  )}
+                  <Button variant="ghost" size="icon" className="rounded-full text-slate-300 hover:bg-white/[0.06] lg:hidden" onClick={() => setSubscriptionOpen(true)} aria-label="Subscription">
+                    <CreditCard className="h-5 w-5" />
+                  </Button>
                   <Button variant="ghost" size="icon" className="rounded-full text-slate-300 hover:bg-white/[0.06] lg:hidden" onClick={handleSignOut} aria-label="Sign out">
                     <LogOut className="h-5 w-5" />
                   </Button>
@@ -370,10 +509,12 @@ export default function DashboardPage() {
                     <TabsTrigger
                       key={item.value}
                       value={item.value}
-                      className="h-auto flex-none gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-sm text-slate-300 data-[state=active]:border-accent data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
+                      className={cn("relative h-auto flex-none gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-sm text-slate-300 data-[state=active]:border-accent data-[state=active]:bg-accent data-[state=active]:text-accent-foreground",
+                        item.value === "builder" && "border-violet-300/25 active:scale-[0.96]")}
                     >
-                      <item.icon className="h-4 w-4" />
-                      {item.label}
+                      {item.value === "builder" && builderBurst > 0 && <span key={builderBurst} aria-hidden className="wb-flash" />}
+                      <item.icon key={item.value === "builder" ? `icon-${builderBurst}` : undefined} className={cn("relative h-4 w-4", item.value === "builder" && "text-violet-300", item.value === "builder" && builderBurst > 0 && "wb-icon")} />
+                      <span className="relative">{item.label}</span>
                     </TabsTrigger>
                   ))}
                 </TabsList>
@@ -442,7 +583,13 @@ export default function DashboardPage() {
                 <DashboardOverview data={overview} onViewToday={() => setActiveTab("swim")} />
               </TabsContent>
               <TabsContent value="swim" className="mt-0 space-y-6">
-                <TrainingPanel onChanged={refreshOverview} guide={guide} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })} />
+                <TrainingPanel onChanged={refreshOverview} guide={guide} builderRequest={builderRequest} onBuilderOpened={() => setBuilderRequest(0)} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })} />
+              </TabsContent>
+              <TabsContent value="nutrition" className="mt-0">
+                <NutritionPanel firstName={firstName} trainingToday={overview.today.length > 0} />
+              </TabsContent>
+              <TabsContent value="mental" className="mt-0">
+                <MentalPanel firstName={firstName} />
               </TabsContent>
               <TabsContent value="video" className="mt-0">
                 <StrokeLab variant="dashboard" />
@@ -455,11 +602,16 @@ export default function DashboardPage() {
         </div>
       </Tabs>
       {peek && <GuideSpotlight key={peek} target={peek} onClose={() => setPeek(null)} />}
+      <SubscriptionDialog open={subscriptionOpen} onOpenChange={setSubscriptionOpen} />
+      {coach && (
+        <CoachSwitcher open={coachSwitcherOpen} current={coach} returned={switchReturn}
+          onClose={() => { setCoachSwitcherOpen(false); setSwitchReturn(null) }} onSwitched={refreshAfterCoachSwitch} />
+      )}
       {userKey && (
         <GuidedSetup
           userKey={userKey}
           firstName={firstName}
-          coach={coaches[0] ?? "Your coach"}
+          coach={coach ?? "Your coach"}
           swimSessions={userData.swimSessionsPerWeek}
           gymSessions={userData.gymSessionsPerWeek}
           step={setupStep}

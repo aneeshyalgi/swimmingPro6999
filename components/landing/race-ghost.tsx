@@ -125,7 +125,7 @@ export function RaceGhost() {
         </div>
 
         <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/8 pt-4">
-          <p className="max-w-[15rem] text-[11px] leading-4 text-slate-400">Paces, splits and taper built from your PBs and two elite coaches&apos; methods.</p>
+          <p className="max-w-[15rem] text-[11px] leading-4 text-slate-400">Paces, splits and taper built from your PBs and your elite coach&apos;s methods.</p>
           <div className="text-right">
             <p className={cn("font-mono text-2xl font-bold tabular-nums transition-colors duration-500", gap > 0 ? "text-emerald-300" : "text-slate-500")}>−{gap.toFixed(2)}s</p>
             <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{finished ? `${clock(futureTime)} target` : "Gap so far"}</p>

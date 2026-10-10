@@ -306,7 +306,7 @@ _PETE_WARM_UP = WarmUp(
     temperature="5 min easy temperature elevation",
     mobility=_doses(("shoulder_flexion_mob", "8"), ("t_spine_rotation", "8/side"), ("t_spine_extension", "8"), ("hip_flexor_mob", "8/side"), ("ankle_mob", "10")),
     activation=_doses(("scap_row", "10"), ("hip_flexor_liftoff", "8/side"), ("plank_hold", "20 sec")))
-PETE_RULE = ("Pete rule: the session stops being productive when movement velocity drops substantially, position deteriorates, "
+PETE_RULE = ("USRPT rule: the session stops being productive when movement velocity drops substantially, position deteriorates, "
              "or repetitions stop looking athletic. Stop there; never accumulate poor repetitions.")
 PETE = CoachSystem(
     key="pete", coach="Coach Pete", system="USRPT Strength & Mobility System", events="Sprint and race-pace events",

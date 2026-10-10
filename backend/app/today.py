@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.auth import get_authenticated_profile
 from app.config import get_settings
-from app.context import chat_context, select_coaches
+from app.context import athlete_coach, chat_context
 from app.db import get_supabase_client
 
 
@@ -259,7 +259,7 @@ def generate_today(authorization: str | None = Header(default=None)) -> TodayRes
         }}
         client = OpenAI(api_key=settings.openai_api_key)
         context, sources, _ = chat_context(
-            profile.get("recommended_coaches") or select_coaches(profile)[1],
+            [athlete_coach(profile)],
             f"Daily swim session for {' '.join(profile.get('main_events') or [])} {profile.get('swimmer_type') or ''}",
             limit=10,
         )
@@ -305,7 +305,7 @@ RECENT ACTUAL RACE RESULTS: {json.dumps(recent_race_results(profile["id"]))}
 SHARED PACING METHODOLOGY (use this formula/settings for PB-derived zone targets,
 not alternative percentage formulas; use effort cues when the matching reference
 or applicable distance is unavailable): {json.dumps(pacing_context(profile["id"]))}
-COACH PROGRAMS (base today's swim on one of these coaches' actual sessions, adapted to the athlete): {context}"""},
+COACH PROGRAM (base today's swim on one of this coach's actual sessions, adapted to the athlete): {context}"""},
             ],
         )
         content = response.choices[0].message.content

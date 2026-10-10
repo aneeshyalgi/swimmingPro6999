@@ -1,11 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import type { PoseLandmarker } from "@mediapipe/tasks-vision"
 import { Activity, ArrowRight, Check, Crosshair, Cpu, Film, Gauge, Loader2, Ruler, RotateCcw, ScanLine, Sparkles, Waves } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 import {
   detectPose, drawHud, getPoseLandmarker, measure, smoothPose, strokeRate, summarize,
@@ -15,9 +14,16 @@ import { UploadZone } from "@/components/video-lab/upload-zone"
 import { Telemetry } from "@/components/video-lab/telemetry"
 import { VideoControls } from "@/components/video-lab/video-controls"
 import { CoachBrief, type AnalysisResult } from "@/components/video-lab/coach-brief"
+import { recognizeStroke, type StrokeGuess } from "@/components/video-lab/stroke-recognition"
+import {
+  accessHeaders, checkAccess, isPaywall, paywallOf, rememberFreeAnalysisUsed, type Access, type Paywall,
+} from "@/components/video-lab/video-access"
 
 type Phase = "empty" | "ready" | "scanning" | "measuring" | "writing" | "done"
 type TelemetryState = { live: FrameMetrics | null; history: FrameMetrics[]; tracking: "idle" | "live" | "paused" | "lost"; fps: number }
+/** Recognising the stroke from the clip itself (see stroke-recognition.ts). */
+// checking: asking whether this visitor may have one (see video-access.ts); working: recognising.
+type Recognition = { status: "idle" | "checking" | "working" | "failed" } | ({ status: "done" } & StrokeGuess)
 
 const STROKES = ["Freestyle", "Backstroke", "Breaststroke", "Butterfly", "IM", "Dive"]
 const ANGLES = ["Side view", "Front view", "Underwater view", "Mixed angles"]
@@ -33,7 +39,22 @@ const MEASURES = [
   { icon: Gauge, title: "Body line", body: "How flat you are from shoulders to ankles, in degrees." },
 ]
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const BRIEF_FAILED = "The coach brief couldn't be written. Check that the backend is running and try again; your measurements are kept."
+/** A recognised stroke is selected for the athlete from this confidence; below it, it's only suggested. */
+const AUTO_PICK = 40
+/** From this confidence (with no runner-up) the selection is shown as detected rather than as a best guess. */
+const SURE = 70
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** A response's error message, when it has one in words. */
+async function detailOf(response: Response) {
+  try {
+    const body = await response.json()
+    return typeof body.detail === "string" ? body.detail : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * The AI Stroke Lab: on-device pose tracking, live telemetry and an AI coach brief for a swimming clip.
@@ -70,9 +91,20 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
   const [summary, setSummary] = useState<ClipSummary | null>(null)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [stroke, setStroke] = useState("Freestyle")
+  // Whether the stroke came from recognition or the athlete picked it (a pick is never overridden).
+  const [strokeSource, setStrokeSource] = useState<"auto" | "you">("auto")
+  const strokeRef = useRef(stroke)
+  const sourceRef = useRef(strokeSource)
+  const [recognition, setRecognition] = useState<Recognition>({ status: "idle" })
+  // While the stroke is being recognised, it can't be changed and the clip can't be analysed yet.
+  const detecting = recognition.status === "checking" || recognition.status === "working"
+  // The stroke the current coach brief was written for.
+  const [briefStroke, setBriefStroke] = useState(stroke)
   const [cameraAngle, setCameraAngle] = useState("Side view")
   const [error, setError] = useState("")
-  const [accountModal, setAccountModal] = useState(false)
+  // Subscribers analyse as often as they like, everyone else once (see video-access.ts). null until checked.
+  const [access, setAccess] = useState<Access | null>(null)
+  const [paywall, setPaywall] = useState<Paywall | null>(null)
   const [playing, setPlaying] = useState(false)
   const [telemetry, setTelemetry] = useState<TelemetryState>({ live: null, history: [], tracking: "idle", fps: 0 })
   const busy = phase === "scanning" || phase === "measuring" || phase === "writing"
@@ -85,6 +117,45 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
     return () => { cancelled = true; if (frameRef.current) cancelAnimationFrame(frameRef.current) }
   }, [])
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+
+  const chooseStroke = (value: string, source: "auto" | "you") => {
+    strokeRef.current = value
+    sourceRef.current = source
+    setStroke(value)
+    setStrokeSource(source)
+  }
+
+  // Recognise the stroke as soon as a clip is in. The clip can be played meanwhile, but the stroke can't be changed
+  // and the clip can't be analysed until recognition has answered (or can't).
+  useEffect(() => {
+    if (!url) { setRecognition({ status: "idle" }); return }
+    const controller = new AbortController()
+    sourceRef.current = "auto"
+    setStrokeSource("auto")
+    setRecognition({ status: "checking" })
+    const run = async () => {
+      // Only someone who may still analyse gets a recognition: a subscriber, or a visitor with their free analysis.
+      const current = await checkAccess()
+      if (controller.signal.aborted) return
+      setAccess(current)
+      if (isPaywall(current)) { setRecognition({ status: "idle" }); return }
+      setRecognition({ status: "working" })
+      try {
+        const guess = await recognizeStroke(url, controller.signal, await accessHeaders())
+        if (controller.signal.aborted) return
+        setRecognition({ status: "done", ...guess })
+        if (guess.stroke && guess.confidence >= AUTO_PICK && sourceRef.current === "auto") chooseStroke(guess.stroke, "auto")
+      } catch (failure) {
+        if (controller.signal.aborted) return
+        console.warn("Stroke recognition failed:", failure)
+        setRecognition({ status: "failed" })
+      }
+    }
+    void run()
+    return () => controller.abort()
+    // chooseStroke only touches refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url])
 
   /** Detect on the current video frame, draw the HUD, and return the frame's measurements. */
   const processFrame = useCallback((live: boolean): FrameMetrics | null => {
@@ -225,16 +296,20 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
   }
 
   const analyze = async () => {
-    if (!file || model !== "ready") return
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user && localStorage.getItem("swimgpt_video_analysis_used") === "true") { setAccountModal(true); return }
+    if (!file || model !== "ready" || detecting) return
+    // The backend decides who may analyse; asking first spares someone without access a full scan.
+    const current = await checkAccess()
+    setAccess(current)
+    if (isPaywall(current)) { setPaywall(current); return }
     setError(""); setResult(null); setSummary(null); setThumbs([]); setProgress(1)
     setPhase("scanning")
     const samples = await scanClip()
 
     setPhase("measuring")
+    // The stroke to analyse: recognition's answer, or the athlete's pick.
+    const chosen = strokeRef.current
     // A dive is angled through take-off, flight and entry, so every tracked frame counts.
-    const horizontal = stroke !== "Dive" && (cameraAngle === "Side view" || cameraAngle === "Underwater view")
+    const horizontal = chosen !== "Dive" && (cameraAngle === "Side view" || cameraAngle === "Underwater view")
     const measured = summarize(samples, scanTotalRef.current || samples.length, horizontal)
     if (measured.stroke_rate_per_min === null && measured.swimming_frames >= 5) {
       const live = samplesRef.current.filter((sample) => !horizontal || (sample.bodyTilt !== null && sample.bodyTilt <= 40))
@@ -248,21 +323,35 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
     try {
       const profile = localStorage.getItem("swimgpt_onboarding")
       const response = await fetch(`${API_URL}/api/video-analysis`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...(await accessHeaders()) },
         body: JSON.stringify({
           file_name: file.name, file_size_mb: Number((file.size / 1024 / 1024).toFixed(2)), duration_seconds: Math.round(meta.duration),
-          stroke, camera_angle: cameraAngle, athlete_profile: profile ? JSON.parse(profile) : {}, pose_metrics: measured,
+          stroke: chosen, camera_angle: cameraAngle, athlete_profile: profile ? JSON.parse(profile) : {}, pose_metrics: measured,
         }),
       })
-      if (!response.ok) throw new Error(await response.text())
+      // Access can change after the check above (the free analysis used in another tab meanwhile).
+      const blocked = await paywallOf(response)
+      if (blocked) { setAccess(blocked); setPaywall(blocked); setPhase("ready"); setProgress(0); return }
+      if (!response.ok) {
+        // An expired session, or free-analysis records that couldn't be checked, explain themselves.
+        const detail = response.status === 401 || response.status === 503 ? await detailOf(response) : null
+        console.error("Video analysis failed:", response.status)
+        setError(detail ?? BRIEF_FAILED)
+        setPhase("ready")
+        return
+      }
       setResult(await response.json())
+      setBriefStroke(chosen)
       setProgress(100)
       setPhase("done")
-      if (!user) localStorage.setItem("swimgpt_video_analysis_used", "true")
+      if (current !== "subscribed") {
+        rememberFreeAnalysisUsed()
+        void checkAccess().then(setAccess)
+      }
       window.setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 250)
     } catch (failure) {
       console.error("Video analysis failed:", failure)
-      setError("The coach brief couldn't be written. Check that the backend is running and try again; your measurements are kept.")
+      setError(BRIEF_FAILED)
       setPhase("ready")
     } finally {
       window.clearInterval(creep)
@@ -275,17 +364,32 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
   return (
     <div className={cn("relative", variant === "public" && "mx-auto max-w-7xl px-4 pb-16 pt-28 sm:px-6 lg:px-8")}>
       {variant === "dashboard" && <div aria-hidden className="lab-grid-bg pointer-events-none absolute -inset-x-4 -top-4 h-[640px] opacity-25 [mask-image:linear-gradient(to_bottom,black,transparent)]" />}
-      {accountModal && (
+      {paywall && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 backdrop-blur-md">
-          <div className="dash-reveal w-full max-w-md rounded-3xl border border-cyan-300/20 bg-[linear-gradient(180deg,rgba(16,24,31,0.98),rgba(7,12,17,0.98))] p-6 shadow-[0_30px_90px_rgba(0,0,0,0.65)]">
+          <div role="dialog" aria-modal="true" aria-labelledby="lab-paywall-title"
+            className="dash-reveal w-full max-w-md rounded-3xl border border-cyan-300/20 bg-[linear-gradient(180deg,rgba(16,24,31,0.98),rgba(7,12,17,0.98))] p-6 shadow-[0_30px_90px_rgba(0,0,0,0.65)]">
             <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-400/10 text-cyan-300"><Waves className="h-6 w-6" /></div>
             <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-cyan-300">Free analysis used</p>
-            <h2 className="mt-2 text-2xl font-bold text-white">Create an account for more stroke reviews</h2>
-            <p className="mt-3 text-sm leading-6 text-slate-300">You&apos;ve used your free video analysis. Create a SwimGPT account to keep analysing clips and track your technique over time.</p>
+            <h2 id="lab-paywall-title" className="mt-2 text-2xl font-bold text-white">
+              {paywall === "signup_required" ? "Keep analysing with SwimGPT" : "Subscribe to keep analysing"}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              {paywall === "signup_required"
+                ? "You've had your free video analysis. Create an account and start your SwimGPT subscription to analyse every clip you film."
+                : "You've had your free video analysis. Start your SwimGPT subscription to analyse every clip you film, each with its own coach brief."}
+            </p>
             <div className="mt-6 flex gap-3">
-              <Button variant="outline" onClick={() => setAccountModal(false)} className="flex-1 border-white/10 bg-white/[0.03] text-slate-200 hover:bg-white/[0.07] hover:text-white">Maybe later</Button>
-              <Button onClick={() => router.push("/auth?mode=signup")} className="flex-1 bg-accent text-accent-foreground hover:bg-accent/90">Create account<ArrowRight className="ml-2 h-4 w-4" /></Button>
+              <Button variant="outline" onClick={() => setPaywall(null)} className="flex-1 border-white/10 bg-white/[0.03] text-slate-200 hover:bg-white/[0.07] hover:text-white">Maybe later</Button>
+              <Button onClick={() => router.push(paywall === "signup_required" ? "/auth?mode=signup" : "/subscribe")} className="flex-1 bg-accent text-accent-foreground hover:bg-accent/90">
+                {paywall === "signup_required" ? "Create account" : "Subscribe"}<ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
+            {paywall === "signup_required" && (
+              <p className="mt-4 text-center text-xs text-slate-400">
+                Already have an account?{" "}
+                <button type="button" onClick={() => router.push("/auth")} className="font-semibold text-cyan-200 underline-offset-2 hover:text-white hover:underline">Log in</button>
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -367,13 +471,26 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
             <div className="dash-reveal rounded-[24px] border border-white/[0.08] bg-[linear-gradient(160deg,rgba(18,28,38,0.85),rgba(8,13,19,0.95))] p-5">
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <div>
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Stroke</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {STROKES.map((item) => (
-                      <button key={item} type="button" disabled={busy} aria-pressed={stroke === item} onClick={() => setStroke(item)}
-                        className={cn("rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-300", stroke === item ? "border-cyan-300/50 bg-cyan-300/15 text-white shadow-[0_0_16px_rgba(87,229,234,0.25)]" : "border-white/10 text-slate-400 hover:text-white")}>{item}</button>
-                    ))}
+                  <div className="mb-2 flex min-h-5 flex-wrap items-center justify-between gap-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Stroke</p>
+                    <RecognitionBadge recognition={recognition} stroke={stroke} source={strokeSource} />
                   </div>
+                  <div className={cn("flex flex-wrap gap-1.5", recognition.status === "working" && "lab-recognising")}>
+                    {STROKES.map((item) => {
+                      const detected = recognition.status === "done" && recognition.stroke === item
+                      return (
+                        <button key={item} type="button" disabled={busy || detecting} aria-pressed={stroke === item} onClick={() => chooseStroke(item, "you")}
+                          title={detected ? "Recognised from your clip" : undefined}
+                          className={cn("inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-300 disabled:cursor-not-allowed",
+                            detecting && "opacity-60",
+                            stroke === item ? "border-cyan-300/50 bg-cyan-300/15 text-white shadow-[0_0_16px_rgba(87,229,234,0.25)]" : "border-white/10 text-slate-400 hover:text-white",
+                            detected && stroke === item && strokeSource === "auto" && "lab-chip-auto")}>
+                          {detected && <Sparkles className="h-3 w-3 text-cyan-200" aria-hidden />}{item}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <RecognitionNote recognition={recognition} stroke={stroke} disabled={busy || detecting} onUse={chooseStroke} />
                 </div>
                 <div>
                   <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Camera angle</p>
@@ -387,17 +504,24 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
               </div>
               {error && <p role="alert" className="mt-4 rounded-xl border border-rose-400/25 bg-rose-400/10 px-3 py-2 text-sm text-rose-100">{error}</p>}
               <div className="mt-5 flex flex-wrap items-center gap-3">
-                <button type="button" onClick={() => void analyze()} disabled={busy || model !== "ready"}
-                  className="lab-cta group relative inline-flex h-12 flex-1 items-center justify-center gap-2 overflow-hidden rounded-full bg-gradient-to-r from-cyan-300 via-sky-400 to-violet-400 px-6 text-sm font-bold text-slate-950 shadow-[0_14px_40px_rgba(87,229,234,0.35)] transition-transform hover:-translate-y-0.5 disabled:translate-y-0 disabled:opacity-60">
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  {busy ? STAGES[Math.max(0, stageIndex)].label : phase === "done" ? "Analyze again" : "Analyze my stroke"}
-                  {!busy && <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />}
+                <button type="button" onClick={() => void analyze()} disabled={busy || detecting || model !== "ready"}
+                  className="lab-cta group relative inline-flex h-12 flex-1 items-center justify-center gap-2 overflow-hidden rounded-full bg-gradient-to-r from-cyan-300 via-sky-400 to-violet-400 px-6 text-sm font-bold text-slate-950 shadow-[0_14px_40px_rgba(87,229,234,0.35)] transition-transform hover:-translate-y-0.5 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60">
+                  {busy || detecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {busy ? STAGES[Math.max(0, stageIndex)].label : detecting ? "Detecting your stroke…" : phase === "done" ? "Analyze again" : "Analyze my stroke"}
+                  {!busy && !detecting && <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />}
                 </button>
                 <button type="button" onClick={reset} disabled={busy} className="inline-flex h-12 items-center gap-2 rounded-full border border-white/10 px-4 text-sm text-slate-300 transition-colors hover:bg-white/[0.05] hover:text-white">
                   <RotateCcw className="h-4 w-4" />New clip
                 </button>
               </div>
               {file && <p className="mt-3 flex items-center gap-2 truncate text-xs text-slate-500"><Film className="h-3.5 w-3.5 shrink-0" />{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</p>}
+              {(access === "free" || isPaywall(access)) && (
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  {access === "free"
+                    ? "Your first analysis is free. After that, video analysis comes with a SwimGPT subscription."
+                    : "You've used your free analysis. Video analysis comes with a SwimGPT subscription."}
+                </p>
+              )}
             </div>
           )}
 
@@ -460,7 +584,7 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
                     <div><p className="text-sm font-semibold text-white">{item.title}</p><p className="mt-0.5 text-xs leading-5 text-slate-400">{item.body}</p></div>
                   </div>
                 ))}
-                <p className="text-[11px] leading-5 text-slate-500">Pose tracking runs in your browser with MediaPipe; your video isn&apos;t uploaded for it.</p>
+                <p className="text-[11px] leading-5 text-slate-500">Pose tracking runs in your browser with MediaPipe, so your video isn&apos;t uploaded. To recognise your stroke, a few small stills and the pose measurements are sent to our AI.</p>
               </div>
             )}
           </div>
@@ -468,8 +592,55 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
       </div>
 
       <div ref={resultsRef} className="scroll-mt-24">
-        {result && <div className="mt-10"><CoachBrief result={result} summary={summary} stroke={stroke} onReset={reset} /></div>}
+        {result && <div className="mt-10"><CoachBrief result={result} summary={summary} stroke={briefStroke} onReset={reset} /></div>}
       </div>
     </div>
   )
+}
+
+/** Where the selected stroke came from: being recognised, recognised from the clip, or picked by the athlete. */
+function RecognitionBadge({ recognition, stroke, source }: { recognition: Recognition; stroke: string; source: "auto" | "you" }) {
+  const pill = "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
+  if (recognition.status === "working") {
+    return <span className={cn(pill, "border-cyan-300/25 bg-cyan-300/10 text-cyan-100")}><Loader2 className="h-3 w-3 animate-spin" />Recognising</span>
+  }
+  if (recognition.status === "done" && recognition.stroke && recognition.stroke === stroke && recognition.confidence >= AUTO_PICK) {
+    const sure = recognition.confidence >= SURE && !recognition.alternative
+    return (
+      <span className={cn(pill, sure ? "border-cyan-300/35 bg-[linear-gradient(90deg,rgba(103,232,249,0.16),rgba(167,139,250,0.16))] text-cyan-50" : "border-amber-300/30 bg-amber-300/10 text-amber-100")}>
+        <Sparkles className={cn("h-3 w-3", sure ? "text-cyan-200" : "text-amber-200")} />{sure ? "Auto-detected" : "Best guess"} · {recognition.confidence}%
+      </span>
+    )
+  }
+  if (source === "you") return <span className={cn(pill, "border-white/10 bg-white/[0.04] text-slate-300")}>Your pick</span>
+  if (recognition.status === "done") return <span className={cn(pill, "border-amber-300/25 bg-amber-300/10 text-amber-100")}>Pick your stroke</span>
+  return null
+}
+
+/** One line under the strokes: what recognition saw, the runner-up or its own answer one tap away, or why it has none. */
+function RecognitionNote({ recognition, stroke, disabled, onUse }: {
+  recognition: Recognition; stroke: string; disabled: boolean; onUse: (stroke: string, source: "auto" | "you") => void
+}) {
+  const sentence = (text: string) => (/[.!?]$/.test(text) ? text : text + ".")
+  const useButton = (value: string, source: "auto" | "you") => (
+    <button type="button" disabled={disabled} onClick={() => onUse(value, source)} className="font-semibold text-cyan-200 underline-offset-2 transition-colors hover:text-white hover:underline disabled:opacity-50">
+      Use {value}
+    </button>
+  )
+  let note: ReactNode = null
+  if (recognition.status === "working") note = "Watching your clip to recognise the stroke. You can change it once it's done."
+  else if (recognition.status === "failed") note = "Automatic stroke recognition isn't available right now. Pick your stroke above."
+  else if (recognition.status === "done" && !recognition.stroke) note = "We couldn't make out a stroke in this clip. Pick it above."
+  else if (recognition.status === "done" && recognition.stroke) {
+    const { stroke: detected, confidence, alternative, reason } = recognition
+    if (stroke === detected && confidence >= SURE && !alternative) note = <>{reason ? sentence(reason) + " " : ""}Not right? Tap the correct stroke.</>
+    else if (stroke === detected) {
+      note = alternative
+        ? <>Hard to tell from this clip: it looks most like {detected}, but it could be {alternative}. {useButton(alternative, "you")}</>
+        : <>Hard to tell from this clip, so check {detected} is right. Tap the correct stroke if it isn&apos;t.</>
+    }
+    else if (confidence < AUTO_PICK) note = <>It might be {detected} ({confidence}% sure), but it&apos;s hard to tell from this clip. {useButton(detected, "auto")} or pick above.</>
+    else note = <>We recognised {detected} ({confidence}% sure). {useButton(detected, "auto")}</>
+  }
+  return <p aria-live="polite" className="mt-2 min-h-5 text-xs leading-5 text-slate-400">{note}</p>
 }

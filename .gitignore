@@ -25,3 +25,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# source PDFs (kept locally; the app ships the e-book editions in backend/plan_books)
+/coaches/
+/premade_training_plans/
+/SwimGPT Strength and Mobilty (1).pdf
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
