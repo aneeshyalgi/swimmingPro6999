@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     "The world's first AI-powered high-performance swim coaching platform. Your entire Olympic coaching team in one app.",
   generator: "v0.app",
   icons: {
-    icon: "/icon.jpg",
+    icon: "/blah.jpg",
     apple: "/icon.jpg",
   },
 }
