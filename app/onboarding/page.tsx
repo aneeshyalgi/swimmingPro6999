@@ -25,6 +25,7 @@ import {
   Medal,
   Pencil,
   Route,
+  ShieldCheck,
   Shuffle,
   Sparkles,
   Target,
@@ -33,6 +34,7 @@ import {
   Waves,
   Zap,
 } from "lucide-react"
+import { MINIMUM_AGE, PARENTAL_CONSENT_AGE } from "@/lib/legal"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 import {
@@ -57,6 +59,10 @@ type OnboardingData = {
   height: string
   weight: string
   swimExperience: string
+  // A new athlete under 16: the parent or guardian who agrees (sent with the answers and kept as their consent).
+  guardianName: string
+  guardianEmail: string
+  guardianConsent: boolean
 
   // Step 2: Swimming Background
   mainEvents: string[]
@@ -89,6 +95,9 @@ const initialData: OnboardingData = {
   height: "",
   weight: "",
   swimExperience: "",
+  guardianName: "",
+  guardianEmail: "",
+  guardianConsent: false,
   mainEvents: [],
   pbsLCM: {},
   pbsSCM: {},
@@ -187,7 +196,10 @@ const eventFieldId = (prefix: string, event: string) => `${prefix}-${event.toLow
 const labelFor = (options: { value: string; label: string }[], value: string) =>
   options.find((option) => option.value === value)?.label || "Not set"
 
-const validateStep = (step: number, data: OnboardingData): Record<string, string> => {
+/** A new athlete under 16 needs a parent or guardian to agree (athletes who joined before are never asked). */
+const needsGuardianFor = (age: string, newAthlete: boolean) => newAthlete && Number(age) >= MINIMUM_AGE && Number(age) < PARENTAL_CONSENT_AGE
+
+const validateStep = (step: number, data: OnboardingData, newAthlete = false): Record<string, string> => {
   const errors: Record<string, string> = {}
   const inRange = (value: string, min: number, max: number) => {
     const number = Number(value)
@@ -195,7 +207,14 @@ const validateStep = (step: number, data: OnboardingData): Record<string, string
   }
 
   if (step === 1) {
-    if (!inRange(data.age, 8, 100)) errors.age = data.age ? "Enter an age between 8 and 100" : "Enter your age"
+    if (!inRange(data.age, MINIMUM_AGE, 100)) {
+      errors.age = !data.age ? "Enter your age" : Number(data.age) < MINIMUM_AGE ? `SwimGPT is for swimmers aged ${MINIMUM_AGE} and over` : `Enter an age between ${MINIMUM_AGE} and 100`
+    }
+    if (needsGuardianFor(data.age, newAthlete)) {
+      if (data.guardianName.trim().length < 2) errors.guardianName = "Enter your parent or guardian's name"
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(data.guardianEmail.trim())) errors.guardianEmail = "Enter their email address"
+      if (!data.guardianConsent) errors.guardianConsent = "Your parent or guardian needs to agree"
+    }
     if (!data.gender) errors.gender = "Select an option"
     if (!data.country.trim()) errors.country = "Enter your country"
     if (data.height && !inRange(data.height, 100, 250)) errors.height = "Enter a height between 100 and 250 cm"
@@ -257,6 +276,8 @@ export default function OnboardingPage() {
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [fullName, setFullName] = useState("")
   const [prefilled, setPrefilled] = useState(false)
+  // Whether the account already has a profile (null until known): only new athletes are asked for a guardian's consent.
+  const [hasProfile, setHasProfile] = useState<boolean | null>(null)
   // Whether the account has paid for its coaching plan (null until known). Paid athletes are never asked to pay again.
   const [paid, setPaid] = useState<boolean | null>(null)
 
@@ -295,6 +316,7 @@ export default function OnboardingPage() {
         try {
           const { data: { session } } = await supabase.auth.getSession()
           const response = session ? await fetch(`${API_URL}/api/onboarding`, { headers: { Authorization: `Bearer ${session.access_token}` } }) : null
+          if (response) setHasProfile(response.ok)
           if (response?.ok) {
             const saved = await response.json()
             accountPaid = Boolean(saved.paid)
@@ -350,7 +372,10 @@ export default function OnboardingPage() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ userId: draftUserId, data, currentStep, maxStep }))
   }, [data, currentStep, maxStep, draftUserId, showCoaches])
 
-  const errors = useMemo(() => validateStep(currentStep, data), [currentStep, data])
+  // Unknown (the check failed) counts as new, as the server will ask for the guardian of a new athlete under 16.
+  const newAthlete = hasProfile !== true
+  const needsGuardian = needsGuardianFor(data.age, newAthlete)
+  const errors = useMemo(() => validateStep(currentStep, data, newAthlete), [currentStep, data, newAthlete])
   const visibleError = (key: string) => (attempted ? errors[key] : undefined)
 
   const updateData = <K extends keyof OnboardingData>(field: K, value: OnboardingData[K]) => {
@@ -406,7 +431,7 @@ export default function OnboardingPage() {
 
     // Earlier steps may have been edited after they were completed; recheck before generating.
     for (let step = 1; step < steps.length; step++) {
-      const stepErrors = validateStep(step, data)
+      const stepErrors = validateStep(step, data, newAthlete)
       const firstError = Object.keys(stepErrors)[0]
       if (firstError) {
         setCurrentStep(step)
@@ -465,6 +490,7 @@ export default function OnboardingPage() {
       one_year_goal: data.oneYearGoal.trim(),
       one_year_goal_times: storedTimes(data.oneYearGoalTimes, data.mainEvents),
       coach: data.coach || null,
+      ...(needsGuardian ? { guardian_name: data.guardianName.trim(), guardian_email: data.guardianEmail.trim(), guardian_consent: data.guardianConsent } : {}),
     }
 
     try {
@@ -870,6 +896,36 @@ export default function OnboardingPage() {
                           />
                         </Field>
                       </div>
+
+                      {needsGuardian && (
+                        <div className="lg-consent rounded-2xl border border-cyan-300/25 bg-[linear-gradient(150deg,rgba(87,229,234,0.08),rgba(255,255,255,0.02))] p-5 sm:p-6">
+                          <p className="flex items-center gap-2 font-semibold text-white"><ShieldCheck className="h-4 w-4 text-cyan-300" />A parent or guardian needs to agree</p>
+                          <p className="mt-1.5 text-sm leading-6 text-slate-300">You&apos;re under {PARENTAL_CONSENT_AGE}, so please ask a parent or guardian to read this and fill it in with you.</p>
+                          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                            <Field label="Parent or guardian's name" htmlFor="guardianName" required error={visibleError("guardianName")}>
+                              <UnitInput id="guardianName" autoComplete="off" value={data.guardianName} aria-invalid={Boolean(visibleError("guardianName"))}
+                                onChange={(e) => updateData("guardianName", e.target.value)} placeholder="Full name" />
+                            </Field>
+                            <Field label="Their email" htmlFor="guardianEmail" required error={visibleError("guardianEmail")}>
+                              <UnitInput id="guardianEmail" type="email" inputMode="email" autoComplete="off" value={data.guardianEmail}
+                                aria-invalid={Boolean(visibleError("guardianEmail"))} onChange={(e) => updateData("guardianEmail", e.target.value)} placeholder="name@example.com" />
+                            </Field>
+                          </div>
+                          <label htmlFor="guardianConsent" className={cn("mt-5 flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition-colors",
+                            data.guardianConsent ? "border-cyan-300/40 bg-cyan-300/[0.06]" : visibleError("guardianConsent") ? "border-rose-400/50" : "border-white/10 hover:border-white/20")}>
+                            <input id="guardianConsent" type="checkbox" checked={data.guardianConsent} onChange={(e) => updateData("guardianConsent", e.target.checked)}
+                              aria-invalid={Boolean(visibleError("guardianConsent"))} className="mt-1 h-4 w-4 shrink-0 accent-cyan-300" />
+                            <span className="text-sm leading-6 text-slate-300">
+                              I am this athlete&apos;s parent or legal guardian. I agree to them using SwimGPT, including a paid plan, under the{" "}
+                              <Link href="/terms" target="_blank" className="text-cyan-200 underline decoration-cyan-200/30 underline-offset-2">Terms</Link>, and to SwimGPT processing their data
+                              as described in the{" "}
+                              <Link href="/privacy#children" target="_blank" className="text-cyan-200 underline decoration-cyan-200/30 underline-offset-2">Privacy Policy</Link>, including health
+                              information if they use Mind or Nutrition.
+                            </span>
+                          </label>
+                          {visibleError("guardianConsent") && <p className="mt-2 text-xs text-rose-300">{visibleError("guardianConsent")}</p>}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1326,7 +1382,7 @@ export default function OnboardingPage() {
                   <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-accent">Your coaching plan</p>
                     <h3 className="text-2xl font-bold">Activate your personalized program</h3>
-                    <p className="mt-2 text-sm text-muted-foreground">Your plan is generated. Start your monthly plan to unlock the dashboard, where you&apos;ll generate your first week of workouts.</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Your plan is generated. Start your subscription, monthly or yearly, to unlock the dashboard, where you&apos;ll generate your first week of workouts.</p>
                   </div>
                   <Button onClick={continueToPayment} size="lg" className="h-14 w-full rounded-full bg-accent text-lg text-accent-foreground shadow-[0_12px_32px_rgba(87,229,234,0.3)] hover:bg-accent/90">
                     Unlock my program<ChevronRight className="ml-2 h-5 w-5" />

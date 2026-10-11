@@ -60,12 +60,17 @@ class SubscriptionBillingTests(unittest.TestCase):
         retrieve.return_value = subscription(product="prod_1")  # not expanded: the app's own name for the plan
         self.assertEqual(self.call("get", "/api/subscription/billing")["plan_name"], "Performance Build")
 
-    def test_cancel_runs_to_the_end_of_the_paid_month(self, retrieve, modify, settings):
+    @patch("app.payments.stripe.Subscription.cancel")
+    @patch("app.payments.stripe.Refund.create")
+    def test_cancel_runs_to_the_end_of_the_paid_month(self, refund, cancel_now, retrieve, modify, settings):
         retrieve.return_value = subscription()
         modify.return_value = subscription(cancel_at_period_end=True, cancel_at=PERIOD_END)
         billing = self.call("post", "/api/subscription/cancel")
-        # Only renewal is switched off: the subscription is not deleted, refunded or ended early.
+        # Only renewal is switched off: the subscription is not deleted, refunded or ended early, whenever they cancel
+        # (the first days included). A paid month is paid.
         modify.assert_called_once_with("sub_1", cancel_at_period_end=True, expand=WITH_PRODUCT)
+        refund.assert_not_called()
+        cancel_now.assert_not_called()
         self.assertEqual((billing["cancel_at_period_end"], billing["status"], billing["period_end"]),
                          (True, "active", "2025-11-09T00:00:00+00:00"))
 

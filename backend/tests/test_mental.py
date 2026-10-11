@@ -79,6 +79,7 @@ class MentalApiTests(unittest.TestCase):
             ("app.mental.find_record", {"side_effect": lambda profile_id, key: self.rows[0] if self.rows and key == "mental" else None}),
             ("app.mental.get_supabase_client", {"return_value": self.supabase}),
             ("app.mental.save_record", {"new": self.save}),
+            ("app.mental.ensure_health_consent", {"return_value": None}),  # see test_consents
         ]:
             patcher = patch(target, **options)
             patcher.start()

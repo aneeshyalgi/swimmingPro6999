@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import stripe
 
 from app.main import PAYMENT_PLANS, app
-from app.payments import adopt_subscription, billing_account, first_month_coupon, is_paid
+from app.payments import adopt_subscription, billing_account, is_paid
 
 
 def profiles(*rows):
@@ -42,20 +42,16 @@ class OnboardingPaymentTests(unittest.TestCase):
             ("app.main.get_supabase_client", {"return_value": MagicMock(table=MagicMock(return_value=self.table))}),
             ("app.main.get_authenticated_user", {"side_effect": lambda authorization: self.user}),
             # By default the athlete's email has no Stripe customer yet.
-            ("app.main.billing_account", {"return_value": (None, None, False)}),
-            ("app.main.first_month_coupon", {"return_value": "swimgpt-first-month-700-usd"}),
+            ("app.main.billing_account", {"return_value": (None, None)}),
         ]:
             patcher = patch(target, **options)
             mocks[target] = patcher.start()
             self.addCleanup(patcher.stop)
         self.billing = mocks["app.main.billing_account"]
-        self.coupon = mocks["app.main.first_month_coupon"]
 
     @patch("app.main.stripe.checkout.Session.create")
-    def test_only_plan_checks_out_at_7_99_for_the_first_month_then_14_99_monthly(self, create):
-        self.assertEqual(list(PAYMENT_PLANS), ["performance-build"])
-        plan = PAYMENT_PLANS["performance-build"]
-        self.assertEqual((plan["amount"], plan["first_month_amount"]), (1499, 799))
+    def test_monthly_plan_checks_out_at_14_99_a_month(self, create):
+        self.assertEqual(list(PAYMENT_PLANS), ["performance-build", "performance-build-yearly"])
         create.return_value = SimpleNamespace(url="https://checkout.stripe.com/c/pay/test", id="cs_test_1")
         response = self.client.post("/api/payments/checkout", json={**self.payload, "amount": 1})
         self.assertEqual(response.status_code, 200)
@@ -67,12 +63,10 @@ class OnboardingPaymentTests(unittest.TestCase):
         self.assertEqual(options["managed_payments"], {"enabled": False})
         price = options["line_items"][0]["price_data"]
         self.assertEqual(price["unit_amount"], 1499)
-        # The first month's discount is the plan's coupon, taken off the first invoice only.
-        self.coupon.assert_called_once_with(plan)
-        self.assertEqual(options["discounts"], [{"coupon": "swimgpt-first-month-700-usd"}])
         self.assertEqual(price["currency"], "usd")
         self.assertEqual(price["recurring"], {"interval": "month"})
         self.assertEqual(options["line_items"][0]["quantity"], 1)
+        self.assertNotIn("discounts", options)  # $14.99 from the first month: no introductory price
         self.assertEqual(options["metadata"], self.payload)
         # The subscription itself names the SwimGPT account, and is billed to the account's own email.
         self.assertEqual(options["subscription_data"], {"metadata": self.payload})
@@ -80,28 +74,26 @@ class OnboardingPaymentTests(unittest.TestCase):
         self.assertNotIn("customer", options)
         self.assertEqual(options["client_reference_id"], "user-1")
         self.assertEqual(options["success_url"], "http://localhost:3000/payment/success?session_id={CHECKOUT_SESSION_ID}")
-        self.assertEqual(options["cancel_url"], "http://localhost:3000/subscribe?checkout=cancelled")
+        self.assertEqual(options["cancel_url"], "http://localhost:3000/subscribe?checkout=cancelled&plan=performance-build")
 
     @patch("app.main.stripe.checkout.Session.create")
-    def test_someone_who_subscribed_before_pays_the_full_price_from_the_start(self, create):
-        self.billing.return_value = (None, "cus_1", True)
+    def test_yearly_plan_checks_out_at_119_99_a_year(self, create):
         create.return_value = SimpleNamespace(url="https://checkout.stripe.com/c/pay/test", id="cs_test_1")
-        self.assertEqual(self.client.post("/api/payments/checkout", json=self.payload).status_code, 200)
+        payload = {**self.payload, "plan_id": "performance-build-yearly"}
+        self.assertEqual(self.client.post("/api/payments/checkout", json=payload).status_code, 200)
         options = create.call_args.kwargs
-        self.assertNotIn("discounts", options)
-        self.assertEqual(options["line_items"][0]["price_data"]["unit_amount"], 1499)
-        self.coupon.assert_not_called()
-
-    @patch("app.main.stripe.checkout.Session.create")
-    def test_no_checkout_when_the_first_month_price_cant_be_given(self, create):
-        self.coupon.side_effect = stripe.error.PermissionError("This key can't create coupons")
-        self.assertEqual(self.client.post("/api/payments/checkout", json=self.payload).status_code, 502)
-        create.assert_not_called()
-        self.table.update.assert_not_called()
+        price = options["line_items"][0]["price_data"]
+        self.assertEqual((price["unit_amount"], price["currency"], price["recurring"]), (11999, "usd", {"interval": "year"}))
+        self.assertEqual(price["product_data"]["name"], "Performance Build")
+        # Less than a year of monthly payments: the saving the payment screen shows.
+        self.assertLess(price["unit_amount"], 12 * PAYMENT_PLANS["performance-build"]["amount"])
+        self.assertEqual(options["metadata"], payload)
+        self.assertEqual(options["subscription_data"], {"metadata": payload})
+        self.assertEqual(options["cancel_url"], "http://localhost:3000/subscribe?checkout=cancelled&plan=performance-build-yearly")
 
     @patch("app.main.stripe.checkout.Session.create")
     def test_checkout_bills_the_athletes_existing_stripe_customer(self, create):
-        self.billing.return_value = (None, "cus_1", False)
+        self.billing.return_value = (None, "cus_1")
         create.return_value = SimpleNamespace(url="https://checkout.stripe.com/c/pay/test", id="cs_test_1")
         self.assertEqual(self.client.post("/api/payments/checkout", json=self.payload).status_code, 200)
         self.billing.assert_called_once_with(self.user)
@@ -114,7 +106,7 @@ class OnboardingPaymentTests(unittest.TestCase):
     def test_an_email_that_already_pays_is_never_charged_twice(self, create, adopt):
         # Say the athlete deleted their account and signed up again: their old subscription is still being paid.
         existing = SimpleNamespace(id="sub_old", customer="cus_1", metadata={})
-        self.billing.return_value = (existing, "cus_1", True)
+        self.billing.return_value = (existing, "cus_1")
         response = self.client.post("/api/payments/checkout", json=self.payload)
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"], "Your coaching plan is already active.")
@@ -188,7 +180,7 @@ class OnboardingPaymentTests(unittest.TestCase):
     @patch("app.payments.get_supabase_client")
     @patch("app.main.stripe.checkout.Session.retrieve")
     def test_paid_current_and_legacy_sessions_activate_profile(self, retrieve, get_supabase):
-        for plan_id in ("performance-build", "swim-foundation", "championship"):
+        for plan_id in ("performance-build", "performance-build-yearly", "swim-foundation", "championship"):
             with self.subTest(plan_id=plan_id):
                 supabase = MagicMock()
                 get_supabase.return_value = supabase
@@ -271,7 +263,11 @@ class OnboardingAccessTests(unittest.TestCase):
         self.assertEqual(screen["first_name"], "Aneesh")
         self.assertEqual(screen["offer"], {"id": "performance-build", **PAYMENT_PLANS["performance-build"]})
         offer = screen["offer"]
-        self.assertEqual((offer["amount"], offer["first_month_amount"], offer["currency"], offer["interval"]), (1499, 799, "usd", "month"))
+        self.assertEqual((offer["amount"], offer["currency"], offer["interval"]), (1499, "usd", "month"))
+        # Both ways to pay: monthly first, then yearly.
+        self.assertEqual(screen["offers"], [{"id": plan_id, **plan} for plan_id, plan in PAYMENT_PLANS.items()])
+        yearly = screen["offers"][1]
+        self.assertEqual((yearly["id"], yearly["amount"], yearly["currency"], yearly["interval"]), ("performance-build-yearly", 11999, "usd", "year"))
         self.assertEqual(screen["coach"]["name"], "Coach Pete")
         program = screen["program"]
         self.assertEqual((program["headline"], program["phase"], program["tags"]), ("Built for speed", "Race-specific speed", list("abcde")))
@@ -284,22 +280,11 @@ class OnboardingAccessTests(unittest.TestCase):
         self.row = None
         self.assertEqual(self.client.get("/api/subscription", headers=headers).status_code, 404)
 
-    @patch("app.main.billing_account")
-    def test_the_first_month_price_is_shown_only_to_a_new_subscriber(self, billing, user):
-        billing.return_value = (None, "cus_1", False)
-        self.assertEqual(self.get("/api/subscription")["offer"]["first_month_amount"], 799)
-        billing.return_value = (None, "cus_1", True)                     # subscribed before: the full price
-        offer = self.get("/api/subscription")["offer"]
-        self.assertEqual((offer["amount"], offer["first_month_amount"]), (1499, None))
-        billing.side_effect = stripe.error.APIConnectionError("Stripe is down")   # unknown: never promised
-        with self.assertLogs("app.main", "WARNING"):
-            self.assertIsNone(self.get("/api/subscription")["offer"]["first_month_amount"])
-
     @patch("app.main.adopt_subscription")
     @patch("app.main.billing_account")
     def test_payment_screen_opens_the_dashboard_for_an_email_that_already_pays(self, billing, adopt, user):
         existing = SimpleNamespace(id="sub_old", customer="cus_1", metadata={})
-        billing.return_value = (existing, "cus_1", True)
+        billing.return_value = (existing, "cus_1")
         self.assertTrue(self.get("/api/subscription")["paid"])
         adopt.assert_called_once_with(self.row, existing)
         # When Stripe can't be asked, the payment screen still shows; checkout asks again before charging.
@@ -337,72 +322,28 @@ class BillingAccountTests(unittest.TestCase):
             "cus_old": [stripe_subscription("sub_ending", 200, ending=True), stripe_subscription("sub_renewing", 100),
                         stripe_subscription("sub_unpaid", 400, status="unpaid")],
         }
-        subscriptions.side_effect = lambda customer, status, limit: listing(*owned[customer])
-        subscription, customer_id, subscribed_before = billing_account(self.user)
+        subscriptions.side_effect = lambda customer, limit: listing(*owned[customer])
+        subscription, customer_id = billing_account(self.user)
         # One that keeps renewing beats one that's ending; incomplete and unpaid ones aren't live.
-        self.assertEqual((subscription.id, customer_id, subscribed_before), ("sub_renewing", "cus_new", True))
+        self.assertEqual((subscription.id, customer_id), ("sub_renewing", "cus_new"))
         customers.assert_called_once_with(email="athlete@example.com", limit=100)
-        subscriptions.assert_any_call(customer="cus_old", status="all", limit=100)   # ended ones too
-
-    def test_only_a_paid_subscription_counts_as_subscribing_before(self, settings, customers, subscriptions):
-        customers.return_value = listing(SimpleNamespace(id="cus_1"))
-        subscriptions.side_effect = lambda customer, status, limit: listing(stripe_subscription("sub_abandoned", 100, status="incomplete_expired"))
-        self.assertEqual(billing_account(self.user), (None, "cus_1", False))
-        customers.return_value = listing(SimpleNamespace(id="cus_1"))
-        subscriptions.side_effect = lambda customer, status, limit: listing(stripe_subscription("sub_ended", 100, status="canceled"))
-        self.assertEqual(billing_account(self.user), (None, "cus_1", True))
 
     def test_newest_customer_is_reused_when_nothing_is_live(self, settings, customers, subscriptions):
         customers.return_value = listing(SimpleNamespace(id="cus_new"), SimpleNamespace(id="cus_old"))
-        subscriptions.side_effect = lambda customer, status, limit: listing(stripe_subscription("sub_past", 100, status="past_due"))
+        subscriptions.side_effect = lambda customer, limit: listing(stripe_subscription("sub_past", 100, status="past_due"))
         self.assertEqual(billing_account(self.user)[0].id, "sub_past")  # a renewal being retried still counts
-        subscriptions.side_effect = lambda customer, status, limit: listing()
+        subscriptions.side_effect = lambda customer, limit: listing()
         customers.return_value = listing(SimpleNamespace(id="cus_new"), SimpleNamespace(id="cus_old"))
-        self.assertEqual(billing_account(self.user), (None, "cus_new", False))
+        self.assertEqual(billing_account(self.user), (None, "cus_new"))
         customers.return_value = listing()
-        self.assertEqual(billing_account(self.user), (None, None, False))
+        self.assertEqual(billing_account(self.user), (None, None))
 
     def test_only_a_confirmed_email_is_looked_up(self, settings, customers, subscriptions):
         for user in (SimpleNamespace(id="u", email="athlete@example.com", email_confirmed_at=None),
                      SimpleNamespace(id="u", email=None, email_confirmed_at="2026-10-01T00:00:00Z"), SimpleNamespace(id="u")):
             with self.subTest(user=user):
-                self.assertEqual(billing_account(user), (None, None, False))
+                self.assertEqual(billing_account(user), (None, None))
         customers.assert_not_called()
-
-
-@patch("app.payments.stripe.Coupon.create")
-@patch("app.payments.stripe.Coupon.retrieve")
-@patch("app.payments.get_settings", return_value=SimpleNamespace(stripe_secret_key="sk_test_dummy"))
-class FirstMonthCouponTests(unittest.TestCase):
-    """$7.99 for the first month, then $14.99: $7.00 off the first invoice only, as a coupon made in Stripe once."""
-
-    plan = {"amount": 1499, "first_month_amount": 799, "currency": "usd"}
-
-    def coupon(self, **overrides):
-        return SimpleNamespace(**{"id": "swimgpt-first-month-700-usd", "valid": True, "amount_off": 700, "currency": "usd",
-                                  "duration": "once", **overrides})
-
-    def test_the_coupon_is_made_the_first_time_and_reused_after(self, settings, retrieve, create):
-        retrieve.side_effect = stripe.error.InvalidRequestError("No such coupon", "id", code="resource_missing")
-        create.return_value = self.coupon()
-        self.assertEqual(first_month_coupon(self.plan), "swimgpt-first-month-700-usd")
-        create.assert_called_once_with(id="swimgpt-first-month-700-usd", name="First month offer", amount_off=700, currency="usd",
-                                       duration="once")
-        retrieve.side_effect, retrieve.return_value = None, self.coupon()
-        create.reset_mock()
-        self.assertEqual(first_month_coupon(self.plan), "swimgpt-first-month-700-usd")
-        create.assert_not_called()
-
-    def test_a_coupon_that_no_longer_matches_stops_checkout(self, settings, retrieve, create):
-        for changed in ({"valid": False}, {"duration": "forever"}, {"amount_off": 500}):
-            with self.subTest(changed=changed):
-                retrieve.return_value = self.coupon(**changed)
-                with self.assertRaises(stripe.error.InvalidRequestError):
-                    first_month_coupon(self.plan)
-
-    def test_a_plan_without_a_first_month_price_needs_none(self, settings, retrieve, create):
-        self.assertIsNone(first_month_coupon({"amount": 1499, "currency": "usd"}))
-        retrieve.assert_not_called()
 
 
 @patch("app.payments.get_supabase_client")

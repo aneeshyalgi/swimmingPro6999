@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from postgrest.exceptions import APIError
+from pydantic import ValidationError
 import stripe
 
 from app.config import get_settings
@@ -34,9 +35,8 @@ from app.plan_store import router as plan_store_router
 from app.coach_audio import router as coach_audio_router
 from app.stroke_detection import router as stroke_detection_router
 from app.gym import gym_week, router as gym_router
-from app.payments import (
-    PAYMENT_PLANS, adopt_subscription, billing_account, first_month_coupon, is_paid, record_payment, subscription_summary,
-)
+from app.consents import PARENTAL_CONSENT_AGE, Guardian, record_new_athlete, router as consents_router
+from app.payments import PAYMENT_PLANS, adopt_subscription, billing_account, is_paid, record_payment, subscription_summary
 from app.video_access import checked_access, identify, release, start_analysis
 from app.swim_times import with_display_times
 from app.schemas import (
@@ -101,6 +101,7 @@ app.include_router(mental_router)
 app.include_router(plan_store_router)
 app.include_router(coach_audio_router)
 app.include_router(stroke_detection_router)
+app.include_router(consents_router)
 
 
 @app.get("/health")
@@ -350,10 +351,7 @@ def create_checkout_session(request: CheckoutSessionRequest, authorization: str 
 
     # Nor sell a second subscription to someone whose email already pays for one, such as from an account they deleted.
     try:
-        existing, customer_id, subscribed_before = billing_account(user)
-        if existing is None:
-            # A new subscriber's first month costs less; someone who has subscribed before pays the full price.
-            coupon = None if subscribed_before else first_month_coupon(selected_plan)
+        existing, customer_id = billing_account(user)
     except stripe.error.StripeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Stripe checkout error: {exc}") from exc
     if existing is not None:
@@ -389,16 +387,15 @@ def create_checkout_session(request: CheckoutSessionRequest, authorization: str 
                             "description": selected_plan["description"],
                         },
                         "unit_amount": selected_plan["amount"],
-                        # A real subscription: Stripe charges the card again every month until it is cancelled.
+                        # A real subscription: Stripe charges the card again every month (or year) until it is cancelled.
                         "recurring": {"interval": selected_plan["interval"]},
                     },
                     "quantity": 1,
                 }
             ],
-            # The first-month offer: taken off the first invoice only (Stripe's page shows both prices).
-            **({"discounts": [{"coupon": coupon}]} if coupon else {}),
             success_url=f"{settings.frontend_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{settings.frontend_url}/subscribe?checkout=cancelled",
+            # Back on the payment screen with the same billing (monthly or yearly) still chosen.
+            cancel_url=f"{settings.frontend_url}/subscribe?checkout=cancelled&plan={request.plan_id}",
             client_reference_id=request.auth_user_id,
             metadata=metadata,
             # The subscription names its SwimGPT account too, so the Stripe dashboard shows whose it is.
@@ -577,6 +574,17 @@ def save_onboarding(submission: OnboardingSubmission, authorization: str | None 
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Your account has no name. Sign in again and add your name.")
     supabase = get_supabase_client()
     existing = latest_profile_row(user.id)
+    # A new athlete under 16 needs a parent or guardian to agree (athletes who joined before are unaffected).
+    guardian = None
+    if existing is None and submission.age < PARENTAL_CONSENT_AGE:
+        if not submission.guardian_consent:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Athletes under 16 need a parent or guardian to agree. Ask them to fill in their details on the first step.")
+        try:
+            guardian = Guardian(name=submission.guardian_name, email=submission.guardian_email)
+        except ValidationError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Add your parent or guardian's name and email address on the first step.") from exc
     record = {**submission.to_storage_record(), "full_name": full_name, "auth_user_id": user.id}
     coach_choice = submission.coach
     # An athlete who has paid changes coach from the dashboard, where each switch is paid for; editing their answers
@@ -609,6 +617,8 @@ def save_onboarding(submission: OnboardingSubmission, authorization: str | None 
         ).execute()
         supabase.table("user_coach_matches").delete().eq("user_id", row["id"]).execute()
         supabase.table("user_coach_matches").insert({"user_id": row["id"], "coach_name": coach}).execute()
+        if existing is None:
+            record_new_athlete(row["id"], guardian)
     except APIError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Supabase persistence error: {exc}") from exc
 
@@ -654,8 +664,8 @@ def get_onboarding_answers(authorization: str | None = Header(default=None)) -> 
 
 @app.get("/api/subscription")
 def get_subscription(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    """The monthly payment screen: whether the athlete has paid, the exact price Stripe charges, and a preview of the
-    program the payment unlocks (built from their saved plan, so nothing is generated here)."""
+    """The payment screen: whether the athlete has paid, the exact prices Stripe charges (monthly and yearly), and a
+    preview of the program the payment unlocks (built from their saved plan, so nothing is generated here)."""
     user = get_authenticated_user(authorization)
     row = latest_profile_row(user.id)
     if row is None:
@@ -668,17 +678,13 @@ def get_subscription(authorization: str | None = Header(default=None)) -> dict[s
         fit = coach_recommendation(with_display_times(row), coach) if coach else None
     except ValueError:
         fit = None
-    plan_id, offer = next(iter(PAYMENT_PLANS.items()))
+    offers = [{"id": plan_id, **offer} for plan_id, offer in PAYMENT_PLANS.items()]
     paid = is_paid(row)
-    # Shown only when checkout will give it: to a new subscriber, and never when Stripe can't say who that is.
-    first_month = None
     if not paid:
         # Someone whose email already pays for a subscription (say, from an account they deleted) goes straight to the
         # dashboard instead of being asked to pay again.
         try:
-            existing, _, subscribed_before = billing_account(user)
-            if not subscribed_before:
-                first_month = offer.get("first_month_amount")
+            existing, _ = billing_account(user)
         except stripe.error.StripeError:
             logger.warning("Could not look up an existing subscription for the payment screen", exc_info=True)
             existing = None
@@ -689,7 +695,9 @@ def get_subscription(authorization: str | None = Header(default=None)) -> dict[s
         "paid": paid,
         "user_key": row["user_key"],
         "first_name": str(row.get("full_name") or "").split(" ")[0],
-        "offer": {"id": plan_id, **offer, "first_month_amount": first_month},
+        "offers": offers,
+        # The monthly plan alone, for a payment screen that was loaded before yearly billing existed.
+        "offer": offers[0],
         "coach": {"name": fit["name"], "title": fit["title"], "inspired_by": fit["inspired_by"]} if fit else None,
         "program": {
             "headline": (plan.get("coach_match") or {}).get("headline"),

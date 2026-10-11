@@ -14,6 +14,7 @@ import {
   CreditCard,
   Dumbbell,
   Gauge,
+  KeyRound,
   LayoutDashboard,
   Layers,
   LogOut,
@@ -34,6 +35,8 @@ import { WaterBubbles } from "@/components/water-bubbles"
 import { TrainingPanel } from "@/components/training-panel"
 import { NutritionPanel } from "@/components/nutrition/nutrition-panel"
 import { MentalPanel } from "@/components/mental/mental-panel"
+import { HealthConsentGate } from "@/components/legal/health-consent-gate"
+import { LegalLinks } from "@/components/legal/legal-links"
 import { PaceCalculator } from "@/components/pace-calculator"
 import { StrokeLab } from "@/components/video-lab/stroke-lab"
 import { CoachAvatar } from "@/components/coach-avatar"
@@ -41,6 +44,7 @@ import { CoachSwitcher, type SwitchReturn } from "@/components/coach-switcher"
 import { GettingStarted, GuideSpotlight, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
 import { SubscriptionDialog } from "@/components/subscription-dialog"
+import { ChangePasswordDialog } from "@/components/change-password-dialog"
 import { WorkoutBuilderSection } from "@/components/workout-builder-section"
 import { Banner } from "@/components/training-ui"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
@@ -110,6 +114,7 @@ export default function DashboardPage() {
   const [setupStep, setSetupStep] = useState<SetupStep | null>(null)
   const [guideEvent, setGuideEvent] = useState<{ type: GuideEvent; at: number } | null>(null)
   const [subscriptionOpen, setSubscriptionOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
   const [coachSwitcherOpen, setCoachSwitcherOpen] = useState(false)
   const [switchReturn, setSwitchReturn] = useState<SwitchReturn | null>(null)
   // Counts Workout Builder clicks; each one replays its launch animation in the nav.
@@ -443,6 +448,18 @@ export default function DashboardPage() {
               <Button
                 variant="ghost"
                 className={cn(
+                  "w-full rounded-xl text-slate-400 hover:bg-white/[0.06] hover:text-white",
+                  sidebarCollapsed ? "justify-center px-0" : "justify-start",
+                )}
+                onClick={() => setPasswordOpen(true)}
+                title="Change password"
+              >
+                <KeyRound className="h-4 w-4 shrink-0" />
+                {!sidebarCollapsed && <span>Change password</span>}
+              </Button>
+              <Button
+                variant="ghost"
+                className={cn(
                   "w-full rounded-xl text-slate-400 hover:bg-rose-400/10 hover:text-rose-200",
                   sidebarCollapsed ? "justify-center px-0" : "justify-start",
                 )}
@@ -497,6 +514,9 @@ export default function DashboardPage() {
                   )}
                   <Button variant="ghost" size="icon" className="rounded-full text-slate-300 hover:bg-white/[0.06] lg:hidden" onClick={() => setSubscriptionOpen(true)} aria-label="Subscription">
                     <CreditCard className="h-5 w-5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="rounded-full text-slate-300 hover:bg-white/[0.06] lg:hidden" onClick={() => setPasswordOpen(true)} aria-label="Change password">
+                    <KeyRound className="h-5 w-5" />
                   </Button>
                   <Button variant="ghost" size="icon" className="rounded-full text-slate-300 hover:bg-white/[0.06] lg:hidden" onClick={handleSignOut} aria-label="Sign out">
                     <LogOut className="h-5 w-5" />
@@ -591,10 +611,14 @@ export default function DashboardPage() {
                 <WorkoutBuilderSection onChanged={refreshOverview} onOpenGymWeek={openGymWeek} />
               </TabsContent>
               <TabsContent value="nutrition" className="mt-0">
-                <NutritionPanel firstName={firstName} trainingToday={overview.today.length > 0} />
+                <HealthConsentGate feature="nutrition">
+                  <NutritionPanel firstName={firstName} trainingToday={overview.today.length > 0} />
+                </HealthConsentGate>
               </TabsContent>
               <TabsContent value="mental" className="mt-0">
-                <MentalPanel firstName={firstName} />
+                <HealthConsentGate feature="mind">
+                  <MentalPanel firstName={firstName} />
+                </HealthConsentGate>
               </TabsContent>
               <TabsContent value="video" className="mt-0">
                 <StrokeLab variant="dashboard" />
@@ -603,11 +627,13 @@ export default function DashboardPage() {
                 <PaceCalculator />
               </TabsContent>
             </div>
+            <LegalLinks className="pb-8 pt-2" />
           </main>
         </div>
       </Tabs>
       {peek && <GuideSpotlight key={peek} target={peek} onClose={() => setPeek(null)} />}
       <SubscriptionDialog open={subscriptionOpen} onOpenChange={setSubscriptionOpen} />
+      <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
       {coach && (
         <CoachSwitcher open={coachSwitcherOpen} current={coach} returned={switchReturn}
           onClose={() => { setCoachSwitcherOpen(false); setSwitchReturn(null) }} onSwitched={refreshAfterCoachSwitch} />

@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { Waves } from "lucide-react"
+import { LegalLinks } from "@/components/legal/legal-links"
 
 export function SiteFooter() {
   return (
@@ -9,11 +10,14 @@ export function SiteFooter() {
           <Waves className="h-4 w-4 text-accent" />
           <span>© {new Date().getFullYear()} SwimGPT. The future of swim coaching.</span>
         </div>
-        <nav className="flex gap-6" aria-label="Footer">
-          <Link href="/training-plans" className="transition-colors hover:text-white">Training Plans</Link>
-          <Link href="/video-analysis" className="transition-colors hover:text-white">Video Analysis</Link>
-          <Link href="/auth" className="transition-colors hover:text-white">Log in</Link>
-        </nav>
+        <div className="flex flex-col items-center gap-3 md:items-end">
+          <nav className="flex flex-wrap justify-center gap-x-6 gap-y-2" aria-label="Footer">
+            <Link href="/training-plans" className="transition-colors hover:text-white">Training Plans</Link>
+            <Link href="/video-analysis" className="transition-colors hover:text-white">Video Analysis</Link>
+            <Link href="/auth" className="transition-colors hover:text-white">Log in</Link>
+          </nav>
+          <LegalLinks />
+        </div>
       </div>
     </footer>
   )

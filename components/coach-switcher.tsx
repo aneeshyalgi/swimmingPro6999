@@ -551,7 +551,7 @@ function Confirm({ from, to, cost, bestMatch, paidAmount, format, paying, error,
               <span className="block text-xs leading-5 text-slate-400">
                 {covered ? `Your earlier ${format(paidAmount)} payment covers this switch.`
                   : rest ? `This switch is ${format(cost.price)}, and ${format(cost.price - cost.due)} of it is already paid.`
-                  : "Paid securely with Stripe. Your monthly plan stays the same."}
+                  : "Paid securely with Stripe. Your subscription stays the same."}
               </span>
             </span>
             {covered ? (

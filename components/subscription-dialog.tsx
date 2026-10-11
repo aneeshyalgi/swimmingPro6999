@@ -37,11 +37,11 @@ async function billingRequest(method: "GET" | "POST", path: string): Promise<Bil
 }
 
 const longDate = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "the end of your billing month"
+  iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "the end of your billing period"
 
 /**
- * The athlete's monthly subscription. Cancelling stops renewal only: no refund, and the dashboard stays open until the
- * month they paid for ends. Until then they can change their mind and keep the subscription.
+ * The athlete's subscription, monthly or yearly. Cancelling stops renewal only: no refund, and the dashboard stays open
+ * until the month or year they paid for ends. Until then they can change their mind and keep the subscription.
  */
 export function SubscriptionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [billing, setBilling] = useState<Billing | null>(null)
@@ -156,7 +156,7 @@ export function SubscriptionDialog({ open, onOpenChange }: { open: boolean; onOp
                   <p className="font-semibold text-white">Cancel your subscription?</p>
                   <ul className="mt-2 space-y-1.5 text-sm leading-6 text-slate-300">
                     <li>You won&apos;t be charged again.</li>
-                    <li>You keep full access until <span className="font-semibold text-white">{endDate}</span>, the end of the month you&apos;ve paid for.</li>
+                    <li>You keep full access until <span className="font-semibold text-white">{endDate}</span>, the end of the {billing.interval === "year" ? "year" : "month"} you&apos;ve paid for.</li>
                     <li>Payments already made aren&apos;t refunded.</li>
                   </ul>
                 </div>

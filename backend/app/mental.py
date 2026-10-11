@@ -19,6 +19,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.auth import get_authenticated_profile
+from app.consents import ensure_health_consent
 from app.db import get_supabase_client
 from app.nutrition import local_day
 from app.training import TrainingRoute, find_record, save_record
@@ -199,6 +200,7 @@ def _payload(details: dict[str, Any] | None, day: Date) -> dict[str, Any]:
 @router.get("")
 def get_mental(day: Date | None = Query(default=None, alias="date"), authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
+    ensure_health_consent(profile["id"])
     row = find_record(profile["id"], KEY)
     return _payload(row["details"] if row else None, local_day(day))
 
@@ -207,6 +209,7 @@ def get_mental(day: Date | None = Query(default=None, alias="date"), authorizati
 def save_mental(answers: MentalAnswers, day: Date | None = Query(default=None, alias="date"),
                 authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
+    ensure_health_consent(profile["id"])
     row = find_record(profile["id"], KEY)
     details = {
         "answers": answers.model_dump(mode="json"), "checkins": (row["details"].get("checkins") if row else None) or {},
@@ -219,6 +222,7 @@ def save_mental(answers: MentalAnswers, day: Date | None = Query(default=None, a
 @router.post("/checkin")
 def check_in(entry: CheckIn, authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
+    ensure_health_consent(profile["id"])
     day = local_day(entry.date, strict=True)
     row = find_record(profile["id"], KEY)
     if row is None:

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import type { User } from "@supabase/supabase-js"
-import { CalendarDays, Home, LayoutDashboard, LogOut, Menu, Video, Waves } from "lucide-react"
+import { CalendarDays, Home, KeyRound, LayoutDashboard, LogOut, Menu, Video, Waves } from "lucide-react"
+import { ChangePasswordDialog } from "@/components/change-password-dialog"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -42,6 +43,7 @@ export function SiteNavbar() {
   const [user, setUser] = useState<User | null>(null)
   const [authReady, setAuthReady] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -220,6 +222,10 @@ export function SiteNavbar() {
                         Training hub
                       </Link>
                     </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setPasswordOpen(true)}>
+                      <KeyRound className="h-4 w-4" />
+                      Change password
+                    </DropdownMenuItem>
                     <DropdownMenuItem onSelect={handleSignOut}>
                       <LogOut className="h-4 w-4" />
                       Sign out
@@ -285,6 +291,12 @@ export function SiteNavbar() {
                       </Button>
                     </SheetClose>
                     <SheetClose asChild>
+                      <Button variant="outline" onClick={() => setPasswordOpen(true)}>
+                        <KeyRound className="mr-2 h-4 w-4" />
+                        Change password
+                      </Button>
+                    </SheetClose>
+                    <SheetClose asChild>
                       <Button variant="outline" onClick={handleSignOut}>
                         <LogOut className="mr-2 h-4 w-4" />
                         Sign out
@@ -310,6 +322,7 @@ export function SiteNavbar() {
           </Sheet>
         </div>
       </nav>
+      <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
     </header>
   )
 }

@@ -3,13 +3,20 @@
 import { Suspense, useEffect, useState, type CSSProperties, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { AlertTriangle, ArrowRight, CalendarCheck, CheckCircle2, Eye, EyeOff, Loader2, Lock, Mail, Sparkles, Trophy, User, Waves } from "lucide-react"
+import { AlertTriangle, ArrowLeft, CalendarCheck, CheckCircle2, Loader2, Lock, Mail, Sparkles, Trophy, User, Waves } from "lucide-react"
+import { AuthField, AuthSubmit, FormError, PasswordStrength, RevealButton } from "@/components/auth/auth-field"
+import { ResetRequest } from "@/components/auth/reset-request"
 import { CoachAvatar } from "@/components/coach-avatar"
+import { LegalLinks } from "@/components/legal/legal-links"
 import { WaterBubbles } from "@/components/water-bubbles"
+import { homePath, PASSWORD_MIN_LENGTH, safeNext } from "@/lib/account"
+import { LEGAL_VERSION } from "@/lib/legal"
 import { isSupabaseConfigured, supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 
-type Mode = "signin" | "signup"
+type Mode = "signin" | "signup" | "forgot"
+
+const modeOf = (value: string | null): Mode => (value === "signup" || value === "forgot" ? value : "signin")
 
 const COPY: Record<Mode, { eyebrow: string; title: ReactNode; body: string; card: string; cardBody: string }> = {
   signin: {
@@ -26,6 +33,13 @@ const COPY: Record<Mode, { eyebrow: string; title: ReactNode; body: string; card
     card: "Create your account",
     cardBody: "Set up takes about 3 minutes.",
   },
+  forgot: {
+    eyebrow: "Account recovery",
+    title: <>Locked out? Back in the <span className="au-gradient-text">water</span> in a minute.</>,
+    body: "We'll email you a secure link to choose a new password. Your plan, your sessions and your coach stay exactly as they are.",
+    card: "Reset your password",
+    cardBody: "Enter the email you use for SwimGPT and we'll send you a link to choose a new password.",
+  },
 }
 
 const COACHES = ["Coach Brad", "Coach Pete", "Coach Timothy", "Coach Robert", "Coach Tony"]
@@ -33,21 +47,6 @@ const COACHES = ["Coach Brad", "Coach Pete", "Coach Timothy", "Coach Robert", "C
 const REPS = [13.4, 13.3, 13.3, 13.2, 13.1, 13.1, 13.0, 12.9]
 // Faster reps stand taller.
 const barHeight = (seconds: number) => 30 + ((13.6 - seconds) / 0.7) * 60
-
-/** Where to go after signing in when another page sent the visitor here (like buying a training plan): a path on this
- * site only, never another site. */
-function safeNext(value: string | null) {
-  return value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\") ? value : null
-}
-
-function passwordScore(password: string) {
-  if (!password) return 0
-  let score = password.length >= 8 ? 1 : 0
-  if (password.length >= 12) score += 1
-  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score += 1
-  if (/\d/.test(password) && /[^A-Za-z0-9]/.test(password)) score += 1
-  return Math.max(1, score)
-}
 
 export default function AuthPage() {
   return (
@@ -67,7 +66,7 @@ export default function AuthPage() {
 function AuthPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [mode, setMode] = useState<Mode>(searchParams.get("mode") === "signup" ? "signup" : "signin")
+  const [mode, setMode] = useState<Mode>(modeOf(searchParams.get("mode")))
   const [fullName, setFullName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -76,6 +75,8 @@ function AuthPageContent() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [authError, setAuthError] = useState("")
   const [errorKey, setErrorKey] = useState(0)
+  // The email and password didn't match: the error offers a password reset.
+  const [wrongPassword, setWrongPassword] = useState(false)
   const [notice, setNotice] = useState("")
   const next = safeNext(searchParams.get("next"))
   // Buying a training plan needs only an account: no coaching setup or subscription.
@@ -88,19 +89,7 @@ function AuthPageContent() {
     }
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error("Your session could not be verified. Please sign in again.")
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/onboarding/status`, {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    })
-
-    if (!response.ok) {
-      throw new Error("We could not check your onboarding status. Please try again.")
-    }
-
-    const result = await response.json()
-
-    if (result.completed && result.user_key) localStorage.setItem("swimgpt_user_key", result.user_key)
-    // Setup first, then the monthly payment screen; the dashboard is only for athletes who have paid.
-    router.replace(!result.completed ? "/onboarding" : result.paid ? "/dashboard" : "/subscribe")
+    router.replace(await homePath(session.access_token))
   }
 
   useEffect(() => {
@@ -123,13 +112,15 @@ function AuthPageContent() {
   }, [router])
 
   useEffect(() => {
-    setMode(searchParams.get("mode") === "signup" ? "signup" : "signin")
+    setMode(modeOf(searchParams.get("mode")))
     setAuthError("")
+    setWrongPassword(false)
     setNotice("")
   }, [searchParams])
 
-  const showError = (message: string) => {
+  const showError = (message: string, mismatch = false) => {
     setAuthError(message)
+    setWrongPassword(mismatch)
     setErrorKey((key) => key + 1)
   }
 
@@ -153,6 +144,9 @@ function AuthPageContent() {
           options: {
             data: {
               full_name: fullName,
+              // Which Terms and Privacy Policy they agreed to by creating the account (the note under the button).
+              accepted_terms: LEGAL_VERSION,
+              accepted_terms_at: new Date().toISOString(),
             },
             emailRedirectTo: `${window.location.origin}${next ?? "/onboarding"}`,
           },
@@ -193,7 +187,11 @@ function AuthPageContent() {
 
       await redirectAfterAuth(data.user.id)
     } catch (error: any) {
-      showError(error?.message || "Authentication failed. Please try again.")
+      if (mode === "signin" && (error?.code === "invalid_credentials" || error?.message === "Invalid login credentials")) {
+        showError("That email and password don't match.", true)
+      } else {
+        showError(error?.message || "Authentication failed. Please try again.")
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -203,7 +201,7 @@ function AuthPageContent() {
     if (target !== mode) router.push(`/auth?mode=${target}${next ? `&next=${encodeURIComponent(next)}` : ""}`)
   }
   const toRead = Boolean(next?.startsWith("/training-plans/read/"))
-  const copy = toRead ? {
+  const copy = mode === "forgot" ? COPY.forgot : toRead ? {
     ...COPY[mode],
     body: "Your training plans are saved to the account you bought them with. Log in with it and your plan opens straight away.",
     cardBody: mode === "signup" ? "Free. Every plan you buy is saved to it." : "Then straight back to your plan.",
@@ -212,7 +210,6 @@ function AuthPageContent() {
     body: "A free account is all you need to buy a training plan: no subscription and no setup. Every plan you buy is saved to it.",
     cardBody: mode === "signup" ? "Free, and all you need to buy your plan." : "Then straight on to your plan's checkout.",
   } : COPY[mode]
-  const score = passwordScore(password)
 
   return (
     <div className="au-page relative min-h-screen overflow-hidden text-foreground">
@@ -305,133 +302,118 @@ function AuthPageContent() {
             <div className="relative overflow-hidden rounded-[29px] bg-[linear-gradient(180deg,rgba(15,22,30,0.97),rgba(8,12,17,0.98))] p-6 sm:p-8">
               <span aria-hidden className="au-card-glow" />
 
-              {/* Mode switch */}
-              <div role="tablist" aria-label="Account" className="relative grid grid-cols-2 rounded-2xl border border-white/[0.08] bg-black/30 p-1">
-                <span aria-hidden className={cn("au-pill absolute inset-y-1 left-1 w-[calc(50%-4px)] rounded-xl", mode === "signup" && "translate-x-full")} />
-                {(["signin", "signup"] as const).map((item) => (
-                  <button key={item} type="button" role="tab" aria-selected={mode === item} onClick={() => switchMode(item)}
-                    className={cn("relative z-10 rounded-xl py-2.5 text-sm font-semibold transition-colors duration-300", mode === item ? "text-slate-950" : "text-slate-400 hover:text-white")}>
-                    {item === "signin" ? "Log in" : "Create account"}
+              {mode === "forgot" ? (
+                <>
+                  <button type="button" onClick={() => switchMode("signin")}
+                    className="relative inline-flex items-center gap-1.5 py-1 text-sm font-medium text-slate-400 transition-colors hover:text-white">
+                    <ArrowLeft aria-hidden className="h-4 w-4" />Back to log in
                   </button>
-                ))}
-              </div>
-
-              <div key={`h-${mode}`} className="au-swap mt-7">
-                <h2 className="text-2xl font-bold tracking-tight text-white">{copy.card}</h2>
-                <p className="mt-1 text-sm text-slate-400">{copy.cardBody}</p>
-              </div>
-
-              <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-                {/* Name slides in for sign-up */}
-                <div className={cn("grid transition-[grid-template-rows,opacity] duration-500 ease-out", mode === "signup" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
-                  inert={mode !== "signup"}>
-                  <div className="overflow-hidden">
-                    <AuthField id="fullName" label="Full name" icon={User} type="text" autoComplete="name" value={fullName}
-                      onChange={setFullName} required={mode === "signup"} />
+                  <div className="relative mt-6">
+                    <ResetRequest title={copy.card} description={copy.cardBody} email={email} onEmail={setEmail} next={next} autoFocus />
                   </div>
-                </div>
-
-                <AuthField id="email" label="Email" icon={Mail} type="email" autoComplete="email" value={email} onChange={setEmail} required />
-
-                <div>
-                  <AuthField id="password" label="Password" icon={Lock} type={showPassword ? "text" : "password"}
-                    autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={setPassword} required
-                    minLength={mode === "signup" ? 6 : undefined}
-                    onKey={(event) => setCapsLock(event.getModifierState?.("CapsLock") ?? false)}
-                    adornment={
-                      <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}
-                        className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white">
-                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </>
+              ) : (
+                <>
+                  {/* Mode switch */}
+                  <div role="tablist" aria-label="Account" className="relative grid grid-cols-2 rounded-2xl border border-white/[0.08] bg-black/30 p-1">
+                    <span aria-hidden className={cn("au-pill absolute inset-y-1 left-1 w-[calc(50%-4px)] rounded-xl", mode === "signup" && "translate-x-full")} />
+                    {(["signin", "signup"] as const).map((item) => (
+                      <button key={item} type="button" role="tab" aria-selected={mode === item} onClick={() => switchMode(item)}
+                        className={cn("relative z-10 rounded-xl py-2.5 text-sm font-semibold transition-colors duration-300", mode === item ? "text-slate-950" : "text-slate-400 hover:text-white")}>
+                        {item === "signin" ? "Log in" : "Create account"}
                       </button>
-                    } />
-                  {capsLock && <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Caps Lock is on</p>}
-                  <div className={cn("grid transition-[grid-template-rows,opacity] duration-500", mode === "signup" && password ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
-                    <div className="overflow-hidden">
-                      <div className="flex items-center gap-1.5 pt-3" aria-live="polite">
-                        {[1, 2, 3, 4].map((bar) => (
-                          <span key={bar} className={cn("h-1 flex-1 rounded-full transition-all duration-500",
-                            bar <= score ? ["", "bg-rose-400", "bg-amber-300", "bg-cyan-300", "bg-emerald-400"][score] : "bg-white/10")} />
-                        ))}
-                        <span className="ml-2 w-14 text-right text-[11px] font-medium text-slate-400">{["", "Weak", "Okay", "Strong", "Excellent"][score]}</span>
+                    ))}
+                  </div>
+
+                  <div key={`h-${mode}`} className="au-swap mt-7">
+                    <h2 className="text-2xl font-bold tracking-tight text-white">{copy.card}</h2>
+                    <p className="mt-1 text-sm text-slate-400">{copy.cardBody}</p>
+                  </div>
+
+                  <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+                    {/* Name slides in for sign-up */}
+                    <div className={cn("grid transition-[grid-template-rows,opacity] duration-500 ease-out", mode === "signup" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
+                      inert={mode !== "signup"}>
+                      <div className="overflow-hidden">
+                        <AuthField id="fullName" label="Full name" icon={User} type="text" autoComplete="name" value={fullName}
+                          onChange={setFullName} required={mode === "signup"} />
                       </div>
                     </div>
-                  </div>
-                </div>
 
-                {authError && (
-                  <div key={errorKey} role="alert" className="au-shake flex items-start gap-2.5 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />{authError}
-                  </div>
-                )}
-                {notice && (
-                  <div role="status" className="au-swap flex items-start gap-2.5 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />{notice}
-                  </div>
-                )}
+                    <AuthField id="email" label="Email" icon={Mail} type="email" autoComplete="email" value={email} onChange={setEmail} required />
 
-                <button type="submit" disabled={isSubmitting}
-                  className="au-submit group relative mt-2 flex h-[54px] w-full items-center justify-center overflow-hidden rounded-2xl text-[15px] font-semibold text-slate-950 transition-transform duration-300 enabled:hover:-translate-y-0.5 disabled:cursor-progress">
-                  <span aria-hidden className="au-submit-sheen" />
-                  {isSubmitting && <span aria-hidden className="au-submit-wave" />}
-                  <span className="relative flex items-center">
-                    {isSubmitting ? (
-                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{mode === "signup" ? "Creating your account…" : "Signing you in…"}</>
-                    ) : (
-                      <>
-                        {mode === "signup" ? (forPlan ? "Create account and continue" : "Create account") : forPlan ? "Log in and continue" : "Continue to dashboard"}
-                        <ArrowRight className="ml-2 h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
-                      </>
+                    <div>
+                      <AuthField id="password" label="Password" icon={Lock} type={showPassword ? "text" : "password"}
+                        autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={setPassword} required
+                        minLength={mode === "signup" ? PASSWORD_MIN_LENGTH : undefined}
+                        onKey={(event) => setCapsLock(event.getModifierState?.("CapsLock") ?? false)}
+                        adornment={<RevealButton shown={showPassword} onToggle={() => setShowPassword((value) => !value)} />} />
+                      {(capsLock || mode === "signin") && (
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          {capsLock ? <p className="flex items-center gap-1.5 text-xs text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Caps Lock is on</p> : <span aria-hidden />}
+                          {mode === "signin" && (
+                            <button type="button" onClick={() => switchMode("forgot")}
+                              className="shrink-0 text-xs font-semibold text-cyan-300/90 underline-offset-4 transition-colors hover:text-cyan-200 hover:underline">
+                              Forgot password?
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <PasswordStrength password={password} show={mode === "signup"} />
+                    </div>
+
+                    {authError && (
+                      <FormError key={errorKey}>
+                        {authError}
+                        {wrongPassword && (
+                          <>
+                            {" "}
+                            <button type="button" onClick={() => switchMode("forgot")}
+                              className="font-semibold text-white underline decoration-white/40 underline-offset-2 transition-colors hover:decoration-white">
+                              Reset your password
+                            </button>
+                          </>
+                        )}
+                      </FormError>
                     )}
-                  </span>
-                </button>
-              </form>
+                    {notice && (
+                      <div role="status" className="au-swap flex items-start gap-2.5 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />{notice}
+                      </div>
+                    )}
 
-              <p className="mt-6 text-center text-sm text-slate-400">
-                {mode === "signin" ? "New to SwimGPT? " : "Already have an account? "}
-                <button type="button" onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}
-                  className="font-semibold text-cyan-300 underline-offset-4 transition-colors hover:text-cyan-200 hover:underline">
-                  {mode === "signin" ? "Create an account" : "Log in"}
-                </button>
-              </p>
+                    <AuthSubmit busy={isSubmitting} busyLabel={mode === "signup" ? "Creating your account…" : "Signing you in…"}>
+                      {mode === "signup" ? (forPlan ? "Create account and continue" : "Create account") : forPlan ? "Log in and continue" : "Continue to dashboard"}
+                    </AuthSubmit>
+                    {mode === "signup" && (
+                      <p className="text-center text-xs leading-5 text-slate-500">
+                        By creating an account, you agree to our{" "}
+                        <Link href="/terms" target="_blank" className="text-slate-300 underline decoration-white/20 underline-offset-2 transition-colors hover:text-white">Terms</Link>{" "}
+                        and confirm you&apos;ve read our{" "}
+                        <Link href="/privacy" target="_blank" className="text-slate-300 underline decoration-white/20 underline-offset-2 transition-colors hover:text-white">Privacy Policy</Link>.
+                      </p>
+                    )}
+                  </form>
+
+                  <p className="mt-6 text-center text-sm text-slate-400">
+                    {mode === "signin" ? "New to SwimGPT? " : "Already have an account? "}
+                    <button type="button" onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}
+                      className="font-semibold text-cyan-300 underline-offset-4 transition-colors hover:text-cyan-200 hover:underline">
+                      {mode === "signin" ? "Create an account" : "Log in"}
+                    </button>
+                  </p>
+                </>
+              )}
             </div>
           </div>
 
           <p className="au-rise mt-6 flex items-center justify-center gap-2 text-xs text-slate-500" style={{ "--i": 3 } as CSSProperties}>
             <Lock className="h-3.5 w-3.5" />Secured by Supabase Auth
           </p>
+          <LegalLinks className="au-rise mt-3" />
+
         </main>
       </div>
-    </div>
-  )
-}
-
-function AuthField({ id, label, icon: Icon, type, value, onChange, autoComplete, required, minLength, adornment, onKey }: {
-  id: string
-  label: string
-  icon: typeof Mail
-  type: string
-  value: string
-  onChange: (value: string) => void
-  autoComplete?: string
-  required?: boolean
-  minLength?: number
-  adornment?: ReactNode
-  onKey?: (event: React.KeyboardEvent<HTMLInputElement>) => void
-}) {
-  return (
-    <div className="au-field group relative">
-      <Icon aria-hidden className="pointer-events-none absolute left-4 top-1/2 z-10 h-[18px] w-[18px] -translate-y-1/2 text-slate-500 transition-colors duration-300 group-focus-within:text-cyan-300" />
-      <input id={id} type={type} value={value} placeholder=" " autoComplete={autoComplete} required={required} minLength={minLength}
-        onChange={(event) => onChange(event.target.value)} onKeyUp={onKey} onKeyDown={onKey}
-        className={cn("peer h-[58px] w-full rounded-2xl border border-white/10 bg-white/[0.03] pb-2 pl-12 pt-6 text-[15px] text-white outline-none transition-all duration-300",
-          "hover:border-white/20 focus:border-cyan-300/60 focus:bg-cyan-300/[0.04] focus:shadow-[0_0_0_4px_rgba(87,229,234,0.12),0_10px_30px_-10px_rgba(87,229,234,0.35)]",
-          adornment ? "pr-14" : "pr-4")} />
-      <label htmlFor={id}
-        className="pointer-events-none absolute left-12 top-1/2 -translate-y-[calc(50%+9px)] text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400 transition-all duration-300 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:text-[15px] peer-placeholder-shown:normal-case peer-placeholder-shown:tracking-normal peer-placeholder-shown:text-slate-500 peer-focus:-translate-y-[calc(50%+9px)] peer-focus:text-[11px] peer-focus:uppercase peer-focus:tracking-[0.14em] peer-focus:text-cyan-300">
-        {label}
-      </label>
-      {adornment && <span className="absolute right-2.5 top-1/2 -translate-y-1/2">{adornment}</span>}
-      <span aria-hidden className="au-underline pointer-events-none absolute inset-x-6 bottom-0 h-px scale-x-0 bg-gradient-to-r from-transparent via-cyan-300 to-transparent transition-transform duration-500 peer-focus:scale-x-100" />
     </div>
   )
 }

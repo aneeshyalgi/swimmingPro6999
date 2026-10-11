@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, type CSSProperties, type ReactNode } fro
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
-  AlertTriangle, ArrowRight, CalendarRange, Dumbbell, Info, LogOut, MessageCircle, ShieldCheck, Sparkles, Target, Timer,
+  AlertTriangle, ArrowRight, Dumbbell, Info, LogOut, MessageCircle, PiggyBank, ShieldCheck, Sparkles, Target, Timer,
   TrendingUp, Trophy, Waves, Zap,
 } from "lucide-react"
 import { CoachAvatar } from "@/components/coach-avatar"
@@ -15,13 +15,16 @@ import { cn } from "@/lib/utils"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
+type Offer = { id: string; name: string; description: string; amount: number; currency: string; interval: string }
+
 // GET /api/subscription (backend/app/main.py).
 type Screen = {
   paid: boolean
   user_key: string
   first_name: string
-  // first_month_amount: a new subscriber's first month (null when they've subscribed before); then `amount` monthly.
-  offer: { id: string; name: string; description: string; amount: number; currency: string; interval: string; first_month_amount: number | null }
+  // Monthly and yearly. A backend from before yearly billing sends only `offer`, the monthly plan.
+  offers?: Offer[]
+  offer: Offer
   coach: { name: string; title: string; inspired_by: string | null } | null
   program: {
     headline: string | null
@@ -39,7 +42,8 @@ type Screen = {
 const DIGITS = Array.from({ length: 20 }, (_, index) => index % 10)
 const GHOST_LINES = [["w-[88%]", "w-[62%]", "w-[74%]"], ["w-[70%]", "w-[84%]", "w-[52%]"], ["w-[80%]", "w-[58%]", "w-[90%]"]]
 
-/** Stripe bills a monthly subscription on the same day each month (the month's last day when it is shorter). */
+/** Stripe bills a monthly subscription on the same day each month (the month's last day when it is shorter), and a
+ * yearly one every twelve months. */
 function addMonths(date: Date, months: number) {
   const target = new Date(date.getFullYear(), date.getMonth() + months, 1)
   const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
@@ -55,6 +59,14 @@ function ordinal(day: number) {
 
 function money(cents: number, currency: string) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: currency.toUpperCase() }).format(cents / 100)
+}
+
+/** The monthly plan, the yearly one when it's offered, and whichever of them the athlete has chosen (monthly by default). */
+function plansOf(screen: Screen, chosenId: string | null) {
+  const offers = screen.offers ?? [screen.offer]
+  const monthly = offers.find((plan) => plan.interval === "month") ?? offers[0]
+  const yearly = offers.find((plan) => plan.interval === "year")
+  return { monthly, yearly, chosen: offers.find((plan) => plan.id === chosenId) ?? monthly }
 }
 
 async function errorDetail(response: Response, fallback: string) {
@@ -75,12 +87,17 @@ export default function SubscribePage() {
 }
 
 /**
- * The monthly payment screen. Every athlete who hasn't paid lands here (from sign-in, the dashboard and coach chat);
- * it previews the program they've already built and starts the Stripe subscription that unlocks it.
+ * The payment screen. Every athlete who hasn't paid lands here (from sign-in, the dashboard and coach chat); it
+ * previews the program they've already built and starts the Stripe subscription that unlocks it, billed monthly or
+ * yearly.
  */
 function SubscribeContent() {
   const router = useRouter()
-  const cancelled = useSearchParams().get("checkout") === "cancelled"
+  const params = useSearchParams()
+  const cancelled = params.get("checkout") === "cancelled"
+  // Back from a cancelled checkout, the billing they had chosen is still chosen.
+  const [planId, setPlanId] = useState(() => params.get("plan"))
+  const [switched, setSwitched] = useState(false)
   const [screen, setScreen] = useState<Screen | null>(null)
   const [loadError, setLoadError] = useState("")
   const [attempt, setAttempt] = useState(0)
@@ -144,7 +161,7 @@ function SubscribeContent() {
       const response = await fetch(`${API_URL}/api/payments/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ auth_user_id: session.user.id, user_key: screen.user_key, plan_id: screen.offer.id }),
+        body: JSON.stringify({ auth_user_id: session.user.id, user_key: screen.user_key, plan_id: plansOf(screen, planId).chosen.id }),
       })
       // Already paid (an earlier checkout went through, or this email already has a subscription): nothing to charge.
       if (response.status === 409) {
@@ -186,13 +203,20 @@ function SubscribeContent() {
   }
   if (!screen) return <Preparing />
 
-  const { offer, program, coach } = screen
+  const { program, coach } = screen
+  const { monthly, yearly, chosen: offer } = plansOf(screen, planId)
+  const isYearly = offer.interval === "year"
+  const choose = (id: string) => { setPlanId(id); setSwitched(true) }
   const price = money(offer.amount, offer.currency)
-  const firstMonth = offer.first_month_amount != null && offer.first_month_amount < offer.amount ? money(offer.first_month_amount, offer.currency) : null
-  const dueToday = firstMonth ?? price
+  // What paying yearly saves over twelve monthly payments. Shown only when it's a real saving in the same currency.
+  const yearOfMonthly = monthly.amount * 12
+  const saving = yearly && yearly.currency === monthly.currency ? Math.max(0, yearOfMonthly - yearly.amount) : 0
+  const savingPercent = Math.round((saving / yearOfMonthly) * 100)
   const today = new Date()
-  const renewals = [0, 1, 2, 3].map((months) => addMonths(today, months))
-  const billingDay = today.getDate() <= 28 ? `every month on the ${ordinal(today.getDate())}` : "on this date every month"
+  const renewals = [0, 1, 2, 3].map((count) => addMonths(today, isYearly ? count * 12 : count))
+  const billingDay = isYearly
+    ? today.getMonth() === 1 && today.getDate() === 29 ? "on this date every year" : `every year on ${today.toLocaleDateString("en-US", { month: "long", day: "numeric" })}`
+    : today.getDate() <= 28 ? `every month on the ${ordinal(today.getDate())}` : "on this date every month"
   const coachName = coach?.name ?? "your coach"
   const sessions = program.week.length ? program.week : Array.from({ length: Math.max(program.swim_sessions_per_week, 3) }, () => "Coach session")
   const features = [
@@ -232,7 +256,7 @@ function SubscribeContent() {
             <span className="au-gradient-text">ready to unlock.</span>
           </h1>
           <p className="au-rise mt-4 max-w-xl text-[15px] leading-7 text-slate-300" style={{ "--i": 2 } as CSSProperties}>
-            {program.headline ? `${program.headline}. ` : ""}Start your monthly plan to open your dashboard and this week&apos;s sessions.
+            {program.headline ? `${program.headline}. ` : ""}Start your plan to open your dashboard and this week&apos;s sessions.
           </p>
         </section>
 
@@ -253,27 +277,71 @@ function SubscribeContent() {
                       </p>
                     )}
 
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-lg font-bold text-white">{offer.name}</p>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-cyan-200">
-                        <CalendarRange className="h-3.5 w-3.5" />Monthly
-                      </span>
-                    </div>
+                    <p className="text-lg font-bold text-white">{offer.name}</p>
+
+                    {yearly && (
+                      <div role="group" aria-label="Billing" className="relative mt-4 grid grid-cols-2 rounded-2xl border border-white/10 bg-black/30 p-1">
+                        <span aria-hidden className="sb-toggle-thumb absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-xl"
+                          style={{ transform: isYearly ? "translateX(100%)" : "none" }} />
+                        {[monthly, yearly].map((plan) => {
+                          const active = plan.id === offer.id
+                          return (
+                            <button key={plan.id} type="button" aria-pressed={active} onClick={() => choose(plan.id)}
+                              className={cn("relative flex h-11 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-colors duration-300",
+                                active ? "text-slate-950" : "text-slate-300 hover:text-white")}>
+                              {plan.interval === "year" ? "Yearly" : "Monthly"}
+                              {plan.interval === "year" && saving > 0 && (
+                                <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                                  active ? "bg-slate-950/85 text-emerald-300" : "sb-save-badge bg-emerald-400 text-emerald-950")}>
+                                  Save {savingPercent}%
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
 
                     <p className="mt-5 flex items-end gap-2">
-                      <span className="sr-only">{firstMonth ? `${firstMonth} for your first month, then ${price} per month` : `${price} per month`}</span>
+                      <span className="sr-only">{price} per {offer.interval}</span>
                       <span aria-hidden className="sb-price inline-flex items-start text-[64px] font-black leading-none tracking-tight text-white tabular-nums">
-                        <Odometer text={dueToday.replace(/\.\d+$/, "")} />
-                        <span className="text-[30px] text-slate-300">{dueToday.match(/\.\d+$/)?.[0]}</span>
+                        <Odometer key={offer.id} text={price.replace(/\.\d+$/, "")} quick={switched} />
+                        <span className="text-[30px] text-slate-300">{price.match(/\.\d+$/)?.[0]}</span>
                       </span>
-                      <span aria-hidden className="pb-1.5 text-sm font-medium text-slate-400">{firstMonth ? "first month" : "/ month"}</span>
+                      <span aria-hidden className="pb-1.5 text-sm font-medium text-slate-400">/ {offer.interval}</span>
                     </p>
                     <p className="mt-2 text-sm text-slate-400">
-                      {firstMonth ? <>Then <span className="font-semibold text-slate-200">{price} a month</span>. Renews automatically each month.</>
+                      {isYearly
+                        ? <>That&apos;s <span className="font-semibold text-slate-200">{money(Math.round(offer.amount / 12), offer.currency)} a month</span>, billed once a year. Renews automatically each year.</>
                         : "Billed monthly. Renews automatically each month."}
                     </p>
 
-                    <BillingTimeline renewals={renewals} charges={renewals.map((_, index) => (index === 0 ? dueToday : price))} />
+                    {yearly && saving > 0 && (isYearly ? (
+                      <div key="saving" className="sb-saving mt-5 flex items-start gap-3 rounded-2xl border border-emerald-300/30 bg-emerald-400/[0.08] p-4">
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-400/15 text-emerald-300"><PiggyBank className="h-[18px] w-[18px]" /></span>
+                        <div className="min-w-0 text-sm">
+                          <p className="font-semibold text-emerald-50">You save <span className="text-emerald-300">{money(saving, monthly.currency)}</span> a year</p>
+                          <p className="mt-1 text-xs leading-5 text-emerald-100/70">
+                            12 monthly payments of {money(monthly.amount, monthly.currency)} come to <span className="line-through decoration-emerald-200/60">{money(yearOfMonthly, monthly.currency)}</span>.
+                            Yearly, you pay {money(yearly.amount, yearly.currency)}.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <button key="nudge" type="button" onClick={() => choose(yearly.id)}
+                        className="sb-saving group mt-5 flex w-full items-center gap-3 rounded-2xl border border-emerald-300/20 bg-emerald-400/[0.05] p-4 text-left text-sm transition-colors hover:border-emerald-300/40 hover:bg-emerald-400/[0.09]">
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-400/15 text-emerald-300"><PiggyBank className="h-[18px] w-[18px]" /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block font-semibold text-emerald-50">Pay yearly and save <span className="text-emerald-300">{money(saving, monthly.currency)}</span> a year</span>
+                          <span className="mt-0.5 block text-xs leading-5 text-emerald-100/70">
+                            {money(yearly.amount, yearly.currency)} a year instead of {money(yearOfMonthly, monthly.currency)} (12 × {money(monthly.amount, monthly.currency)}).
+                          </span>
+                        </span>
+                        <ArrowRight className="h-4 w-4 shrink-0 text-emerald-300 transition-transform group-hover:translate-x-1" />
+                      </button>
+                    ))}
+
+                    <BillingTimeline key={offer.id} renewals={renewals} price={price} yearly={isYearly} />
 
                     <ul className="mt-7 space-y-3">
                       {features.map((feature, index) => (
@@ -304,13 +372,13 @@ function SubscribeContent() {
                             <path className="sb-shackle" d="M8 11V7a4 4 0 0 1 8 0v4" />
                             <rect x="5" y="11" width="14" height="10" rx="2.5" />
                           </svg>
-                          {starting ? "Opening secure checkout…" : "Start my monthly plan"}
+                          {starting ? "Opening secure checkout…" : `Start my ${isYearly ? "yearly" : "monthly"} plan`}
                           {!starting && <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />}
                         </span>
                       </button>
                     </div>
                     <p className="mt-3 text-center text-xs leading-5 text-slate-400">
-                      {dueToday} today, then {price} {billingDay}.
+                      {price} today, then {price} {billingDay}.
                     </p>
 
                     <div className="mt-6 grid grid-cols-3 gap-2 border-t border-white/[0.07] pt-5 text-center text-[11px] leading-4 text-slate-400">
@@ -386,7 +454,7 @@ function SubscribeContent() {
                       <path d="M8 11V7a4 4 0 0 1 8 0v4" /><rect x="5" y="11" width="14" height="10" rx="2.5" />
                     </svg>
                   </span>
-                  <span className="text-xs font-semibold text-white">Unlocks with your monthly plan</span>
+                  <span className="text-xs font-semibold text-white">Unlocks with your plan</span>
                 </div>
               </div>
             </div>
@@ -453,8 +521,8 @@ function Preparing() {
   )
 }
 
-/** Digits roll a full turn and settle on the price, like a race clock stopping. */
-function Odometer({ text }: { text: string }) {
+/** Digits roll a full turn and settle on the price, like a race clock stopping (`quick`: faster, after a switch of plan). */
+function Odometer({ text, quick = false }: { text: string; quick?: boolean }) {
   const [rolled, setRolled] = useState(false)
   useEffect(() => {
     let inner = 0
@@ -466,9 +534,9 @@ function Odometer({ text }: { text: string }) {
     <>
       {[...text].map((char, index) => {
         if (!/\d/.test(char)) return <span key={index}>{char}</span>
-        const delay = 250 + order++ * 160
+        const delay = quick ? order++ * 70 : 250 + order++ * 160
         return (
-          <span key={index} className="sb-odo">
+          <span key={index} className={cn("sb-odo", quick && "sb-odo-quick")}>
             <span className="sb-odo-strip" style={{ transform: `translateY(${rolled ? -(10 + Number(char)) : 0}em)`, "--d": `${delay}ms` } as CSSProperties}>
               {DIGITS.map((digit, position) => <span key={position}>{digit}</span>)}
             </span>
@@ -479,9 +547,10 @@ function Odometer({ text }: { text: string }) {
   )
 }
 
-/** Today's charge and the next three monthly renewals (`charges`: what each of those dates costs). */
-function BillingTimeline({ renewals, charges }: { renewals: Date[]; charges: string[] }) {
-  const label = (date: Date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+/** Today's charge and the next three renewals, a month or (`yearly`) a year apart. */
+function BillingTimeline({ renewals, price, yearly = false }: { renewals: Date[]; price: string; yearly?: boolean }) {
+  // Yearly renewals by month and year ("Oct 2027"), short enough for a phone; the day is in the line under the button.
+  const label = (date: Date) => date.toLocaleDateString("en-US", yearly ? { month: "short", year: "numeric" } : { month: "short", day: "numeric" })
   return (
     <div className="mt-6 rounded-2xl border border-white/[0.08] bg-black/25 px-4 pb-4 pt-5">
       <div className="relative mx-3 h-1 rounded-full bg-white/[0.08]">
@@ -497,7 +566,7 @@ function BillingTimeline({ renewals, charges }: { renewals: Date[]; charges: str
         {renewals.map((date, index) => (
           <li key={index} className="sb-label" style={{ "--i": index } as CSSProperties}>
             <p className={cn("text-[11px] font-semibold", index === 0 ? "text-cyan-200" : "text-slate-300")}>{index === 0 ? "Today" : label(date)}</p>
-            <p className="text-[11px] tabular-nums text-slate-500">{charges[index]}</p>
+            <p className="text-[11px] tabular-nums text-slate-500">{price}</p>
           </li>
         ))}
       </ol>

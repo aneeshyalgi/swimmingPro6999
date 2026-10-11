@@ -21,6 +21,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.auth import get_authenticated_profile
+from app.consents import ensure_health_consent
 from app.db import get_supabase_client
 from app.training import TrainingRoute, find_record, save_record
 
@@ -281,6 +282,7 @@ def _payload(profile: dict[str, Any], details: dict[str, Any] | None, day: Date)
 @router.get("")
 def get_nutrition(day: Date | None = Query(default=None, alias="date"), authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
+    ensure_health_consent(profile["id"])
     row = find_record(profile["id"], KEY)
     return _payload(profile, row["details"] if row else None, local_day(day))
 
@@ -289,6 +291,7 @@ def get_nutrition(day: Date | None = Query(default=None, alias="date"), authoriz
 def save_nutrition(answers: NutritionAnswers, day: Date | None = Query(default=None, alias="date"),
                    authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
+    ensure_health_consent(profile["id"])
     today = local_day(day)
     row = find_record(profile["id"], KEY)
     details = {
@@ -302,6 +305,7 @@ def save_nutrition(answers: NutritionAnswers, day: Date | None = Query(default=N
 @router.post("/water")
 def log_water(entry: WaterLog, authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
+    ensure_health_consent(profile["id"])
     day = local_day(entry.date, strict=True)
     row = find_record(profile["id"], KEY)
     if row is None:

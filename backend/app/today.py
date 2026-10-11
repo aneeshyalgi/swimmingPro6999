@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.auth import get_authenticated_profile
 from app.config import get_settings
+from app.consents import ensure_health_consent
 from app.context import athlete_coach, chat_context
 from app.db import get_supabase_client
 
@@ -352,6 +353,7 @@ COACH PROGRAM (base today's swim on one of this coach's actual sessions, adapted
 def save_feedback(submission: FeedbackSubmission, authorization: str | None = Header(default=None)) -> TodayResponse:
     try:
         profile = get_authenticated_profile(authorization)
+        ensure_health_consent(profile["id"])
         day = _day().isoformat()
         if submission.date.isoformat() != day:
             raise HTTPException(status_code=409, detail="The UTC day has changed. Reload Today before submitting your check-in.")

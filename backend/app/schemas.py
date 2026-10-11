@@ -43,7 +43,7 @@ def seconds_of(time: "SwimTime") -> float:
 class OnboardingSubmission(BaseModel):
     """What the onboarding form collects. The account (auth user and name) comes from the session, never the body."""
 
-    age: int = Field(ge=8, le=100)
+    age: int = Field(ge=13, le=100)
     gender: Literal["male", "female", "other"]
     country: str = Field(min_length=1, max_length=80)
     height: float | None = Field(default=None, ge=100, le=250)
@@ -63,6 +63,11 @@ class OnboardingSubmission(BaseModel):
     # The one coach the athlete picked; none uses the recommended coach. Not a profile column: the final coach is
     # stored as recommended_coaches (a one-item list).
     coach: str | None = Field(default=None, max_length=80)
+    # A new athlete under 16: the parent or guardian who agrees to them using SwimGPT (kept in consents.py, not the
+    # profile).
+    guardian_name: str = Field(default="", max_length=120)
+    guardian_email: str = Field(default="", max_length=254)
+    guardian_consent: bool = False
 
     # Older clients also send auth_user_id, user_key, full_name, coaches and recommended_coaches; they are ignored.
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
@@ -119,7 +124,7 @@ class OnboardingSubmission(BaseModel):
         return self
 
     def to_storage_record(self) -> dict[str, Any]:
-        record = self.model_dump(exclude={"coach"})
+        record = self.model_dump(exclude={"coach", "guardian_name", "guardian_email", "guardian_consent"})
         for field in ("height", "weight"):  # whole numbers stay integers, as in existing rows
             if isinstance(record[field], float) and record[field].is_integer():
                 record[field] = int(record[field])

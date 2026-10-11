@@ -432,6 +432,12 @@
 .pt-wave-track { display: flex; width: 200%; height: 100%; animation: pt-flow linear infinite; }
 @keyframes pt-flow { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
+/* At rest the water waits out of sight, hidden and still: otherwise every page keeps drawing and animating it, which on a
+   phone crowded out the page's own drawing (parts of a page, like the payment button, flickered out). */
+.pt-idle .pt-layer, .pt-idle .pt-stage { visibility: hidden; }
+.pt-idle .pt-wave-track, .pt-idle .pt-bubble, .pt-idle .landing-pool-caustics, .pt-idle .pt-ripple, .pt-idle .pt-progress::after {
+  animation-play-state: paused;
+}
 .pt-covering .pt-layer { animation: pt-rise 760ms cubic-bezier(0.76, 0, 0.24, 1) both; animation-delay: var(--rise-delay); }
 .pt-covered .pt-layer { transform: translate3d(0, -14vh, 0); }
 .pt-revealing .pt-layer { animation: pt-drain 900ms cubic-bezier(0.76, 0, 0.24, 1) both; animation-delay: var(--leave-delay); }
@@ -596,10 +602,11 @@
 /* Pointer-tracked 3D tilt (see Tilt in plan-cover.tsx) */
 .store-tilt {
   --rx: 0deg; --ry: 0deg; --mx: 50%; --my: 0%;
-  transform: perspective(1100px) rotateX(var(--rx)) rotateY(var(--ry));
   transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.store-tilt[data-tilting] { transition: transform 140ms ease-out; }
+/* 3D only while a mouse is tilting it. At rest, and always on a touch screen, the card has no 3D transform: phones could
+   fail to draw content nested in one. */
+.store-tilt[data-tilting] { transform: perspective(1100px) rotateX(var(--rx)) rotateY(var(--ry)); transition: transform 140ms ease-out; }
 .store-sheen {
   background: radial-gradient(circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.28), transparent 46%);
   mix-blend-mode: overlay;
@@ -607,6 +614,8 @@
   transition: opacity 500ms ease;
 }
 .store-tilt[data-tilting] .store-sheen { opacity: 1; }
+/* A touch screen never tilts, so it never shows the sheen; leaving it out spares phones a blended layer. */
+@media (hover: none) { .store-sheen { display: none; } }
 
 /* Light glinting across a cover every few seconds */
 .store-glint { position: relative; overflow: hidden; }
@@ -1334,10 +1343,13 @@ html.gx-docked body { padding-bottom: 12rem; }
   background: linear-gradient(135deg, #a5f3fc 0%, #57e5ea 45%, #22d3ee 100%);
   box-shadow: 0 16px 40px -12px rgba(34, 211, 238, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
+/* The light sweeps by moving the gradient, not the element: a moving element is a separate layer, and it made the whole
+   button one too, which phones could leave undrawn. */
 .au-submit-sheen {
   position: absolute; inset: 0;
-  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.6) 50%, transparent 70%);
-  transform: translateX(-120%); animation: au-sheen 3.2s ease-in-out 1.2s infinite;
+  background: linear-gradient(110deg, transparent 43%, rgba(255, 255, 255, 0.6) 50%, transparent 57%) no-repeat;
+  background-size: 300% 100%; background-position: 110% 0;
+  animation: au-sheen-sweep 3.2s ease-in-out 1.2s infinite;
 }
 .au-submit-wave {
   position: absolute; left: -10%; right: -10%; bottom: -40%; height: 90%;
@@ -1362,12 +1374,51 @@ html.gx-docked body { padding-bottom: 12rem; }
 @keyframes au-swap { from { opacity: 0; transform: translateY(10px); filter: blur(4px); } }
 @keyframes au-spin { to { --au-angle: 360deg; } }
 @keyframes au-sheen { 0%, 55% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
+@keyframes au-sheen-sweep { 0%, 55% { background-position: 110% 0; } 100% { background-position: -10% 0; } }
 @keyframes au-wave { from { transform: translateX(-12%) rotate(0deg); } to { transform: translateX(12%) rotate(360deg); } }
 @keyframes au-shake { 10%, 90% { transform: translateX(-2px); } 20%, 80% { transform: translateX(4px); } 30%, 50%, 70% { transform: translateX(-6px); } 40%, 60% { transform: translateX(6px); } }
 
+/* Phones keep these gradients still: animating them repaints a large area every frame (the card's spinning border, the
+   light rays, the caustics), more than a phone can draw, and parts of the page flickered out. */
+@media (hover: none) {
+  .au-card { animation: au-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; animation-delay: calc(var(--i, 0) * 90ms); }
+  .au-rays, .au-caustics { animation: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .au-blob, .au-rays, .au-caustics, .au-lane, .au-gradient-text, .au-float, .au-bar, .au-target, .au-coach, .au-rise, .au-swap,
   .au-showcase, .au-card, .au-submit-sheen, .au-submit-wave, .au-shake { animation: none; }
+}
+
+/* ---------------------------------------------------------------- password reset (pw-*) */
+/* The icon tile on each step: it pops in and sends out two soft rings, once. */
+.pw-badge {
+  position: relative; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 22px; color: #a5f3fc;
+  background: linear-gradient(150deg, rgba(87, 229, 234, 0.22), rgba(87, 229, 234, 0.04));
+  border: 1px solid rgba(87, 229, 234, 0.32);
+  box-shadow: 0 18px 44px -18px rgba(34, 211, 238, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  animation: au-pop 0.6s cubic-bezier(0.2, 1.4, 0.4, 1) backwards;
+}
+.pw-badge::before, .pw-badge::after {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; border: 1px solid currentColor; opacity: 0; pointer-events: none;
+  animation: pw-ring 1.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.3s 2;
+}
+.pw-badge::after { animation-delay: 0.85s; }
+.pw-badge-ok {
+  color: #6ee7b7; border-color: rgba(52, 211, 153, 0.35);
+  background: linear-gradient(150deg, rgba(52, 211, 153, 0.24), rgba(52, 211, 153, 0.05));
+  box-shadow: 0 18px 44px -18px rgba(16, 185, 129, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.pw-badge-warn {
+  color: #fcd34d; border-color: rgba(252, 211, 77, 0.32);
+  background: linear-gradient(150deg, rgba(252, 211, 77, 0.2), rgba(252, 211, 77, 0.04));
+  box-shadow: 0 18px 44px -18px rgba(245, 158, 11, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+/* The icon inside flies in, like a letter landing. */
+.pw-fly { animation: pw-fly 0.8s cubic-bezier(0.2, 0.9, 0.25, 1) 0.15s backwards; }
+@keyframes pw-ring { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(1.75); } }
+@keyframes pw-fly { from { opacity: 0; transform: translate(-16px, 12px) rotate(-14deg) scale(0.6); } }
+@media (prefers-reduced-motion: reduce) {
+  .pw-badge, .pw-badge::before, .pw-badge::after, .pw-fly { animation: none; }
 }
 
 /* ---------------------------------------------------------------- landing: coach showcase (cs-*) */
@@ -1596,7 +1647,7 @@ html.gx-docked body { padding-bottom: 12rem; }
   .cv-turn-wave { animation: none; opacity: 0; }
 }
 
-/* ---------------------------------------------------------------- monthly payment screen (sb-*) */
+/* ---------------------------------------------------------------- payment screen (sb-*) */
 .sb-season {
   background:
     radial-gradient(ellipse at 10% 0%, rgba(87, 229, 234, 0.2), transparent 55%),
@@ -1631,11 +1682,24 @@ html.gx-docked body { padding-bottom: 12rem; }
 .sb-odo { display: inline-block; height: 1em; overflow: hidden; vertical-align: top; }
 .sb-odo-strip { display: flex; flex-direction: column; transition: transform 1.7s cubic-bezier(0.2, 0.9, 0.1, 1); transition-delay: var(--d, 0ms); }
 .sb-odo-strip > span { display: block; height: 1em; line-height: 1em; }
+.sb-odo-quick .sb-odo-strip { transition-duration: 0.8s; }
 .sb-price { filter: drop-shadow(0 0 22px rgba(87, 229, 234, 0.45)); }
+
+/* Monthly / yearly: the highlight slides across, the yearly saving badge glows until yearly is chosen, and the saving
+   box pops in on each switch. */
+.sb-toggle-thumb {
+  background: linear-gradient(135deg, #a5f3fc, #57e5ea 55%, #22d3ee);
+  box-shadow: 0 8px 24px -10px rgba(87, 229, 234, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: transform 0.45s cubic-bezier(0.3, 1.3, 0.4, 1);
+}
+.sb-save-badge { animation: sb-save 2.4s ease-in-out infinite; }
+.sb-saving { animation: sb-saving-in 0.55s cubic-bezier(0.2, 1.2, 0.3, 1) backwards; }
 .sb-spot { background: radial-gradient(460px circle at var(--mx, 50%) var(--my, 0%), rgba(87, 229, 234, 0.1), transparent 60%); }
 
 /* Billing timeline: the line draws, each monthly charge pops in, a pulse keeps travelling month to month. */
-.sb-track-fill { transform-origin: left; background: linear-gradient(90deg, #57e5ea, #7dd3fc 55%, #a78bfa); animation: store-fill 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.5s both; }
+/* backwards, not both: once drawn the line is just the line, rather than an animation held at its last frame (which
+   keeps it a separate layer that everything painted after it in the card has to be layered above). */
+.sb-track-fill { transform-origin: left; background: linear-gradient(90deg, #57e5ea, #7dd3fc 55%, #a78bfa); animation: store-fill 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.5s backwards; }
 .sb-node { animation: gs-pop 650ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; animation-delay: calc(0.6s + var(--i, 0) * 0.28s); }
 .sb-node-now { box-shadow: 0 0 0 0 rgba(87, 229, 234, 0.6); animation: gs-pop 650ms cubic-bezier(0.34, 1.56, 0.64, 1) 0.6s backwards, gs-beacon 2s cubic-bezier(0.22, 1, 0.36, 1) 1.4s infinite; }
 .sb-label { animation: au-rise 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; animation-delay: calc(0.7s + var(--i, 0) * 0.28s); }
@@ -1654,11 +1718,13 @@ html.gx-docked body { padding-bottom: 12rem; }
 @keyframes sb-beam { 0% { transform: translateX(-130%) skewX(-12deg); } 60%, 100% { transform: translateX(460%) skewX(-12deg); } }
 @keyframes sb-lock-in { from { opacity: 0; transform: scale(0.4) rotate(-20deg); filter: blur(8px); } }
 @keyframes sb-travel { 0% { left: 0%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+@keyframes sb-save { 0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); } 50% { box-shadow: 0 0 0 5px rgba(52, 211, 153, 0); } }
+@keyframes sb-saving-in { from { opacity: 0; transform: translateY(8px) scale(0.97); filter: blur(4px); } }
 
 @media (prefers-reduced-motion: reduce) {
   .sb-orbit, .sb-halo, .sb-lane, .sb-beam, .sb-lock, .sb-lock-ring, .sb-chip, .sb-track-fill, .sb-node, .sb-node-now, .sb-label, .sb-pulse,
-  .sb-feature, .sb-check, .sb-burst { animation: none; }
-  .sb-odo-strip, .sb-shackle { transition: none; }
+  .sb-feature, .sb-check, .sb-burst, .sb-save-badge, .sb-saving { animation: none; }
+  .sb-odo-strip, .sb-shackle, .sb-toggle-thumb { transition: none; }
 }
 
 /* ---------------------------------------------------------------- full-screen day view (dv-*) */
@@ -2249,4 +2315,72 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 @media (prefers-reduced-motion: reduce) {
   .reader-enter, .reader-toast, .fb-jump, .reader-done-chip.is-done .reader-done-dot, .reader-toast-icon, .reader-loader-page { animation: none !important; }
   .reader-bar { transition: none; }
+}
+
+/* ---------------------------------------------------------------- legal pages and consent cards (lg-*) */
+/* A still backdrop: nothing here animates in a loop, so long documents stay light on phones. */
+.lg-page {
+  background:
+    radial-gradient(1100px 560px at 8% -12%, rgba(87, 229, 234, 0.1), transparent 60%),
+    radial-gradient(900px 520px at 100% -6%, rgba(167, 139, 250, 0.08), transparent 62%),
+    linear-gradient(180deg, #060b10, #05090d 40%, #04080c);
+}
+.lg-grid {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 50% 0%, #000 15%, transparent 70%);
+}
+.lg-progress { transform-origin: left; transform: scaleX(0); background: linear-gradient(90deg, #57e5ea, #7dd3fc 55%, #a78bfa); box-shadow: 0 0 12px rgba(87, 229, 234, 0.6); }
+.lg-tab-pill {
+  background: linear-gradient(135deg, #a5f3fc, #57e5ea 55%, #22d3ee);
+  box-shadow: 0 6px 18px -8px rgba(87, 229, 234, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: transform 0.45s cubic-bezier(0.3, 1.25, 0.4, 1), width 0.45s cubic-bezier(0.3, 1.25, 0.4, 1);
+}
+.lg-marker { top: 0; box-shadow: 0 0 10px rgba(87, 229, 234, 0.7); transition: transform 0.35s cubic-bezier(0.3, 1.2, 0.4, 1), height 0.35s ease; }
+.lg-summary {
+  background: linear-gradient(135deg, rgba(87, 229, 234, 0.09), rgba(167, 139, 250, 0.05));
+  border: 1px solid rgba(87, 229, 234, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.lg-highlight { transition: border-color 0.3s, background-color 0.3s; }
+.lg-highlight:hover { border-color: rgba(87, 229, 234, 0.3); background-color: rgba(87, 229, 234, 0.05); }
+/* Revealed once on the way down; hidden only once the page script runs, so the text is always there without it. */
+.lg-ready [data-reveal] { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1); transition-delay: var(--d, 0ms); }
+.lg-ready [data-reveal].is-in { opacity: 1; transform: none; }
+
+.lg-prose { color: rgb(203 213 225); font-size: 15px; line-height: 1.75; }
+.lg-prose > * + * { margin-top: 0.9rem; }
+.lg-prose h3 { margin-top: 1.6rem; color: #fff; font-size: 15px; font-weight: 600; }
+.lg-prose a { color: #67e8f9; text-decoration: underline; text-decoration-color: rgba(103, 232, 249, 0.35); text-underline-offset: 3px; transition: text-decoration-color 0.2s; }
+.lg-prose a:hover { text-decoration-color: #67e8f9; }
+.lg-prose strong { color: #fff; font-weight: 600; }
+.lg-prose ul, .lg-prose ol { padding-left: 1.25rem; }
+.lg-prose ul { list-style: disc; }
+.lg-prose ol { list-style: decimal; }
+.lg-prose li + li { margin-top: 0.35rem; }
+.lg-prose li::marker { color: rgba(103, 232, 249, 0.7); }
+.lg-prose .lg-table { overflow-x: auto; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; }
+.lg-prose table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 13.5px; line-height: 1.55; }
+.lg-prose th, .lg-prose td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.lg-prose tr:last-child td { border-bottom: 0; }
+.lg-prose th { color: #fff; font-weight: 600; background: rgba(255, 255, 255, 0.03); }
+/* Statements the law wants set apart (the right to object, the withdrawal notice and form). */
+.lg-boxed { border: 1px solid rgba(87, 229, 234, 0.28); border-left-width: 3px; border-radius: 16px; background: rgba(87, 229, 234, 0.05); padding: 1rem 1.15rem; }
+.lg-boxed > * + * { margin-top: 0.75rem; }
+
+/* Consent cards (health data, a parent or guardian): ease in once. */
+.lg-consent { animation: lg-consent-in 0.6s cubic-bezier(0.2, 1, 0.3, 1) backwards; }
+@keyframes lg-consent-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-ready [data-reveal] { opacity: 1; transform: none; transition: none; }
+  .lg-tab-pill, .lg-marker { transition: none; }
+  .lg-consent { animation: none; }
+}
+@media print {
+  .lg-no-print { display: none !important; }
+  .lg-page { background: #fff !important; }
+  .lg-page, .lg-page h1, .lg-page h2, .lg-page p, .lg-page li, .lg-page td, .lg-page th, .lg-prose, .lg-prose strong { color: #000 !important; }
+  .lg-ready [data-reveal] { opacity: 1 !important; transform: none !important; }
+  .lg-summary, .lg-boxed, .lg-highlight { background: none !important; border-color: #999 !important; box-shadow: none !important; }
 }

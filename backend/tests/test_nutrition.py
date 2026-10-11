@@ -90,6 +90,7 @@ class NutritionApiTests(unittest.TestCase):
             ("app.nutrition.find_record", {"side_effect": lambda profile_id, key: self.rows[0] if self.rows and key == "nutrition" else None}),
             ("app.nutrition.get_supabase_client", {"return_value": self.supabase}),
             ("app.nutrition.save_record", {"new": self.save}),
+            ("app.nutrition.ensure_health_consent", {"return_value": None}),  # see test_consents
         ]:
             patcher = patch(target, **options)
             patcher.start()

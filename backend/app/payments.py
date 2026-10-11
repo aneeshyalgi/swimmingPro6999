@@ -1,6 +1,6 @@
-"""The monthly coaching subscription that unlocks the dashboard.
+"""The coaching subscription, billed monthly or yearly, that unlocks the dashboard.
 
-A paid Stripe Checkout Session (a recurring monthly subscription) sets user_profiles.is_paid, the one flag dashboard
+A paid Stripe Checkout Session (a recurring subscription) sets user_profiles.is_paid, the one flag dashboard
 access checks. The payment success page records it straight away; an athlete who closed that page before it loaded has
 their last checkout confirmed with Stripe the next time their access is checked, so a completed payment is never lost.
 The subscription itself is re-checked with Stripe at most once a day: once it is cancelled or its renewals stop being
@@ -28,18 +28,22 @@ PAYMENT_PLANS = {
         "name": "Performance Build",
         "description": "Full adaptive coaching for athletes building toward their next breakthrough.",
         "amount": 1499,
-        # A new subscriber's first month costs this (see first_month_coupon); every renewal is the full amount.
-        "first_month_amount": 799,
         "currency": "usd",
         "interval": "month",
+    },
+    # The same plan paid once a year, for less than twelve monthly payments (the payment screen shows the saving).
+    "performance-build-yearly": {
+        "name": "Performance Build",
+        "description": "Full adaptive coaching for athletes building toward their next breakthrough.",
+        "amount": 11999,
+        "currency": "usd",
+        "interval": "year",
     },
 }
 # Retired tiers cannot start checkout, but already-paid sessions must still activate.
 VERIFIABLE_PAYMENT_PLAN_IDS = {*PAYMENT_PLANS, "swim-foundation", "championship"}
 # Subscription states that keep the dashboard open. past_due: a renewal failed and Stripe is still retrying the card.
 LIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
-# States of a subscription that was never paid (its first payment failed or was abandoned).
-NEVER_PAID_STATUSES = {"incomplete", "incomplete_expired"}
 RECHECK_SUBSCRIPTION_AFTER = timedelta(hours=24)
 # The plan's name comes from the Stripe product, so the dialog names exactly what Stripe bills.
 WITH_PRODUCT = ["items.data.price.product"]
@@ -52,10 +56,10 @@ def _ending(subscription: Any) -> bool:
 
 
 def subscription_summary(profile: dict[str, Any], cancel: bool | None = None) -> dict[str, Any]:
-    """The athlete's monthly subscription as Stripe has it right now, optionally scheduling or undoing its cancellation.
+    """The athlete's subscription as Stripe has it right now, optionally scheduling or undoing its cancellation.
 
-    Cancelling never refunds and never ends access early: Stripe stops renewing, the athlete keeps the month they paid
-    for, and when it runs out the subscription ends and the daily check in _subscription_live() closes the dashboard.
+    Cancelling never refunds and never ends access early: Stripe stops renewing, the athlete keeps the month or year they
+    paid for, and when it runs out the subscription ends and the daily check in _subscription_live() closes the dashboard.
     In the result, cancel_at_period_end is true for any scheduled cancellation and period_end is when the subscription
     renews, or ends if one is scheduled.
     """
@@ -90,54 +94,27 @@ def subscription_summary(profile: dict[str, Any], cancel: bool | None = None) ->
     }
 
 
-def billing_account(user: Any) -> tuple[Any, str | None, bool]:
-    """The live subscription the account's email already pays for, its newest Stripe customer (one per athlete), and
-    whether the email has ever paid for a subscription (then the first-month offer is behind it).
+def billing_account(user: Any) -> tuple[Any, str | None]:
+    """The live subscription the account's email already pays for, and its newest Stripe customer (one per athlete).
 
     Found by email rather than by profile, because a subscription outlives a deleted account; only a confirmed email
-    counts, as it decides who gets access. (None, None, False) when the email isn't confirmed or Stripe has no customer
-    for it. Raises stripe.error.StripeError when Stripe can't be asked.
+    counts, as it decides who gets access. (None, None) when the email isn't confirmed or Stripe has no customer for it.
+    Raises stripe.error.StripeError when Stripe can't be asked.
     """
     email = getattr(user, "email", None)
     if not email or not getattr(user, "email_confirmed_at", None):
-        return None, None, False
+        return None, None
     stripe.api_key = get_settings().stripe_secret_key
     customers = list(stripe.Customer.list(email=email, limit=100).auto_paging_iter())  # newest first
-    subscriptions = [
+    live = [
         subscription
         for customer in customers
-        for subscription in stripe.Subscription.list(customer=customer.id, status="all", limit=100).auto_paging_iter()
+        for subscription in stripe.Subscription.list(customer=customer.id, limit=100).auto_paging_iter()
+        if subscription.status in LIVE_SUBSCRIPTION_STATUSES
     ]
-    live = [subscription for subscription in subscriptions if subscription.status in LIVE_SUBSCRIPTION_STATUSES]
     # One that keeps renewing before one that's ending, then the newest.
     subscription = max(live, key=lambda item: (not _ending(item), item.created), default=None)
-    subscribed_before = any(item.status not in NEVER_PAID_STATUSES for item in subscriptions)
-    return subscription, customers[0].id if customers else None, subscribed_before
-
-
-def first_month_coupon(plan: dict[str, Any]) -> str | None:
-    """The Stripe coupon that makes a new subscriber's first month cost the plan's first_month_amount: an amount off
-    the first invoice only, so every renewal is the full price. Made in Stripe the first time a checkout needs it.
-    None when the plan has no first-month price. Raises stripe.error.StripeError when it can't be had, so a checkout
-    never starts without the price it promised."""
-    discount = plan["amount"] - plan.get("first_month_amount", plan["amount"])
-    if discount <= 0:
-        return None
-    coupon_id = f"swimgpt-first-month-{discount}-{plan['currency']}"
-    stripe.api_key = get_settings().stripe_secret_key
-    try:
-        coupon = stripe.Coupon.retrieve(coupon_id)
-    except stripe.error.InvalidRequestError as exc:
-        if exc.code != "resource_missing":
-            raise
-        try:
-            coupon = stripe.Coupon.create(id=coupon_id, name="First month offer", amount_off=discount, currency=plan["currency"],
-                                          duration="once")
-        except stripe.error.InvalidRequestError:
-            coupon = stripe.Coupon.retrieve(coupon_id)   # made by a checkout started at the same moment
-    if not coupon.valid or coupon.amount_off != discount or coupon.currency != plan["currency"] or coupon.duration != "once":
-        raise stripe.error.InvalidRequestError(f"Coupon {coupon_id} no longer matches the first-month offer.", "coupon")
-    return coupon_id
+    return subscription, customers[0].id if customers else None
 
 
 def adopt_subscription(row: dict[str, Any], subscription: Any) -> None:
@@ -211,7 +188,7 @@ def _unrecorded_checkout(row: dict[str, Any]) -> Any:
 
 
 def _subscription_live(row: dict[str, Any]) -> bool:
-    """Whether a paid profile's monthly subscription is still live, asking Stripe at most once a day."""
+    """Whether a paid profile's subscription is still live, asking Stripe at most once a day."""
     subscription_id = row.get("stripe_subscription_id")
     secret_key = get_settings().stripe_secret_key
     now = datetime.now(timezone.utc)
