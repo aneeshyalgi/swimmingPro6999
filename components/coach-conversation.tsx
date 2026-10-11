@@ -28,6 +28,15 @@ const SILENCE_MS = 1150        // pause that ends the athlete's turn
 const MIN_SPEECH_MS = 280      // ignore coughs and clicks
 const IDLE_RESET_MS = 20_000   // restart an empty recording so it never grows large
 const MAX_TURN_MS = 45_000
+const OPENER_MS = 3_200        // how long each "Try …" line shows on the athlete's first turn
+
+/** Things to open with: the call waits for the athlete to speak first, so show what they could say. */
+const openers = (first: string) => [
+  `Hi ${first}, how should I train this week?`,
+  "What should I focus on in today's session?",
+  "How do I get faster at my main event?",
+  "I'm feeling tired. Should I go easier today?",
+]
 
 /** Spoken parts: a short opening sentence so the coach starts talking quickly, then groups of up to ~360 characters. */
 function spokenParts(text: string) {
@@ -59,6 +68,7 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
   const [heard, setHeard] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [closing, setClosing] = useState(false)
+  const [opener, setOpener] = useState(0)
 
   const phaseRef = useRef<Phase>("connecting")
   const levelRef = useRef(0)
@@ -313,8 +323,18 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finishTurn])
 
+  // The call opens on the athlete's turn. Until they've said something, a "You speak first" cue replaces the label.
+  const yourTurn = phase === "listening" && !userCaption
+  const waiting = yourTurn && !heard
+  useEffect(() => {
+    if (!waiting) return
+    const timer = window.setInterval(() => setOpener((value) => value + 1), OPENER_MS)
+    return () => window.clearInterval(timer)
+  }, [waiting])
+
   if (typeof document === "undefined") return null
   const first = coachName.replace(/^Coach\s+/i, "")
+  const examples = openers(first)
   const label = {
     connecting: `Connecting to ${coachName}…`, listening: heard ? "Listening…" : "Go ahead, I'm listening", transcribing: "Got it…",
     thinking: `${first} is thinking`, speaking: `${first} is speaking`, muted: "Microphone muted", error: "Conversation paused",
@@ -354,7 +374,7 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
       {/* Orb */}
       <main className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4">
         <button type="button" onClick={interrupt} aria-label={phase === "speaking" ? "Interrupt the coach" : coachName}
-          className={cn("cv-orb relative mt-6 w-[min(80vw,400px,44vh)] shrink-0 outline-none [aspect-ratio:180/182] sm:mt-10", (phase === "speaking" || phase === "thinking") && "cursor-pointer")}>
+          className={cn("cv-orb relative mt-6 w-[min(80vw,400px,44vh)] shrink-0 outline-none [aspect-ratio:180/182] sm:mt-10", (phase === "speaking" || phase === "thinking") && "cursor-pointer", yourTurn && "cv-orb-small")}>
           {/* The orb glows behind the coach's head and moves with the voice */}
           <span aria-hidden className="absolute left-1/2 top-[-8%] aspect-square w-[80%] -translate-x-1/2">
             {[0, 1, 2].map((ring) => <span key={ring} className="cv-ring absolute inset-[14%] rounded-full" style={{ "--r": ring } as CSSProperties} />)}
@@ -363,19 +383,54 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
           <CoachLiveAvatar coach={coach} phaseRef={phaseRef} speech={outAnalyser} mic={micAnalyser} className="cv-avatar relative h-full w-full" />
         </button>
 
-        <p key={phase} role="status" aria-live="polite" className="cv-label mt-5 flex items-center gap-2 text-lg font-semibold tracking-tight sm:text-xl">
-          {phase === "connecting" && <Loader2 className="h-5 w-5 animate-spin text-cyan-300" />}
-          {label}
-          {(phase === "thinking" || phase === "transcribing") && <span className="cv-dots" aria-hidden><i /><i /><i /></span>}
-        </p>
-        {phase === "listening" && (
-          <div aria-hidden className="mt-4 flex h-8 items-center gap-1">
-            {Array.from({ length: 13 }, (_, index) => <span key={index} className="cv-bar w-1 rounded-full bg-cyan-200" style={{ "--i": index } as CSSProperties} />)}
+        {yourTurn ? (
+          <div className={cn("cv-turn relative mt-6 w-full max-w-md rounded-3xl px-5 py-5 text-center sm:px-7 [@media(max-height:760px)]:mt-4 [@media(max-height:760px)]:py-4", heard && "cv-turn-heard")}>
+            <span aria-hidden className="cv-turn-ring" />
+            <span aria-hidden className="cv-turn-tail" />
+            <div className="relative flex flex-col items-center">
+              <span aria-hidden className="cv-turn-mic relative grid h-14 w-14 place-items-center rounded-full [@media(max-height:760px)]:h-11 [@media(max-height:760px)]:w-11">
+                {[0, 1, 2].map((wave) => <span key={wave} className="cv-turn-wave" style={{ "--w": wave } as CSSProperties} />)}
+                <Mic className="relative h-6 w-6 [@media(max-height:760px)]:h-5 [@media(max-height:760px)]:w-5" />
+              </span>
+              <p className={cn("mt-3 text-[11px] font-semibold uppercase tracking-[0.22em] [@media(max-height:760px)]:mt-2", heard ? "text-emerald-200/90" : "text-cyan-200/90")}>
+                {heard ? "Your mic is picking you up" : "Your turn"}
+              </p>
+              <p key={heard ? "heard" : "waiting"} role="status" aria-live="polite"
+                className="cv-turn-title mt-1 text-2xl font-semibold tracking-tight sm:text-3xl [@media(max-height:760px)]:text-xl">
+                {heard ? "I can hear you" : "You speak first"}
+              </p>
+              <p className="mt-1.5 max-w-xs text-sm leading-6 text-slate-300">
+                {heard ? `Keep going. Pause when you're done and ${first} will answer.` : `${first} is listening and waiting for you. Say hello or ask a question to start.`}
+              </p>
+              {heard ? (
+                <div aria-hidden className="mt-3 flex h-7 items-center gap-1 [@media(max-height:760px)]:hidden">
+                  {Array.from({ length: 13 }, (_, index) => <span key={index} className="cv-bar w-1 rounded-full bg-emerald-200" style={{ "--i": index } as CSSProperties} />)}
+                </div>
+              ) : (
+                <p className="mt-3 flex h-7 max-w-full items-center justify-center text-sm text-slate-400 [@media(max-height:760px)]:hidden">
+                  <span className="mr-1.5 shrink-0 text-slate-500">Try</span>
+                  <span key={opener} className="cv-turn-example min-w-0 truncate italic text-white/85">“{examples[opener % examples.length]}”</span>
+                </p>
+              )}
+            </div>
           </div>
+        ) : (
+          <>
+            <p key={phase} role="status" aria-live="polite" className="cv-label mt-5 flex items-center gap-2 text-lg font-semibold tracking-tight sm:text-xl">
+              {phase === "connecting" && <Loader2 className="h-5 w-5 animate-spin text-cyan-300" />}
+              {label}
+              {(phase === "thinking" || phase === "transcribing") && <span className="cv-dots" aria-hidden><i /><i /><i /></span>}
+            </p>
+            {phase === "listening" && (
+              <div aria-hidden className="mt-4 flex h-8 items-center gap-1">
+                {Array.from({ length: 13 }, (_, index) => <span key={index} className="cv-bar w-1 rounded-full bg-cyan-200" style={{ "--i": index } as CSSProperties} />)}
+              </div>
+            )}
+            <p className="mt-3 h-5 text-center text-xs text-slate-500">
+              {phase === "connecting" ? "You'll speak first once the call connects." : phase === "listening" ? "Pause when you're done and I'll answer. Space to send now." : phase === "speaking" ? "Tap the coach or press Space to interrupt." : phase === "muted" ? "Unmute when you're ready to talk." : ""}
+            </p>
+          </>
         )}
-        <p className="mt-3 h-5 text-center text-xs text-slate-500">
-          {phase === "listening" ? "Pause when you're done and I'll answer. Space to send now." : phase === "speaking" ? "Tap the coach or press Space to interrupt." : phase === "muted" ? "Unmute when you're ready to talk." : ""}
-        </p>
 
         {/* Captions */}
         {captions && (userCaption || coachCaption) && phase !== "error" && (

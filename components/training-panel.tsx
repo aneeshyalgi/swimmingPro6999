@@ -22,7 +22,7 @@ import { SwimWorkoutDetails } from "@/components/swim-workout"
 import { CompetitionForm, RaceResultForm } from "@/components/training-forms"
 import { GrowBar, Reveal, Tile, TileHeader, useCountUp } from "@/components/dashboard-ui"
 import {
-  Banner, CompetitionSkeleton, CompletionRow, DayTileSkeleton, EmptyState, ExportWeekButton, Expander, GenerationProgress, LoadingLane, TwoColumnFlow, WeekSkeleton, ZoneChip, ZoneStack, daysUntil, inputClass, labelClass, shortDate,
+  Banner, CompetitionSkeleton, CompletionRow, DayTileSkeleton, EmptyState, ExportWeekButton, Expander, LoadingLane, TwoColumnFlow, WeekSkeleton, ZoneChip, ZoneStack, daysUntil, inputClass, labelClass, shortDate,
   todayISO, zoneTone,
 } from "@/components/training-ui"
 import { WorkoutCalendar } from "@/components/workout-calendar"
@@ -31,8 +31,9 @@ import { CalendarDay, compactMeters } from "@/components/calendar-day"
 import { GUIDE_SUBTAB, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { TrainingItemEditor, type EditTarget } from "@/components/training-item-editor"
 import { cn } from "@/lib/utils"
+import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
 import {
-  competitionSchema, competitionsSchema, downloadSwimPdf, downloadWeekItemPdf, downloadWeekPdf, mondayISO, shiftWeek, timeText, workoutSchema,
+  GENERATION_CANCELLED, competitionSchema, competitionsSchema, downloadSwimPdf, downloadWeekItemPdf, downloadWeekPdf, mondayISO, shiftWeek, timeText, workoutSchema,
   trainingRequest, weekSchema, type Competition, type TrainingWeek, type Workout,
 } from "@/lib/training"
 
@@ -72,21 +73,10 @@ const subTabs = [
 
 /** `guide`: where the dashboard guide is pointing; opens the matching sub-tab so the spotlight can find its button. */
 /** `onGuideEvent`: tells the guided setup when the user starts or finishes a step it is walking them through. */
-/** `builderRequest`: set when the sidebar's Workout Builder is chosen; opens a new workout in the Gym week, then
- *  `onBuilderOpened` lets the dashboard clear it. */
-export function TrainingPanel({ onChanged, guide, onGuideEvent, builderRequest, onBuilderOpened }: {
+export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   onChanged: () => Promise<void>; guide?: GuideTarget | null; onGuideEvent?: (event: GuideEvent) => void
-  builderRequest?: number; onBuilderOpened?: () => void
 }) {
-  const [subTab, setSubTab] = useState<string>(() => (guide ? GUIDE_SUBTAB[guide] : builderRequest ? "library" : "week"))
-  // The latest Workout Builder request the Gym week has not opened yet.
-  const [pendingBuilder, setPendingBuilder] = useState(builderRequest ?? 0)
-  const [seenBuilder, setSeenBuilder] = useState(builderRequest ?? 0)
-  if (builderRequest && builderRequest !== seenBuilder) {
-    setSeenBuilder(builderRequest)
-    setPendingBuilder(builderRequest)
-    setSubTab("library")
-  }
+  const [subTab, setSubTab] = useState<string>(() => (guide ? GUIDE_SUBTAB[guide] : "week"))
   const [weekStart, setWeekStart] = useState(() => mondayISO())
   const [week, setWeek] = useState<TrainingWeek | null>(null)
   const [meets, setMeets] = useState<CompetitionData | null>(null)
@@ -101,6 +91,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, builderRequest, 
   const [editing, setEditing] = useState<EditTarget | null>(null)
   const [resultKey, setResultKey] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
+  const generation = useWeekGeneration()
   const [quiet, setQuiet] = useState(false)
   // The day open in the full-screen view, and the calendar tile it grew out of.
   const [focusDate, setFocusDate] = useState<string | null>(null)
@@ -413,14 +404,27 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, builderRequest, 
   const weekSessions = week?.days.flatMap(daySessionList) ?? []
   const openWorkout = weekSessions.find((session) => session.id === focusSession) ?? null
 
+  /** The reply is the saved week, so it's shown straight away; the dashboard summary catches up in the background. */
   const generateWeek = async () => {
-    setGenerating(true)
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusy(true); setGenerating(true); setQuiet(false); setError(null); setNotice(null)
     onGuideEvent?.("swim-started")
-    const saved = await perform(async () => {
-      await trainingRequest("/week/generate", weekSchema, { body: { week_start: weekStart } })
-    }, "Your personalised swim week is ready.")
-    onGuideEvent?.(saved ? "swim-done" : "swim-failed")
-    if (mounted.current) setGenerating(false)
+    let outcome: GuideEvent = "swim-failed"
+    try {
+      const generated = await generation.run("/week/generate", weekSchema, { week_start: weekStart })
+      if (mounted.current && activeWeek.current === generated.week_start) setWeek(generated)
+      outcome = "swim-done"
+      if (mounted.current) setNotice("Your personalised swim week is ready.")
+      void onChanged().catch(() => { /* the summary refreshes on the next visit */ })
+    } catch (failure) {
+      if (failure instanceof Error && failure.message === GENERATION_CANCELLED) outcome = "swim-cancelled"
+      if (mounted.current) setError(failure instanceof Error ? failure.message : "Your swim week couldn't be generated. Please try again.")
+    } finally {
+      inFlight.current = false
+      if (mounted.current) { setBusy(false); setGenerating(false) }
+    }
+    onGuideEvent?.(outcome)
   }
 
   return (
@@ -502,7 +506,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, builderRequest, 
               {week && <p className="relative mt-3 flex items-center gap-1.5 text-[11px] text-slate-400"><Maximize2 className="h-3 w-3" />Tap a day to open its sessions full screen</p>}
             </section>
           </Reveal>
-          {generating && <GenerationProgress title="Your coach is building this week" subtitle="This usually takes 20–40 seconds. Every session is checked against your onboarding before it's saved." steps={generationSteps} />}
+          {generating && <GenerationOverlay title="Your coach is building this week" subtitle="Every session is checked against your onboarding before it's saved." steps={generationSteps} interval={1800} />}
           <p className="px-1 text-xs text-slate-500">Monday-Sunday · Calendar dates use UTC · Totals are planned, not proof of completion. Saved sessions and scheduled workouts are preserved.</p>
 
           {loading && !week && <>
@@ -597,7 +601,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, builderRequest, 
         </TabsContent>
 
         <TabsContent value="library" className="mt-0 space-y-5">
-          <WorkoutCalendar onChanged={onChanged} onGuideEvent={onGuideEvent} openBuilder={pendingBuilder > 0} onBuilderOpened={() => { setPendingBuilder(0); onBuilderOpened?.() }} />
+          <WorkoutCalendar onChanged={onChanged} onGuideEvent={onGuideEvent} />
         </TabsContent>
 
         <TabsContent value="competitions" className="mt-0 space-y-5">

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     openai_speech_model: str = Field(default="gpt-4o-mini-tts", alias="OPENAI_SPEECH_MODEL")
     # Training-plan generation needs precise arithmetic and instruction following; a stronger model by default.
     openai_plan_model: str = Field(default="gpt-4.1", alias="OPENAI_PLAN_MODEL")
+    # Only for GPT-5 plan models: how much they reason before answering.
+    openai_plan_reasoning_effort: str = Field(default="none", alias="OPENAI_PLAN_REASONING_EFFORT")
     # Recognising the stroke in a clip's frames (Stroke Lab); tested best on underwater and side-on clips.
     openai_vision_model: str = Field(default="gpt-5.5", alias="OPENAI_VISION_MODEL")
     stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")

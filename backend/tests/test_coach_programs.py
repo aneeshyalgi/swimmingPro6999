@@ -1,6 +1,7 @@
 """The coach programs encoded in code, checked against facts read from the coach PDFs."""
 from datetime import date
 import pathlib
+import re
 import unittest
 from unittest.mock import patch
 
@@ -164,50 +165,106 @@ class AdaptedSessionCheckTests(unittest.TestCase):
 
 
 class SwimWeekGenerationTests(unittest.TestCase):
-    """build_week end to end with the AI and database stubbed: every swim is written from a coach's real session."""
+    """build_week end to end with the AI and database stubbed: every swim is written from a coach's real session, long
+    ones in parts that cover every line once, and a swim whose parts don't add up is written whole."""
 
-    def test_each_swim_prompt_carries_the_assigned_coach_session(self):
+    monday = date(2030, 1, 7)
+    profile = {"id": "p", "main_events": ["200m IM", "400m IM"], "swimmer_type": "specialist", "swim_sessions_per_week": 5,
+               "gym_sessions_per_week": 0, "session_duration": "120", "facilities": ["50m Pool"],
+               "recommended_coaches": ["Coach Robert"]}
+
+    def run_week(self, part_meters=None, meets=None):
+        """Generates the week; part_meters(check) picks the metres a part is written in (default: what its check wants);
+        meets: {day index: competition} entered by the athlete."""
         from datetime import timedelta
         from unittest.mock import MagicMock
         from app import training
         from app.today import MobilityWork
 
-        monday = date(2030, 1, 7)
-        profile = {"id": "p", "main_events": ["200m IM", "400m IM"], "swimmer_type": "specialist", "swim_sessions_per_week": 5,
-                   "gym_sessions_per_week": 0, "session_duration": "120", "facilities": ["50m Pool"],
-                   "recommended_coaches": ["Coach Robert"]}
-        empty_week = {"generated": False, "days": [{"date": (monday + timedelta(days=i)).isoformat(), "workouts": [], "strength": None,
-                                                    "mobility": [], "competitions": [], "objective": "", "recovery": []} for i in range(7)]}
-        prompts = []
+        empty_week = {"generated": False, "days": [{"date": (self.monday + timedelta(days=i)).isoformat(), "workouts": [], "strength": None,
+                                                    "mobility": [], "competitions": [meets[i]] if meets and i in meets else [],
+                                                    "objective": "", "recovery": []} for i in range(7)]}
+        calls = []
 
-        def fake_generate(_profile, schema, objective, check=None, attempts=3, grounding=None):
-            prompts.append(objective)
-            if schema is training.WeekOutline:
-                outline = training.WeekOutline(phase="Build", coaching_note="n", days=[
-                    training.OutlineDay(date=monday + timedelta(days=i), objective="o", swim_focuses=[], strength_focus=None,
-                                        mobility=[MobilityWork(category="Shoulder mobility", exercise="e", duration_minutes=5, instructions=["i"])],
-                                        recovery=["sleep"]) for i in range(7)])
-                check(outline)
-                return outline, []
-            swim = AdaptedSessionCheckTests().swim((1, 1, 800), (1, 20, 100), (1, 1, 400))
-            return swim, []
+        def sets_of(meters):
+            return [training.PlannedSet(name="Main-Set: kick", rounds=1, repetitions=min(100, (meters - done) // 25), distance_meters=25, stroke="Free",
+                            interval="@0:30", target_time=None, training_zone="Aerobic", equipment=["Fins"], description="d", technical_focus=["c"])
+                    for done in range(0, meters, 2500)]
+
+        def fake_generate(_profile, schema, objective, check=None, attempts=3, grounding=None, **_options):
+            calls.append((schema, objective))
+            if schema is training.WeekNote:
+                return training.WeekNote(phase="Build", coaching_note="n"), []
+            if schema is training.DayPlan:
+                return training.DayPlan(objective="o", recovery=["sleep"], mobility=[
+                    MobilityWork(category="Shoulder mobility", exercise="e", duration_minutes=5, instructions=["i"])]), []
+            if schema is training.SwimHeader:
+                return training.SwimHeader(objective="o", notes="", event="200m IM"), []
+            if schema is training.SwimPart:
+                meters = part_meters(check) if part_meters else next(
+                    m for m in range(25, 40000, 25) if not check(training.SwimPart(estimated_minutes=10, sets=sets_of(m))))
+                return training.SwimPart(estimated_minutes=10, sets=sets_of(meters)), []
+            return training.PlannedSwim.model_validate(AdaptedSessionCheckTests().swim((1, 1, 800), (1, 20, 100), (1, 1, 400)).model_dump()), []
 
         database = MagicMock()
         database.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"plan": {"phase": "Build"}}]
-        with patch.object(training, "week_view", return_value=empty_week), patch.object(training, "competitions", return_value=[]), \
-                patch.object(training, "get_supabase_client", return_value=database), \
-                patch.object(training, "build_grounding", return_value=("g", [])), \
-                patch.object(training, "generate_structured", side_effect=fake_generate), \
-                patch.object(training, "save_record") as save_record:
-            training.build_week(profile, monday)
+        with patch.object(training, "week_view", return_value=empty_week), patch.object(training, "competitions", return_value=[]),                 patch.object(training, "get_supabase_client", return_value=database),                 patch.object(training, "build_grounding", return_value=("g", [])),                 patch.object(training, "generate_structured", side_effect=fake_generate),                 patch.object(training, "save_record") as save_record:
+            training.build_week(self.profile, self.monday)
+        return calls, save_record.call_args.args[5]
 
-        swim_prompts = [prompt for prompt in prompts if "by adapting this exact session" in prompt]
-        self.assertEqual(len(swim_prompts), 5)
-        expected = assign_week("Coach Robert", monday, 5)
-        for prompt, assignment in zip(swim_prompts, expected):
-            self.assertIn(assignment.render(), prompt)
-        saved = save_record.call_args.args[5]
+    def test_every_swim_is_written_from_its_coach_session_and_long_ones_in_parts(self):
+        from app import training
+        from app.coach_programs import session_lines
+        from app.swim_planner import session_parts
+
+        calls, saved = self.run_week()
+        expected = assign_week("Coach Robert", self.monday, 5)
         self.assertEqual(saved["source_files"], [assignment.label for assignment in expected])
+        swims = [swim for day in saved["plan"]["days"] for swim in day["swims"]]
+        self.assertEqual(len(swims), 5)
+        self.assertEqual(sum(schema is training.DayPlan for schema, _ in calls), 7)
+        self.assertEqual(sum(schema is training.WeekNote for schema, _ in calls), 1)
+        for assignment in expected:
+            prompts = [(schema, prompt) for schema, prompt in calls if assignment.render() in prompt
+                       and schema in (training.PlannedSwim, training.SwimHeader, training.SwimPart)]
+            parts = session_parts(assignment.session, training.PART_SIZE)
+            if len(parts) == 1:
+                self.assertEqual([schema for schema, _ in prompts], [training.PlannedSwim], assignment.label)
+                continue
+            # A header and one prompt per part; together the parts list every line of the session once, in order.
+            self.assertEqual(sorted(schema.__name__ for schema, _ in prompts), ["SwimHeader"] + ["SwimPart"] * len(parts), assignment.label)
+            listed = [re.sub(r" -> (?:keep|cut)\b.*$| \(not a set: .*\)$", "", line.split("] ", 1)[1]) for _, prompt in sorted((p for p in prompts if p[0] is training.SwimPart),
+                                                                    key=lambda item: item[1].split("Write part ")[1][:3])
+                      for line in prompt.splitlines() if line.startswith("- [")]
+            self.assertEqual(listed, [line.text for line in session_lines(assignment.session) if not line.header], assignment.label)
+        # The title comes from the coach session, the words from the header, the sets from the parts.
+        long_swim = next(swim for swim in swims if swim["objective"] == "o")
+        self.assertRegex(long_swim["title"], r"#\d \(Coach Robert\)$")
+        self.assertEqual(long_swim["event"], "200m IM")
+        self.assertEqual(long_swim["equipment"], ["Fins"])
+
+    def test_a_swim_whose_parts_dont_add_up_is_written_whole(self):
+        from app import training
+        from app.swim_planner import session_parts
+
+        calls, saved = self.run_week(part_meters=lambda check: 25)       # every part far too short
+        long_sessions = [a for a in assign_week("Coach Robert", self.monday, 5) if len(session_parts(a.session, training.PART_SIZE)) > 1]
+        self.assertTrue(long_sessions)
+        for assignment in long_sessions:
+            self.assertEqual(sum(schema is training.PlannedSwim and assignment.render() in prompt for schema, prompt in calls), 1)
+        self.assertEqual(len([swim for day in saved["plan"]["days"] for swim in day["swims"]]), 5)
+
+    def test_race_day_has_no_coach_session_and_is_not_a_rest_day(self):
+        from app import training
+
+        meet = {"name": "State Champs", "date": "2030-01-12", "priority": "C"}
+        calls, saved = self.run_week(meets={5: meet})                   # Saturday
+        saturday = next(day for day in saved["plan"]["days"] if day["date"] == "2030-01-12")
+        self.assertEqual(saturday["swims"], [])
+        self.assertFalse(saturday["rest"])
+        day_prompts = [prompt for schema, prompt in calls if schema is training.DayPlan and "Plan 2030-01-12" in prompt]
+        self.assertIn("race day (State Champs): the athlete races", day_prompts[0])
+        self.assertLessEqual(len([swim for day in saved["plan"]["days"] for swim in day["swims"]]), 5)
 
 
 if __name__ == "__main__":

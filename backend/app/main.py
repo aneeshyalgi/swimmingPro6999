@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from contextlib import asynccontextmanager
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,7 +17,7 @@ from postgrest.exceptions import APIError
 import stripe
 
 from app.config import get_settings
-from app.db import get_supabase_client
+from app.db import get_supabase_client, warm_clients
 from app.coach_catalog import COACHES, public_profile
 from app.coach_switch import CURRENCY, amount_due, money, paid_switch, restore, spend, start_checkout, switch_price
 from app.context import chat_context, coach_key, coach_options, coach_recommendation
@@ -32,7 +34,9 @@ from app.plan_store import router as plan_store_router
 from app.coach_audio import router as coach_audio_router
 from app.stroke_detection import router as stroke_detection_router
 from app.gym import gym_week, router as gym_router
-from app.payments import PAYMENT_PLANS, adopt_subscription, billing_account, is_paid, record_payment, subscription_summary
+from app.payments import (
+    PAYMENT_PLANS, adopt_subscription, billing_account, first_month_coupon, is_paid, record_payment, subscription_summary,
+)
 from app.video_access import checked_access, identify, release, start_analysis
 from app.swim_times import with_display_times
 from app.schemas import (
@@ -49,7 +53,18 @@ from app.schemas import (
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Database clients made in the background: the server answers at once, and the first burst of requests after a
+    # deploy finds them ready.
+    threading.Thread(target=warm_clients, args=(8,), name="warm-database-clients", daemon=True).start()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.app_name,
     version=settings.api_version,
     description="SwimGPT backend for onboarding, user profiles, coach matching, and AI experiences.",
@@ -335,7 +350,10 @@ def create_checkout_session(request: CheckoutSessionRequest, authorization: str 
 
     # Nor sell a second subscription to someone whose email already pays for one, such as from an account they deleted.
     try:
-        existing, customer_id = billing_account(user)
+        existing, customer_id, subscribed_before = billing_account(user)
+        if existing is None:
+            # A new subscriber's first month costs less; someone who has subscribed before pays the full price.
+            coupon = None if subscribed_before else first_month_coupon(selected_plan)
     except stripe.error.StripeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Stripe checkout error: {exc}") from exc
     if existing is not None:
@@ -377,6 +395,8 @@ def create_checkout_session(request: CheckoutSessionRequest, authorization: str 
                     "quantity": 1,
                 }
             ],
+            # The first-month offer: taken off the first invoice only (Stripe's page shows both prices).
+            **({"discounts": [{"coupon": coupon}]} if coupon else {}),
             success_url=f"{settings.frontend_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{settings.frontend_url}/subscribe?checkout=cancelled",
             client_reference_id=request.auth_user_id,
@@ -650,11 +670,15 @@ def get_subscription(authorization: str | None = Header(default=None)) -> dict[s
         fit = None
     plan_id, offer = next(iter(PAYMENT_PLANS.items()))
     paid = is_paid(row)
+    # Shown only when checkout will give it: to a new subscriber, and never when Stripe can't say who that is.
+    first_month = None
     if not paid:
         # Someone whose email already pays for a subscription (say, from an account they deleted) goes straight to the
         # dashboard instead of being asked to pay again.
         try:
-            existing, _ = billing_account(user)
+            existing, _, subscribed_before = billing_account(user)
+            if not subscribed_before:
+                first_month = offer.get("first_month_amount")
         except stripe.error.StripeError:
             logger.warning("Could not look up an existing subscription for the payment screen", exc_info=True)
             existing = None
@@ -665,7 +689,7 @@ def get_subscription(authorization: str | None = Header(default=None)) -> dict[s
         "paid": paid,
         "user_key": row["user_key"],
         "first_name": str(row.get("full_name") or "").split(" ")[0],
-        "offer": {"id": plan_id, **offer},
+        "offer": {"id": plan_id, **offer, "first_month_amount": first_month},
         "coach": {"name": fit["name"], "title": fit["title"], "inspired_by": fit["inspired_by"]} if fit else None,
         "program": {
             "headline": (plan.get("coach_match") or {}).get("headline"),

@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from app.coach_programs import CoachProgram, program_for, render_session, session_label, session_volume, swim_order
+from app.coach_programs import (
+    CoachProgram, SessionLine, program_for, render_session, session_label, session_lines, session_volume, swim_order,
+)
 from app.coach_sessions import Session
 
 TAPER_WINDOW_DAYS = 13          # taper sessions for meets in this week or the next
@@ -59,6 +61,33 @@ def assign_week(coach_name: str, week_start: date, swims: int, taper: bool = Fal
         session = pool[(week_number + occurrence) % len(pool)]
         assignments.append(SwimAssignment(coach, session, use_taper))
     return assignments
+
+
+def session_parts(session: Session, size: int = 5) -> list[tuple[SessionLine, ...]]:
+    """The session's lines in balanced, consecutive parts of about `size` swims each, so a long session can be written
+    in parts at the same time. A note or rest after a swim stays with it; block headers ("3 rounds:") and a section's
+    opening note go with the swim that follows. A session of up to `size + 1` swims is one part."""
+    units: list[list[SessionLine]] = []
+    leading: list[SessionLine] = []
+    for line in session_lines(session):
+        if line.meters > 0:
+            units.append(leading + [line])
+            leading = []
+        elif line.header or not units or units[-1][-1].section != line.section:
+            leading.append(line)
+        else:
+            units[-1].append(line)
+    if leading and units:
+        units[-1] += leading
+    if len(units) <= size + 1:
+        return [tuple(line for unit in units for line in unit)] if units else []
+    count = -(-len(units) // size)
+    sizes = [len(units) // count + (1 if index < len(units) % count else 0) for index in range(count)]
+    parts, start = [], 0
+    for length in sizes:
+        parts.append(tuple(line for unit in units[start:start + length] for line in unit))
+        start += length
+    return parts
 
 
 def main_strokes(events: list[str]) -> list[str]:

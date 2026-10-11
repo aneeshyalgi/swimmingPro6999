@@ -14,7 +14,8 @@ export const GUIDE_SUBTAB: Record<GuideTarget, "week" | "library" | "competition
 }
 
 /** What the Training tab reports back while the guided setup walks the athlete through it. */
-export type GuideEvent = "swim-started" | "swim-done" | "swim-failed" | "gym-started" | "gym-done" | "gym-failed" | "meet-form-opened" | "meet-saved"
+export type GuideEvent = "swim-started" | "swim-done" | "swim-failed" | "swim-cancelled" | "gym-started" | "gym-done" | "gym-failed" | "gym-cancelled"
+  | "meet-form-opened" | "meet-saved"
 
 type StepKey = "swim" | "gym" | "meet"
 type Status = { swim: boolean; gym: boolean; meet: boolean }
@@ -89,7 +90,7 @@ export function GettingStarted({ firstName, swimSessions, gymSessions, onShowMe 
     target: GuideTarget; view: GuideTarget; icon: typeof Waves; tone: string; demo: ReactNode }[] = [
     {
       key: "swim", title: "Generate your swim week", where: ["Training", "Swim Week"], done: status.swim, icon: Waves, tone: "cyan",
-      body: `Your coach writes all ${swimSessions} swim${swimSessions === 1 ? "" : "s"} for Monday to Sunday, paced from your PBs. It takes about 30 seconds.`,
+      body: `Your coach writes all ${swimSessions} swim${swimSessions === 1 ? "" : "s"} for Monday to Sunday, paced from your PBs.`,
       target: "swim-generate", view: "swim-week", demo: <DemoSwim />,
     },
     {
@@ -342,7 +343,7 @@ function Completed({ firstName, onOpen, onClose }: { firstName: string; onOpen: 
 
 // ---------------------------------------------------------------- spotlight tour
 const TIPS: Record<GuideTarget, { title: string; body: string }> = {
-  "swim-generate": { title: "Tap Generate Swim Week", body: "Your coach builds every swim from Monday to Sunday around your availability. It takes about 30 seconds." },
+  "swim-generate": { title: "Tap Generate Swim Week", body: "Your coach builds every swim from Monday to Sunday around your availability." },
   "gym-generate": { title: "Tap Plan my week with AI", body: "Strength & mobility sessions go on spread-out days, with your coach's mobility routine on the rest." },
   "add-meet": { title: "Add your next competition", body: "Enter the date and priority. A and B meets make your plans build up and taper toward race day." },
   "swim-week": { title: "Your swim week lives here", body: "Open any day for the full session. Tick swims off as you complete them." },

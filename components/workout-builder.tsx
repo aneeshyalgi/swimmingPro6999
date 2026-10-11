@@ -19,7 +19,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useCountUp } from "@/components/dashboard-ui"
 import { Segmented, inputClass, shortDate } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
-import { downloadGymPdf, gymSavedSchema, gymWeekSchema, trainingRequest, type BuilderExercise, type BuilderSection, type GymWeek } from "@/lib/training"
+import { downloadGymPdf, gymSavedSchema, gymWeekSchema, trainingRequest, type BuilderExercise, type BuilderSection, type GymItem, type GymWeek } from "@/lib/training"
 import {
   QUICK_ADD, SECTION_KINDS, TEMPLATES, docPayload, docSummary, exercise as newExercise, isBlank, placeholderFor, section as newSection,
   sectionStats, type BuilderDoc,
@@ -62,14 +62,18 @@ export function IconButton({ label, onClick, disabled, children, danger }: { lab
 }
 
 /** The manual Workout Builder: sections of exercises, autosaved to the athlete's account. No AI. */
-export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDeleted, onNotice }: {
+export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDeleted, onNotice, backLabel = "Gym week", backTitle = "Save and return to the gym week" }: {
   initial: BuilderDoc
   itemKey: string | null
   isNew: boolean
   onBack: (saved: boolean) => void
-  onSaved: (week: GymWeek) => void
+  /** `item`: this workout as just saved (left out for a copy made with Duplicate to…). */
+  onSaved: (week: GymWeek, item?: GymItem) => void
   onDeleted: (week: GymWeek) => void
   onNotice: (message: string) => void
+  /** Where the toolbar's back button goes: the Gym week, or closing the builder on its own page. */
+  backLabel?: string
+  backTitle?: string
 }) {
   const [doc, setDoc] = useState<BuilderDoc>(initial)
   const [key, setKey] = useState<string | null>(itemKey)
@@ -107,7 +111,7 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
         setKey(result.item.key); keyRef.current = result.item.key
         setSavedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
         setStatus(dirty.current ? "unsaved" : "saved")
-        onSaved(result.week)
+        onSaved(result.week, result.item)
         return true
       } catch (failure) {
         dirty.current = true
@@ -155,6 +159,10 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
     window.addEventListener("beforeunload", leave)
     return () => { window.removeEventListener("keydown", keys); window.removeEventListener("beforeunload", leave); if (timer.current) window.clearTimeout(timer.current) }
   }, [persist])
+  // Leaving the builder another way (another section, another tab) still saves the last edits.
+  const persistRef = useRef(persist)
+  persistRef.current = persist
+  useEffect(() => () => { if (dirty.current) void persistRef.current() }, [])
 
   /** Save any pending changes, then return to the calendar (used by Calendar, Save and Done). */
   const back = async () => { if (await persist()) onBack(!!keyRef.current) }
@@ -207,7 +215,7 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
       {/* Toolbar */}
       <div className="sticky top-[124px] z-30 lg:top-[72px]">
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-[#0b1218]/85 px-3 py-2.5 shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:px-4">
-          <Button variant="ghost" onClick={() => void back()} className="h-9 rounded-full px-3 text-slate-300 hover:text-white"><ArrowLeft className="mr-1.5 h-4 w-4" />Gym week</Button>
+          <Button variant="ghost" onClick={() => void back()} className="h-9 rounded-full px-3 text-slate-300 hover:text-white"><ArrowLeft className="mr-1.5 h-4 w-4" />{backLabel}</Button>
           <span className="hidden h-5 w-px bg-white/10 sm:block" />
           <p className="flex items-center gap-2 text-sm font-semibold text-white"><Dumbbell className="h-4 w-4 text-violet-300" /><span className="hidden sm:inline">Workout Builder</span></p>
           <span role="status" aria-live="polite" className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-slate-300">
@@ -223,7 +231,7 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
               </DropdownMenuItem>)}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button onClick={() => void back()} disabled={status === "saving"} title="Save and return to the gym week" className="h-9 rounded-full bg-gradient-to-r from-violet-300 to-cyan-300 px-4 font-semibold text-slate-950">
+          <Button onClick={() => void back()} disabled={status === "saving"} title={backTitle} className="h-9 rounded-full bg-gradient-to-r from-violet-300 to-cyan-300 px-4 font-semibold text-slate-950">
             {status === "saved" ? <Check className="mr-1.5 h-4 w-4" /> : <Save className="mr-1.5 h-4 w-4" />}Save
           </Button>
           <DropdownMenu>

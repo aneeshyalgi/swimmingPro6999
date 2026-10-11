@@ -20,7 +20,8 @@ type Screen = {
   paid: boolean
   user_key: string
   first_name: string
-  offer: { id: string; name: string; description: string; amount: number; currency: string; interval: string }
+  // first_month_amount: a new subscriber's first month (null when they've subscribed before); then `amount` monthly.
+  offer: { id: string; name: string; description: string; amount: number; currency: string; interval: string; first_month_amount: number | null }
   coach: { name: string; title: string; inspired_by: string | null } | null
   program: {
     headline: string | null
@@ -187,6 +188,8 @@ function SubscribeContent() {
 
   const { offer, program, coach } = screen
   const price = money(offer.amount, offer.currency)
+  const firstMonth = offer.first_month_amount != null && offer.first_month_amount < offer.amount ? money(offer.first_month_amount, offer.currency) : null
+  const dueToday = firstMonth ?? price
   const today = new Date()
   const renewals = [0, 1, 2, 3].map((months) => addMonths(today, months))
   const billingDay = today.getDate() <= 28 ? `every month on the ${ordinal(today.getDate())}` : "on this date every month"
@@ -258,16 +261,19 @@ function SubscribeContent() {
                     </div>
 
                     <p className="mt-5 flex items-end gap-2">
-                      <span className="sr-only">{price} per month</span>
+                      <span className="sr-only">{firstMonth ? `${firstMonth} for your first month, then ${price} per month` : `${price} per month`}</span>
                       <span aria-hidden className="sb-price inline-flex items-start text-[64px] font-black leading-none tracking-tight text-white tabular-nums">
-                        <Odometer text={price.replace(/\.\d+$/, "")} />
-                        <span className="text-[30px] text-slate-300">{price.match(/\.\d+$/)?.[0]}</span>
+                        <Odometer text={dueToday.replace(/\.\d+$/, "")} />
+                        <span className="text-[30px] text-slate-300">{dueToday.match(/\.\d+$/)?.[0]}</span>
                       </span>
-                      <span aria-hidden className="pb-1.5 text-sm font-medium text-slate-400">/ month</span>
+                      <span aria-hidden className="pb-1.5 text-sm font-medium text-slate-400">{firstMonth ? "first month" : "/ month"}</span>
                     </p>
-                    <p className="mt-2 text-sm text-slate-400">Billed monthly. Renews automatically each month.</p>
+                    <p className="mt-2 text-sm text-slate-400">
+                      {firstMonth ? <>Then <span className="font-semibold text-slate-200">{price} a month</span>. Renews automatically each month.</>
+                        : "Billed monthly. Renews automatically each month."}
+                    </p>
 
-                    <BillingTimeline renewals={renewals} price={price} />
+                    <BillingTimeline renewals={renewals} charges={renewals.map((_, index) => (index === 0 ? dueToday : price))} />
 
                     <ul className="mt-7 space-y-3">
                       {features.map((feature, index) => (
@@ -304,7 +310,7 @@ function SubscribeContent() {
                       </button>
                     </div>
                     <p className="mt-3 text-center text-xs leading-5 text-slate-400">
-                      {price} today, then {price} {billingDay}.
+                      {dueToday} today, then {price} {billingDay}.
                     </p>
 
                     <div className="mt-6 grid grid-cols-3 gap-2 border-t border-white/[0.07] pt-5 text-center text-[11px] leading-4 text-slate-400">
@@ -473,8 +479,8 @@ function Odometer({ text }: { text: string }) {
   )
 }
 
-/** Today's charge and the next three monthly renewals. */
-function BillingTimeline({ renewals, price }: { renewals: Date[]; price: string }) {
+/** Today's charge and the next three monthly renewals (`charges`: what each of those dates costs). */
+function BillingTimeline({ renewals, charges }: { renewals: Date[]; charges: string[] }) {
   const label = (date: Date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
   return (
     <div className="mt-6 rounded-2xl border border-white/[0.08] bg-black/25 px-4 pb-4 pt-5">
@@ -491,7 +497,7 @@ function BillingTimeline({ renewals, price }: { renewals: Date[]; price: string 
         {renewals.map((date, index) => (
           <li key={index} className="sb-label" style={{ "--i": index } as CSSProperties}>
             <p className={cn("text-[11px] font-semibold", index === 0 ? "text-cyan-200" : "text-slate-300")}>{index === 0 ? "Today" : label(date)}</p>
-            <p className="text-[11px] tabular-nums text-slate-500">{price}</p>
+            <p className="text-[11px] tabular-nums text-slate-500">{charges[index]}</p>
           </li>
         ))}
       </ol>

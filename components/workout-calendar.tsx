@@ -21,10 +21,11 @@ import { DoseChip, GymWorkoutBody, GymWorkoutCard } from "@/components/gym-worko
 import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
 import { CalendarDay } from "@/components/calendar-day"
 import { WorkoutBuilder } from "@/components/workout-builder"
-import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, GenerationProgress, LoadingLane, TwoColumnFlow, WeekSkeleton, inputClass, shortDate, todayISO } from "@/components/training-ui"
+import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
+import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, LoadingLane, TwoColumnFlow, WeekSkeleton, inputClass, shortDate, todayISO } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import { blankDoc, docFromItem, type BuilderDoc } from "@/lib/workout-builder"
-import { downloadGymPdf, downloadWeekPdf, gymSavedSchema, gymWeekSchema, mondayISO, shiftWeek, trainingRequest, type GymItem, type GymWeek } from "@/lib/training"
+import { GENERATION_CANCELLED, downloadGymPdf, downloadWeekPdf, gymSavedSchema, gymWeekSchema, mondayISO, shiftWeek, trainingRequest, type GymItem, type GymWeek } from "@/lib/training"
 
 const planSteps = ["Reading your onboarding, meets and check-ins", "Choosing your coach's sessions for this training block", "Matching every movement to your level and equipment", "Personalising warm-ups and mobility", "Adding them to your gym week"]
 
@@ -42,13 +43,8 @@ function Stat({ icon: Icon, label, value, unit, tone }: { icon: typeof Dumbbell;
 type Editing = { doc: BuilderDoc; key: string | null; isNew: boolean; token: number }
 type DateAction = { mode: "move" | "duplicate"; item: GymItem; date: string }
 
-/**
- * The Workout Library: a strength & dryland calendar that is independent of swim training.
- * `openBuilder`: the dashboard asked for a new workout (its Workout Builder shortcut); `onBuilderOpened` confirms it.
- */
-export function WorkoutCalendar({ onChanged, onGuideEvent, openBuilder: builderRequested, onBuilderOpened }: {
-  onChanged: () => Promise<void>; onGuideEvent?: (event: GuideEvent) => void; openBuilder?: boolean; onBuilderOpened?: () => void
-}) {
+/** The Workout Library: a strength & dryland calendar that is independent of swim training. */
+export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => Promise<void>; onGuideEvent?: (event: GuideEvent) => void }) {
   const [weekStart, setWeekStart] = useState(() => mondayISO())
   const [week, setWeek] = useState<GymWeek | null>(null)
   const [loading, setLoading] = useState(true)
@@ -56,6 +52,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, openBuilder: builderR
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [planning, setPlanning] = useState(false)
+  const generation = useWeekGeneration()
   const [armed, setArmed] = useState(false)
   const [editing, setEditing] = useState<Editing | null>(null)
   const [dateAction, setDateAction] = useState<DateAction | null>(null)
@@ -118,8 +115,12 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, openBuilder: builderR
     }
     setArmed(false); setPlanning(true)
     onGuideEvent?.("gym-started")
-    const saved = await perform(() => trainingRequest("/gym/generate", gymWeekSchema, { body: { week_start: weekStart } }), "Your gym week is ready: strength sessions on spread-out days and mobility on the rest.")
-    onGuideEvent?.(saved ? "gym-done" : "gym-failed")
+    let cancelled = false
+    const saved = await perform(() => generation.run("/gym/generate", gymWeekSchema, { week_start: weekStart }).catch((failure: unknown) => {
+      cancelled = failure instanceof Error && failure.message === GENERATION_CANCELLED
+      throw failure
+    }), "Your gym week is ready: strength sessions on spread-out days and mobility on the rest.")
+    onGuideEvent?.(saved ? "gym-done" : cancelled ? "gym-cancelled" : "gym-failed")
     setPlanning(false)
   }
   const openBuilder = (doc: BuilderDoc, key: string | null, isNew: boolean) => {
@@ -129,13 +130,6 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, openBuilder: builderR
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
   const newWorkout = (date?: string) => openBuilder(blankDoc(date ?? (openDays[0]?.date ?? weekStart)), null, true)
-  // The sidebar's Workout Builder shortcut: once the week has loaded (so the date matches the New workout button), open
-  // a new workout. A workout already open in the builder stays open rather than being replaced.
-  useEffect(() => {
-    if (!builderRequested || loading) return
-    onBuilderOpened?.()
-    if (!editing) newWorkout()
-  })
   const toggle = (item: GymItem) => perform(() => trainingRequest(`/gym/${encodeURIComponent(item.key)}/complete`, gymWeekSchema, { method: item.completed ? "DELETE" : "POST" }),
     item.completed ? `“${item.workout.title}” unticked.` : `Nice work! “${item.workout.title}” is completed.`, { quiet: true })
   const exportPdf = (item: GymItem) => perform(() => downloadGymPdf(item.key, item.workout.title), "PDF downloaded.")
@@ -271,7 +265,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, openBuilder: builderR
         </section>
       </Reveal>
 
-      {planning && <GenerationProgress title="Planning your gym week" subtitle="Built on the SwimGPT Strength & Mobility System for your coach, level and equipment. Usually under 30 seconds." steps={planSteps} interval={6000} />}
+      {planning && <GenerationOverlay title="Planning your gym week" subtitle="Built on the SwimGPT Strength & Mobility System for your coach, level and equipment." steps={planSteps} interval={900} />}
 
       {loading && !week && <>
         <LoadingLane tone="gym" title="Loading your gym week" messages={["Fetching this week's workouts", "Checking completed sessions", "Matching your equipment"]} />

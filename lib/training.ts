@@ -119,12 +119,19 @@ export async function trainingRequest<T>(
   if (error) throw error
   if (!session) throw new Error("Sign in again to access your training data.")
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-  const response = await fetch(`${apiUrl}/api/training${path}`, {
-    method: options.method || (options.body === undefined ? "GET" : "POST"),
-    headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    signal: options.signal,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${apiUrl}/api/training${path}`, {
+      method: options.method || (options.body === undefined ? "GET" : "POST"),
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
+    })
+  } catch (failure) {
+    if (options.signal?.aborted) throw failure
+    // The connection dropped (offline, a server restart): asking again is safe, a saved week comes straight back.
+    throw new Error("We lost the connection to SwimGPT. Check your internet connection and try again.")
+  }
   if (!response.ok) {
     const text = await response.text()
     let detail = `Training request failed (${response.status}).`
@@ -138,6 +145,38 @@ export async function trainingRequest<T>(
     throw new Error(detail)
   }
   return schema.parse(await response.json())
+}
+
+/** A random id for a generation run (crypto.randomUUID needs a secure context, which a phone on the LAN isn't). */
+function runId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export const GENERATION_CANCELLED = "Generation stopped because you left the page, so nothing was saved. Start it again whenever you're ready."
+
+/**
+ * Start generating a swim or gym week. `cancel()` (the athlete left: another section, a reload, a closed tab) aborts the
+ * request and tells the server to drop the run, so nothing from it is ever saved and the week can be generated afresh.
+ */
+export function startGeneration<T>(path: string, schema: z.ZodType<T>, body: Record<string, unknown>) {
+  const id = runId()
+  const controller = new AbortController()
+  let settled = false
+  const promise = trainingRequest(path, schema, { body: { ...body, job_id: id }, signal: controller.signal })
+    .catch((failure: unknown) => { throw controller.signal.aborted ? new Error(GENERATION_CANCELLED) : failure })
+    .finally(() => { settled = true })
+  const cancel = () => {
+    if (settled || controller.signal.aborted) return
+    controller.abort()
+    // The aborted request alone normally stops it; the beacon also gets through while the page is unloading.
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    try { navigator.sendBeacon(`${apiUrl}/api/training/generation/cancel`, new Blob([JSON.stringify({ id })], { type: "text/plain" })) } catch { /* best effort */ }
+  }
+  return { promise, cancel }
 }
 
 export function mondayISO(day = new Date()): string {

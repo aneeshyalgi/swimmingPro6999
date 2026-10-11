@@ -99,6 +99,12 @@ export function GuidedSetup({ userKey, firstName, coach, swimSessions, gymSessio
       onStep(event.type === "swim-failed" ? "swim" : "gym")
       return
     }
+    // The athlete left mid-generation: nothing was saved, so that step simply starts over.
+    if (event.type === "swim-cancelled" || event.type === "gym-cancelled") {
+      setFailed(false)
+      onStep(event.type === "swim-cancelled" ? "swim" : "gym")
+      return
+    }
     const rule = next[event.type]
     if (rule && rule[0].includes(step)) {
       setFailed(false)
@@ -133,14 +139,12 @@ export function GuidedSetup({ userKey, firstName, coach, swimSessions, gymSessio
     swim: failed
       ? { title: "Let's try that again", body: "That didn't go through. Tap Generate Swim Week once more." }
       : { title: "First, your swim week", body: `Tap Generate Swim Week. ${coach} will pick your ${swimSessions} swim${swimSessions === 1 ? "" : "s"} from their own sessions and pace every set to your PBs.` },
-    "swim-working": { title: `${coach} is writing your swim week`, body: "Choosing the sessions from their program and fitting each one to your time and pace. About 30 seconds." },
     "swim-done": { title: "Your swim week is ready", body: "Nice. Next up: your gym week." },
     gym: failed
       ? { title: "Let's try that again", body: "That didn't go through. Tap Plan my week with AI once more." }
       : { title: "Now your gym week", body: gymSessions > 0
           ? `Tap Plan my week with AI: ${gymSessions} strength session${gymSessions === 1 ? "" : "s"} on spread-out days, mobility on the rest.`
           : "Tap Plan my week with AI for daily mobility routines that suit your strokes." },
-    "gym-working": { title: "Building your gym week", body: "Matching every exercise to your level and equipment, with mobility for your strokes." },
     "gym-done": { title: "Your gym week is ready", body: "One last, optional step: your next meet." },
     meet: { title: "Racing soon?", body: "Tap Add Competition so both plans build up and taper toward your next meet. No meet yet? Skip it." },
     "meet-form": { title: "Add your meet", body: "Fill in the name, date and pool, pick a priority (A is your big one) and your events, then save." },
@@ -155,9 +159,10 @@ export function GuidedSetup({ userKey, firstName, coach, swimSessions, gymSessio
           onStart={() => onStep("swim")} />
       )}
       {spotTarget && <Spotlight key={`spot-${spotTarget}`} target={spotTarget} hint={step === "meet-form" ? null : step === "meet" ? "Tap Add Competition" : "Tap here"} />}
+      {/* No dock while a week is generated: its progress covers the whole page (GenerationOverlay). */}
       {copy && (
         <Dock key={`dock-${step}`} coach={coachFirst} step={STEP_NUMBER[step] ?? 1} title={copy.title} body={copy.body}
-          working={step.endsWith("-working")} done={step.endsWith("-done")}
+          done={step.endsWith("-done")}
           onSkipSetup={() => close("dismissed")}
           action={step === "meet" || step === "meet-form" ? <Button size="sm" variant="ghost" onClick={() => onStep("done")} className="rounded-full text-slate-300 hover:bg-white/10 hover:text-white">Skip this</Button>
             : step === "gym" && gymSessions === 0 ? <Button size="sm" variant="ghost" onClick={() => onStep("meet")} className="rounded-full text-slate-300 hover:bg-white/10 hover:text-white">Skip this</Button>
@@ -217,22 +222,15 @@ function IntroModal({ firstName, coach, swimSessions, gymSessions, onStart }: {
 }
 
 // ---------------------------------------------------------------- the coach's voice, pinned to the bottom
-function Dock({ coach, step, title, body, working, done, action, onSkipSetup }: {
-  coach: string; step: number; title: string; body: string; working: boolean; done: boolean; action: ReactNode; onSkipSetup: () => void
+function Dock({ coach, step, title, body, done, action, onSkipSetup }: {
+  coach: string; step: number; title: string; body: string; done: boolean; action: ReactNode; onSkipSetup: () => void
 }) {
   const [shown, setShown] = useState(0)
-  const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setShown(body.length); return }
     const timer = window.setInterval(() => setShown((value) => (value >= body.length ? value : value + 2)), 16)
     return () => window.clearInterval(timer)
   }, [body])
-  useEffect(() => {
-    if (!working) return
-    const started = Date.now()
-    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
-    return () => window.clearInterval(timer)
-  }, [working])
 
   return (
     <div className="gx-dock fixed inset-x-0 bottom-0 z-[90] flex justify-center px-3 pb-3 sm:pb-5" role="status" aria-live="polite">
@@ -241,9 +239,9 @@ function Dock({ coach, step, title, body, working, done, action, onSkipSetup }: 
         <div className="flex items-start gap-3.5">
           <span className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-200 via-accent to-sky-500 text-sm font-bold text-slate-950">
             <CoachAvatar name={coach} shape="circle" className="h-11 w-11" />
-            {(done || working) && (
+            {done && (
               <span className="absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full border-2 border-[#0b1820] bg-accent text-slate-950">
-                {done ? <Check className="gx-pop h-3 w-3" strokeWidth={3.5} /> : <Loader2 className="h-3 w-3 animate-spin" />}
+                <Check className="gx-pop h-3 w-3" strokeWidth={3.5} />
               </span>
             )}
             {!done && <span aria-hidden className="gx-talk absolute -inset-1 rounded-full" />}
@@ -256,19 +254,15 @@ function Dock({ coach, step, title, body, working, done, action, onSkipSetup }: 
               </button>
             </div>
             <p className="mt-1 font-semibold text-white">{title}</p>
-            {!working && (
-              <p className="mt-1 min-h-[2.5rem] text-sm leading-5 text-slate-300">
-                {body.slice(0, shown)}<span className={cn("gx-caret", shown >= body.length && "opacity-0")} aria-hidden>|</span>
-              </p>
-            )}
-            {working && <span className="sr-only">{body}</span>}
-            <div className={cn("flex items-center justify-between gap-3", working ? "mt-2" : "mt-3")}>
+            <p className="mt-1 min-h-[2.5rem] text-sm leading-5 text-slate-300">
+              {body.slice(0, shown)}<span className={cn("gx-caret", shown >= body.length && "opacity-0")} aria-hidden>|</span>
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-1.5" aria-hidden>
                 {[1, 2, 3].map((index) => (
                   <span key={index} className={cn("h-1.5 rounded-full transition-all duration-500",
                     index < step || (index === step && done) ? "w-7 bg-emerald-300" : index === step ? "gx-current w-10" : "w-5 bg-white/12")} />
                 ))}
-                {working && <span className="ml-2 font-mono text-[11px] tabular-nums text-slate-500">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}</span>}
               </div>
               {action}
             </div>

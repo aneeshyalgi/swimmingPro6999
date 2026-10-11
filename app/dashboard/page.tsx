@@ -41,6 +41,7 @@ import { CoachSwitcher, type SwitchReturn } from "@/components/coach-switcher"
 import { GettingStarted, GuideSpotlight, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
 import { SubscriptionDialog } from "@/components/subscription-dialog"
+import { WorkoutBuilderSection } from "@/components/workout-builder-section"
 import { Banner } from "@/components/training-ui"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
 
@@ -50,7 +51,6 @@ const navGroups = [
     items: [
       { value: "overview", label: "Dashboard", icon: LayoutDashboard },
       { value: "swim", label: "Training", icon: Waves },
-      // A shortcut, not a page: opens a new workout in Training → Gym week (see openWorkoutBuilder).
       { value: "builder", label: "Workout Builder", icon: PencilRuler },
     ],
   },
@@ -76,6 +76,7 @@ const SPARKS = [0, 45, 90, 135, 180, 225, 270, 315]
 const pageTitles: Record<string, [string, string]> = {
   overview: ["Dashboard", "Your training at a glance"],
   swim: ["Training", "Your plan, schedule and competitions"],
+  builder: ["Workout Builder", "Build a strength or dryland session, exercise by exercise. It saves to your gym week as you go."],
   nutrition: ["Nutrition", "Your daily fuel plan, built around your training"],
   mental: ["Mental Performance", "Confidence, focus and calm when it counts"],
   paces: ["Pace Calculator", "Training paces for every zone, for you and your athletes"],
@@ -111,8 +112,6 @@ export default function DashboardPage() {
   const [subscriptionOpen, setSubscriptionOpen] = useState(false)
   const [coachSwitcherOpen, setCoachSwitcherOpen] = useState(false)
   const [switchReturn, setSwitchReturn] = useState<SwitchReturn | null>(null)
-  // Bumped each time the Workout Builder shortcut is chosen, so the Gym week opens a new workout.
-  const [builderRequest, setBuilderRequest] = useState(0)
   // Counts Workout Builder clicks; each one replays its launch animation in the nav.
   const [builderBurst, setBuilderBurst] = useState(0)
 
@@ -277,12 +276,15 @@ export default function DashboardPage() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
   const [pageTitle, pageSubtitle] = pageTitles[activeTab] ?? pageTitles.overview
-  /** The Workout Builder shortcut does what Training → Gym week → New workout does. */
   const changeTab = (value: string) => {
-    if (value !== "builder") { setActiveTab(value); return }
+    setActiveTab(value)
+    if (value === "builder") setBuilderBurst((count) => count + 1)
+  }
+  /** Training, on the Gym week (where the builder's workouts live). */
+  const openGymWeek = () => {
     setActiveTab("swim")
-    setBuilderRequest(Date.now())
-    setBuilderBurst((count) => count + 1)
+    setGuide(null)
+    requestAnimationFrame(() => setGuide("gym-week"))
   }
 
   return (
@@ -583,7 +585,10 @@ export default function DashboardPage() {
                 <DashboardOverview data={overview} onViewToday={() => setActiveTab("swim")} />
               </TabsContent>
               <TabsContent value="swim" className="mt-0 space-y-6">
-                <TrainingPanel onChanged={refreshOverview} guide={guide} builderRequest={builderRequest} onBuilderOpened={() => setBuilderRequest(0)} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })} />
+                <TrainingPanel onChanged={refreshOverview} guide={guide} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })} />
+              </TabsContent>
+              <TabsContent value="builder" className="mt-0">
+                <WorkoutBuilderSection onChanged={refreshOverview} onOpenGymWeek={openGymWeek} />
               </TabsContent>
               <TabsContent value="nutrition" className="mt-0">
                 <NutritionPanel firstName={firstName} trainingToday={overview.today.length > 0} />

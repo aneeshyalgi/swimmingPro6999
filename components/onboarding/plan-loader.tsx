@@ -166,7 +166,7 @@ export function PlanLoader({ firstName, coach, done, onFinished }: {
         <h2 className="text-balance text-3xl font-bold tracking-tight text-white">
           {allDone ? `Your program is ready${firstName ? `, ${firstName}` : ""}` : `Building your program${firstName ? `, ${firstName}` : ""}`}
         </h2>
-        <p className="mt-2 text-slate-400">{allDone ? "Meet your coach…" :"This usually takes under a minute. Keep this tab open."}</p>
+        <p className="mt-2 text-slate-400">{allDone ? "Meet your coach…" :"Keep this tab open while your plan is built."}</p>
         <div className="mx-auto mt-5 flex max-w-md items-center gap-3">
           <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
             <span className="pl-bar absolute inset-y-0 left-0 rounded-full" style={{ width: `${progress * 100}%` }} />

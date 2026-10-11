@@ -260,25 +260,46 @@ def session_volume(session: Session) -> int:
     return estimate
 
 
-def estimated_volume(session: Session) -> int:
-    total = 0.0
+@dataclass(frozen=True)
+class SessionLine:
+    """One line of a session's swim sections, with the repeat block it sits in and the metres it swims (the block's
+    repeats included; 0 for block headers, notes, rests and time-based work)."""
+    section: str
+    text: str
+    block: str | None          # e.g. "3 rounds:" for a line inside that block
+    meters: float
+    header: bool = False       # a block header ("3 rounds:", "6x"): context for the lines under it, not a set
+    repeats: int = 1           # how many times the block repeats the line
+
+
+def session_lines(session: Session) -> list[SessionLine]:
+    """Every line of the session's swim sections, in order (Gym and Working Sets are the Gym week's)."""
+    result: list[SessionLine] = []
     for section in session.sections:
         if section.name in ("Gym", "Working Sets"):
             continue
-        multiplier, inner = 1, 1
+        multiplier, inner, block = 1, 1, None
         for line in section.lines:
+            text = line.strip()
             rounds = _rounds(line)
             if rounds:
-                multiplier, inner = rounds, 1
+                multiplier, inner, block = rounds, 1, text
+                result.append(SessionLine(section.name, text, None, 0.0, header=True))
                 continue
-            alone = re.fullmatch(r"(\d+)x", line.strip())
+            alone = re.fullmatch(r"(\d+)x", text)
             if alone:
                 inner = int(alone.group(1))
+                block = f"{block} {text}" if block else text
+                result.append(SessionLine(section.name, text, None, 0.0, header=True))
                 continue
-            if multiplier > 1 and re.match(r"^\d{3,}\s+(?:easy|EZ)", line.strip()) and line_volume(line) >= 500:
-                multiplier, inner = 1, 1          # a long easy swim closes the rounds block (e.g. Robert VO2MAX #3)
-            total += line_volume(line) * multiplier * inner
-    return int(round(total))
+            if multiplier > 1 and re.match(r"^\d{3,}\s+(?:easy|EZ)", text) and line_volume(line) >= 500:
+                multiplier, inner, block = 1, 1, None   # a long easy swim closes the rounds block (e.g. Robert VO2MAX #3)
+            result.append(SessionLine(section.name, text, block, line_volume(line) * multiplier * inner, repeats=multiplier * inner))
+    return result
+
+
+def estimated_volume(session: Session) -> int:
+    return int(round(sum(line.meters for line in session_lines(session))))
 
 
 # ---------------------------------------------------------------- rendering for the AI

@@ -627,7 +627,7 @@ function Handover({ from, to, steps, step }: { from: string; to: string; steps: 
           <BadgeCheck className="h-3.5 w-3.5" />Payment received
         </p>
         <h3 className="text-2xl font-bold text-white">Handing you over to {firstName(to)}</h3>
-        <p className="mt-1.5 text-sm text-slate-400">Rebuilding your season plan on {firstName(to)}&apos;s program. This takes about half a minute.</p>
+        <p className="mt-1.5 text-sm text-slate-400">Rebuilding your season plan on {firstName(to)}&apos;s program.</p>
         <p className="mx-auto mt-3 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1.5 text-xs text-slate-300">
           <CalendarRange className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--csw-tone)" }} />
           This week&apos;s sessions won&apos;t change. {firstName(to)}&apos;s start with your next week.

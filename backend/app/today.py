@@ -38,7 +38,8 @@ class SwimSession(BaseModel):
     estimated_duration_minutes: int = Field(ge=10, le=180)
     main_training_zones: list[str] = Field(min_length=1)
     equipment: list[str]
-    sets: list[SwimSet] = Field(min_length=1, max_length=15)
+    # Room for every line of the longest coach session (26) when each line becomes a set.
+    sets: list[SwimSet] = Field(min_length=1, max_length=40)
 
     @property
     def total_distance_meters(self) -> int:
