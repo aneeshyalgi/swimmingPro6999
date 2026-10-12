@@ -47,6 +47,7 @@ import {
   timeError,
   timeToSeconds,
   toStoredTime,
+  yardEvent,
   type StoredSwimTime,
   type TimeParts,
 } from "@/lib/swim-time"
@@ -68,6 +69,9 @@ type OnboardingData = {
   mainEvents: string[]
   pbsLCM: Record<string, TimeParts>
   pbsSCM: Record<string, TimeParts>
+  // Short course yards, by the form's event (sent under its yard event, "500y Freestyle"): asked only of athletes who
+  // join from now on.
+  pbsSCY: Record<string, TimeParts>
   swimmerType: string
 
   // Step 3: Training Environment
@@ -101,6 +105,7 @@ const initialData: OnboardingData = {
   mainEvents: [],
   pbsLCM: {},
   pbsSCM: {},
+  pbsSCY: {},
   swimmerType: "",
   swimSessionsPerWeek: 4,
   gymSessionsPerWeek: 2,
@@ -171,12 +176,15 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const fromSavedAnswers = (answers: Record<string, unknown>): OnboardingData => {
   const text = (value: unknown) => (value === null || value === undefined ? "" : String(value))
   const times = (value: unknown) => Object.fromEntries(Object.entries((value as Record<string, unknown>) || {}).map(([event, time]) => [event, coerceTimeParts(time)]))
+  const mainEvents = Array.isArray(answers.main_events) ? (answers.main_events as string[]) : []
+  const yards = times(answers.pbs_scy) // saved under the yard event
   return {
     ...initialData,
     age: text(answers.age), gender: text(answers.gender), country: text(answers.country), height: text(answers.height),
     weight: text(answers.weight), swimExperience: text(answers.swim_experience),
-    mainEvents: Array.isArray(answers.main_events) ? (answers.main_events as string[]) : [],
+    mainEvents,
     pbsLCM: times(answers.pbs_lcm), pbsSCM: times(answers.pbs_scm), swimmerType: text(answers.swimmer_type),
+    pbsSCY: Object.fromEntries(mainEvents.filter((event) => yards[yardEvent(event)]).map((event) => [event, yards[yardEvent(event)]])),
     swimSessionsPerWeek: Number(answers.swim_sessions_per_week) || initialData.swimSessionsPerWeek,
     gymSessionsPerWeek: answers.gym_sessions_per_week === null || answers.gym_sessions_per_week === undefined ? initialData.gymSessionsPerWeek : Number(answers.gym_sessions_per_week),
     sessionDuration: text(answers.session_duration),
@@ -199,7 +207,7 @@ const labelFor = (options: { value: string; label: string }[], value: string) =>
 /** A new athlete under 16 needs a parent or guardian to agree (athletes who joined before are never asked). */
 const needsGuardianFor = (age: string, newAthlete: boolean) => newAthlete && Number(age) >= MINIMUM_AGE && Number(age) < PARENTAL_CONSENT_AGE
 
-const validateStep = (step: number, data: OnboardingData, newAthlete = false): Record<string, string> => {
+const validateStep = (step: number, data: OnboardingData, newAthlete = false, yards = false): Record<string, string> => {
   const errors: Record<string, string> = {}
   const inRange = (value: string, min: number, max: number) => {
     const number = Number(value)
@@ -230,6 +238,8 @@ const validateStep = (step: number, data: OnboardingData, newAthlete = false): R
       if (lcmError) errors[eventFieldId("lcm", event)] = lcmError
       const scmError = timeError(data.pbsSCM[event], false, "") || realismError(event, data.pbsSCM[event])
       if (scmError) errors[eventFieldId("scm", event)] = scmError
+      const scyError = yards ? timeError(data.pbsSCY[event], false, "") || realismError(yardEvent(event), data.pbsSCY[event]) : undefined
+      if (scyError) errors[eventFieldId("scy", event)] = scyError
     })
   }
 
@@ -278,6 +288,8 @@ export default function OnboardingPage() {
   const [prefilled, setPrefilled] = useState(false)
   // Whether the account already has a profile (null until known): only new athletes are asked for a guardian's consent.
   const [hasProfile, setHasProfile] = useState<boolean | null>(null)
+  // Whether the saved answers have short course yards times (even none): athletes who joined since it was asked.
+  const [yardsSaved, setYardsSaved] = useState(false)
   // Whether the account has paid for its coaching plan (null until known). Paid athletes are never asked to pay again.
   const [paid, setPaid] = useState<boolean | null>(null)
 
@@ -297,7 +309,7 @@ export default function OnboardingPage() {
           if (draft?.userId === user.id && draft.data) {
             const { coaches: _legacyCoaches, ...savedDraft } = draft.data
             const restored: OnboardingData = { ...initialData, ...savedDraft, coach: draftCoach(draft.data) }
-            for (const field of ["pbsLCM", "pbsSCM", "oneYearGoalTimes"] as const) {
+            for (const field of ["pbsLCM", "pbsSCM", "pbsSCY", "oneYearGoalTimes"] as const) {
               restored[field] = Object.fromEntries(
                 Object.entries(restored[field] || {}).map(([event, time]) => [event, coerceTimeParts(time)]),
               )
@@ -320,6 +332,7 @@ export default function OnboardingPage() {
           if (response?.ok) {
             const saved = await response.json()
             accountPaid = Boolean(saved.paid)
+            setYardsSaved(saved.answers?.pbs_scy !== null && saved.answers?.pbs_scy !== undefined)
             if (!restoredDraft) {
               setData(fromSavedAnswers(saved.answers || {}))
               setMaxStep(steps.length)
@@ -375,7 +388,10 @@ export default function OnboardingPage() {
   // Unknown (the check failed) counts as new, as the server will ask for the guardian of a new athlete under 16.
   const newAthlete = hasProfile !== true
   const needsGuardian = needsGuardianFor(data.age, newAthlete)
-  const errors = useMemo(() => validateStep(currentStep, data, newAthlete), [currentStep, data, newAthlete])
+  // Short course yards (25-yard pool) times: asked of new athletes and of those who joined since, never of athletes who
+  // joined before.
+  const askYards = newAthlete || yardsSaved
+  const errors = useMemo(() => validateStep(currentStep, data, newAthlete, askYards), [currentStep, data, newAthlete, askYards])
   const visibleError = (key: string) => (attempted ? errors[key] : undefined)
 
   const updateData = <K extends keyof OnboardingData>(field: K, value: OnboardingData[K]) => {
@@ -400,7 +416,7 @@ export default function OnboardingPage() {
     })
   }
 
-  const updateTime = (field: "pbsLCM" | "pbsSCM" | "oneYearGoalTimes", event: string, time: TimeParts) => {
+  const updateTime = (field: "pbsLCM" | "pbsSCM" | "pbsSCY" | "oneYearGoalTimes", event: string, time: TimeParts) => {
     setData((prev) => ({ ...prev, [field]: { ...prev[field], [event]: time } }))
   }
 
@@ -431,7 +447,7 @@ export default function OnboardingPage() {
 
     // Earlier steps may have been edited after they were completed; recheck before generating.
     for (let step = 1; step < steps.length; step++) {
-      const stepErrors = validateStep(step, data, newAthlete)
+      const stepErrors = validateStep(step, data, newAthlete, askYards)
       const firstError = Object.keys(stepErrors)[0]
       if (firstError) {
         setCurrentStep(step)
@@ -481,6 +497,10 @@ export default function OnboardingPage() {
       main_events: data.mainEvents,
       pbs_lcm: storedTimes(data.pbsLCM, data.mainEvents),
       pbs_scm: storedTimes(data.pbsSCM, data.mainEvents),
+      // Under the yard event ("500y Freestyle"), and only from athletes who are asked.
+      ...(askYards ? {
+        pbs_scy: Object.fromEntries(Object.entries(storedTimes(data.pbsSCY, data.mainEvents)).map(([event, time]) => [yardEvent(event), time])),
+      } : {}),
       swimmer_type: data.swimmerType,
       swim_sessions_per_week: data.swimSessionsPerWeek,
       gym_sessions_per_week: data.gymSessionsPerWeek,
@@ -591,7 +611,8 @@ export default function OnboardingPage() {
         ["Swimmer type", labelFor(swimmerTypes, data.swimmerType)],
         ...data.mainEvents.map((event) => [
           event,
-          `${formatTime(data.pbsLCM[event]) || "—"} LCM${formatTime(data.pbsSCM[event]) ? ` · ${formatTime(data.pbsSCM[event])} SCM` : ""}`,
+          `${formatTime(data.pbsLCM[event]) || "—"} LCM${formatTime(data.pbsSCM[event]) ? ` · ${formatTime(data.pbsSCM[event])} SCM` : ""}${
+            askYards && formatTime(data.pbsSCY[event]) ? ` · ${formatTime(data.pbsSCY[event])} SCY` : ""}`,
         ]),
       ],
     },
@@ -1001,17 +1022,23 @@ export default function OnboardingPage() {
                           <div>
                             <p className="text-sm font-medium text-slate-200">Personal bests</p>
                             <p className="mt-1 text-xs text-slate-500">
-                              Long course (50m) is required, short course (25m) is optional. Leave minutes empty for times under a minute.
+                              {askYards
+                                ? "Long course (50m) is required. Short course, in a 25m or a 25-yard pool, is optional. Leave minutes empty for times under a minute."
+                                : "Long course (50m) is required, short course (25m) is optional. Leave minutes empty for times under a minute."}
                             </p>
                           </div>
                           <div className="divide-y divide-white/8 overflow-hidden rounded-2xl border border-white/10">
                             {data.mainEvents.map((event) => {
                               const lcmPace = pacePer50(event, data.pbsLCM[event])
+                              // In a 25-yard pool the 400m, 800m and 1500m freestyle are the 500y, 1000y and 1650y.
+                              const yards = yardEvent(event)
+                              const yardDistance = yards !== event.replace("m ", "y ") ? yards.split(" ")[0] : null
                               return (
-                                <div key={event} className="grid gap-4 bg-white/[0.015] p-4 sm:grid-cols-[150px_1fr_1fr] sm:items-start">
-                                  <div className="sm:pt-3">
+                                <div key={event} className={cn("grid gap-4 bg-white/[0.015] p-4",
+                                  askYards ? "md:grid-cols-3 md:items-start" : "sm:grid-cols-[150px_1fr_1fr] sm:items-start")}>
+                                  <div className={askYards ? "flex flex-wrap items-baseline gap-x-3 gap-y-0.5 md:col-span-3" : "sm:pt-3"}>
                                     <p className="font-semibold text-white">{event}</p>
-                                    {lcmPace && <p className="mt-0.5 text-xs text-accent">{lcmPace} per 50m</p>}
+                                    {lcmPace && <p className={cn("text-xs text-accent", !askYards && "mt-0.5")}>{lcmPace} per 50m</p>}
                                   </div>
                                   <Field label="LCM · 50m pool" htmlFor={eventFieldId("lcm", event)} required error={visibleError(eventFieldId("lcm", event))}>
                                     <TimeInput
@@ -1031,6 +1058,18 @@ export default function OnboardingPage() {
                                       onChange={(time) => updateTime("pbsSCM", event, time)}
                                     />
                                   </Field>
+                                  {askYards && (
+                                    <Field label="SCY · 25y pool" htmlFor={eventFieldId("scy", event)} optional error={visibleError(eventFieldId("scy", event))}
+                                      hint={yardDistance ? `Your ${yardDistance} time` : undefined}>
+                                      <TimeInput
+                                        id={eventFieldId("scy", event)}
+                                        label={`${yards} short course yards best`}
+                                        value={data.pbsSCY[event] || emptyTime}
+                                        invalid={Boolean(visibleError(eventFieldId("scy", event)))}
+                                        onChange={(time) => updateTime("pbsSCY", event, time)}
+                                      />
+                                    </Field>
+                                  )}
                                 </div>
                               )
                             })}

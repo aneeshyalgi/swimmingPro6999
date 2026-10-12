@@ -40,7 +40,7 @@ DASHBOARD_SCHEMA = {
 # Onboarding answers the plan is built from (never account, payment or internal ids).
 PLAN_PROFILE_FIELDS = [
     "full_name", "age", "gender", "country", "height", "weight", "swim_experience", "swimmer_type", "main_events",
-    "pbs_lcm", "pbs_scm", "one_year_goal_times", "one_year_goal", "swim_sessions_per_week", "gym_sessions_per_week",
+    "pbs_lcm", "pbs_scm", "pbs_scy", "one_year_goal_times", "one_year_goal", "swim_sessions_per_week", "gym_sessions_per_week",
     "session_duration", "facilities", "coaching_situation",
 ]
 PLAN_ATTEMPTS = 3

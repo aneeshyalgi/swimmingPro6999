@@ -303,7 +303,8 @@ def pacing_context(profile_id: str):
     from app.performance import race_history
     rows = load_records(profile_id, ["pace_settings", "performance_race", "race_result", "competition"])
     warnings = []
-    profile = get_supabase_client().table("user_profiles").select("pbs_lcm, pbs_scm").eq("id", profile_id).limit(1).execute()
+    # Every course's onboarding PBs (pbs_scy only on profiles that have that column filled).
+    profile = get_supabase_client().table("user_profiles").select("*").eq("id", profile_id).limit(1).execute()
     if not profile.data:
         raise HTTPException(status_code=404, detail="The pacing profile was not found.")
     references = {race["id"]: race for race in race_history(with_display_times(profile.data[0]), rows, warnings)}
@@ -342,21 +343,24 @@ def athlete_brief(profile) -> dict[str, Any]:
                               "No gym access: bodyweight, bands and dryland only. Never prescribe barbells, machines or heavy dumbbells.")
     times: dict[str, dict[str, Any]] = {}
     unusable: list[str] = []
-    for label, field in [("LCM PB", "pbs_lcm"), ("SCM PB", "pbs_scm"), ("1-year goal", "one_year_goal_times")]:
+    for label, field in [("LCM PB", "pbs_lcm"), ("SCM PB", "pbs_scm"), ("SCY PB", "pbs_scy"), ("1-year goal", "one_year_goal_times")]:
+        # SCY times are for yard events ("500y Freestyle"), paced per 100 yards.
+        yards = field == "pbs_scy"
+        unit, fastest = ("yd", 34) if yards else ("m", 40)
         for event, value in (profile.get(field) or {}).items():
             if not isinstance(value, str) or not value.strip():
                 continue
             try:
                 seconds = parse_swim_time(value)
-                distance = int(event.split("m")[0])
+                distance = int(event.split("y" if yards else "m")[0])
             except (ValueError, IndexError):
                 unusable.append(f"{label} {event} '{value}' is not a valid time")
                 continue
             per_100 = seconds / distance * 100
-            entry = {"time": value, "seconds": round(seconds, 2), "pace_per_100m_seconds": round(per_100, 1)}
-            if not 40 <= per_100 <= 240:
+            entry = {"time": value, "seconds": round(seconds, 2), f"pace_per_100{unit}_seconds": round(per_100, 1)}
+            if not fastest <= per_100 <= 240:
                 entry["usable_for_pacing"] = False
-                unusable.append(f"{label} {event} {value} (= {per_100:.0f}s per 100m) is outside any realistic range")
+                unusable.append(f"{label} {event} {value} (= {per_100:.0f}s per 100{unit}) is outside any realistic range")
             times.setdefault(event, {})[label] = entry
     return {
         "swimmer_type": profile.get("swimmer_type"),
@@ -842,9 +846,11 @@ def template_volume_band(template_m: int, per_minute: tuple[int, int], max_minut
 
 
 def best_pace(profile) -> float | None:
-    """The athlete's fastest PB pace in seconds per 100 m (any event or course), or None without a usable PB."""
+    """The athlete's fastest PB pace in seconds per 100 m (any event, long or short course metres; yard PBs are paced per
+    100 yd and left out), or None without a usable PB."""
     paces = [entry["pace_per_100m_seconds"] for times in athlete_brief(profile)["times_by_event"].values()
-             for label, entry in times.items() if label.endswith("PB") and entry.get("usable_for_pacing", True)]
+             for label, entry in times.items()
+             if label.endswith("PB") and "pace_per_100m_seconds" in entry and entry.get("usable_for_pacing", True)]
     return min(paces) if paces else None
 
 

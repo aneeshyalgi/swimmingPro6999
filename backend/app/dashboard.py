@@ -170,7 +170,7 @@ def build_dashboard_overview(
     ]
     personal_bests = [
         PersonalBest(event=event, course=course, time=time, target=(profile.get("one_year_goal_times") or {}).get(event) if course == "LCM" else None)
-        for field, course in [("pbs_lcm", "LCM"), ("pbs_scm", "SCM")]
+        for field, course in [("pbs_lcm", "LCM"), ("pbs_scm", "SCM"), ("pbs_scy", "SCY")]
         for event, time in (profile.get(field) or {}).items() if time
     ]
     planned_count = len([

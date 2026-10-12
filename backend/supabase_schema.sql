@@ -70,6 +70,11 @@ alter table public.user_profiles
 alter table public.user_profiles
   add column if not exists subscription_checked_at timestamptz;
 
+-- Short course yards PBs (migrations/2026-10-12_add_pbs_scy.sql): null for athletes who joined before onboarding
+-- asked for them, so their profile stays as it was and the app doesn't show them the field.
+alter table public.user_profiles
+  add column if not exists pbs_scy jsonb;
+
 comment on column public.user_profiles.is_paid is
   'True while the athlete''s monthly coaching subscription is paid. The dashboard opens only when this is true.';
 comment on column public.user_profiles.subscription_checked_at is

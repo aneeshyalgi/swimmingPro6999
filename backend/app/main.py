@@ -586,6 +586,10 @@ def save_onboarding(submission: OnboardingSubmission, authorization: str | None 
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Add your parent or guardian's name and email address on the first step.") from exc
     record = {**submission.to_storage_record(), "full_name": full_name, "auth_user_id": user.id}
+    # Short course yards times are asked only of athletes who join from now on: one who joined before (their column is
+    # null) never sees that field, and their profile keeps it as it was.
+    if existing is not None and existing.get("pbs_scy") is None:
+        record.pop("pbs_scy")
     coach_choice = submission.coach
     # An athlete who has paid changes coach from the dashboard, where each switch is paid for; editing their answers
     # here keeps the coach they have.
@@ -603,12 +607,10 @@ def save_onboarding(submission: OnboardingSubmission, authorization: str | None 
 
     try:
         record["recommended_coaches"] = [coach]
-        if existing:
-            rows = supabase.table("user_profiles").update(record).eq("id", existing["id"]).execute().data
-        else:
+        if not existing:
             record["user_key"] = f"user_{uuid4().hex}"
             record["created_at"] = datetime.now(timezone.utc).isoformat()
-            rows = supabase.table("user_profiles").insert(record).execute().data
+        rows = _write_profile(supabase, record, existing)
         row = rows[0] if rows else None
         if row is None:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Onboarding record was not persisted.")
@@ -633,6 +635,22 @@ def save_onboarding(submission: OnboardingSubmission, authorization: str | None 
     )
 
 
+def _write_profile(supabase: Any, record: dict[str, Any], existing: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Updates the athlete's profile, or inserts their first. Until user_profiles has its pbs_scy column
+    (backend/migrations/2026-10-12_add_pbs_scy.sql), the profile is saved without the yard times rather than not at all."""
+    def write(values: dict[str, Any]) -> list[dict[str, Any]]:
+        table = supabase.table("user_profiles")
+        return (table.update(values).eq("id", existing["id"]) if existing else table.insert(values)).execute().data
+
+    try:
+        return write(record)
+    except APIError as exc:
+        if "pbs_scy" not in record or "pbs_scy" not in str(exc):
+            raise
+        logger.warning("user_profiles has no pbs_scy column yet: the profile was saved without its SCY times")
+        return write({field: value for field, value in record.items() if field != "pbs_scy"})
+
+
 @app.get("/api/onboarding/status")
 def get_onboarding_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """Whether the signed-in account has finished onboarding (a profile and its generated plan) and paid for it."""
@@ -654,7 +672,8 @@ def get_onboarding_answers(authorization: str | None = Header(default=None)) -> 
     row = latest_profile_row(user.id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No saved onboarding answers.")
-    fields = ["age", "gender", "country", "height", "weight", "swim_experience", "main_events", "pbs_lcm", "pbs_scm", "swimmer_type",
+    # pbs_scy is null for athletes who joined before it was asked: the form then leaves it out.
+    fields = ["age", "gender", "country", "height", "weight", "swim_experience", "main_events", "pbs_lcm", "pbs_scm", "pbs_scy", "swimmer_type",
               "swim_sessions_per_week", "gym_sessions_per_week", "session_duration", "facilities", "coaching_situation",
               "one_year_goal", "one_year_goal_times"]
     answers = {field: row.get(field) for field in fields}

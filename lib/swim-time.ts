@@ -22,15 +22,25 @@ export const timeError = (time: TimeParts | undefined, required: boolean, missin
   return undefined
 }
 
-/** A time outside realistic race speed for the event (40 s to 4:00 per 100 m), matching the backend's check. */
+/** A time outside realistic race speed for the event (40 s to 4:00 per 100 m; for a yard event such as "500y Freestyle",
+ * from 34 s per 100 yd), matching the backend's check. */
 export const realismError = (event: string, time?: TimeParts) => {
   if (isBlankTime(time) || timeError(time, true, "")) return undefined
   const stored = toStoredTime(time!)
+  const yards = /^\d+y /.test(event)
   const per100 = ((stored.minutes * 60 + stored.seconds + stored.hundredths / 100) / Number.parseInt(event)) * 100
-  if (per100 < 40) return "That's faster than world-record pace. Check the time"
-  if (per100 > 240) return "That's slower than 4:00 per 100 m. Check the minutes and seconds"
+  if (per100 < (yards ? 34 : 40)) return "That's faster than world-record pace. Check the time"
+  if (per100 > 240) return `That's slower than 4:00 per 100 ${yards ? "yd" : "m"}. Check the minutes and seconds`
   return undefined
 }
+
+// A 25-yard pool swims the same events in yards, except the long freestyles (backend/app/schemas.py, yard_event).
+const YARD_FREESTYLES: Record<string, string> = {
+  "400m Freestyle": "500y Freestyle", "800m Freestyle": "1000y Freestyle", "1500m Freestyle": "1650y Freestyle",
+}
+
+/** The short course yards event an onboarding event is in a 25-yard pool ("100m Backstroke" is "100y Backstroke"). */
+export const yardEvent = (event: string) => YARD_FREESTYLES[event] ?? event.replace("m ", "y ")
 
 export const toStoredTime = (time: TimeParts): StoredSwimTime => ({
   minutes: Number(time.minutes || 0),

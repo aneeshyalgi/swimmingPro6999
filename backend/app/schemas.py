@@ -34,6 +34,16 @@ FACILITIES = ["25m Pool", "50m Pool", "Full Gym Access", "Basic Gym", "Home Equi
 GYM_FACILITIES = {"Full Gym Access", "Basic Gym"}
 # Realistic race speed in seconds per 100 m (world records are about 41-47 s; slower than 4:00/100 m is not a race time).
 FASTEST_PER_100, SLOWEST_PER_100 = 40.0, 240.0
+# In yards the fastest is about 35 s per 100 yd (the 50y freestyle record is 17.63).
+FASTEST_PER_100_YARDS = 34.0
+# A 25-yard pool swims the same events in yards, except the long freestyles: the 400m, 800m and 1500m are swum as the
+# 500y, 1000y and 1650y there.
+YARD_FREESTYLES = {"400m Freestyle": "500y Freestyle", "800m Freestyle": "1000y Freestyle", "1500m Freestyle": "1650y Freestyle"}
+
+
+def yard_event(event: str) -> str:
+    """The short course yards event an onboarding event is in a 25-yard pool ("100m Backstroke" is "100y Backstroke")."""
+    return YARD_FREESTYLES.get(event) or event.replace("m ", "y ", 1)
 
 
 def seconds_of(time: "SwimTime") -> float:
@@ -52,6 +62,9 @@ class OnboardingSubmission(BaseModel):
     main_events: list[str] = Field(min_length=1, max_length=len(ONBOARDING_EVENTS))
     pbs_lcm: dict[str, SwimTime] = Field(default_factory=dict)
     pbs_scm: dict[str, SwimTime] = Field(default_factory=dict)
+    # Short course yards (a 25-yard pool), keyed by the yard event (yard_event). Optional, and asked only of athletes
+    # who join from now on: the profile column is null for everyone who joined before.
+    pbs_scy: dict[str, SwimTime] = Field(default_factory=dict)
     swimmer_type: Literal["sprinter", "mid", "distance", "specialist"]
     swim_sessions_per_week: int = Field(ge=1, le=14)
     gym_sessions_per_week: int = Field(ge=0, le=7)
@@ -72,7 +85,7 @@ class OnboardingSubmission(BaseModel):
     # Older clients also send auth_user_id, user_key, full_name, coaches and recommended_coaches; they are ignored.
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    @field_validator("pbs_lcm", "pbs_scm", "one_year_goal_times", mode="before")
+    @field_validator("pbs_lcm", "pbs_scm", "pbs_scy", "one_year_goal_times", mode="before")
     @classmethod
     def drop_blank_times(cls, value: Any):
         if isinstance(value, dict):
@@ -121,6 +134,14 @@ class OnboardingSubmission(BaseModel):
                 per_100 = seconds_of(time) / int(event.split("m")[0]) * 100
                 if not FASTEST_PER_100 <= per_100 <= SLOWEST_PER_100:
                     raise ValueError(f"The {label} for {event} ({time.minutes}:{time.seconds:02d}.{time.hundredths:02d}) isn't a realistic swim time.")
+        selected_in_yards = {yard_event(event) for event in self.main_events}
+        extra = [event for event in self.pbs_scy if event not in selected_in_yards]
+        if extra:
+            raise ValueError(f"short course yards PB given for an event that isn't selected: {', '.join(extra)}.")
+        for event, time in self.pbs_scy.items():
+            per_100 = seconds_of(time) / int(event.split("y")[0]) * 100
+            if not FASTEST_PER_100_YARDS <= per_100 <= SLOWEST_PER_100:
+                raise ValueError(f"The short course yards PB for {event} ({time.minutes}:{time.seconds:02d}.{time.hundredths:02d}) isn't a realistic swim time.")
         return self
 
     def to_storage_record(self) -> dict[str, Any]:
@@ -128,7 +149,7 @@ class OnboardingSubmission(BaseModel):
         for field in ("height", "weight"):  # whole numbers stay integers, as in existing rows
             if isinstance(record[field], float) and record[field].is_integer():
                 record[field] = int(record[field])
-        for field in ("pbs_lcm", "pbs_scm", "one_year_goal_times"):
+        for field in ("pbs_lcm", "pbs_scm", "pbs_scy", "one_year_goal_times"):
             record[field] = {event: time.model_dump() for event, time in getattr(self, field).items()}
         return record
 
