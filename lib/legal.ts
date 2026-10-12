@@ -26,8 +26,8 @@ export type OperatorField = keyof typeof OPERATOR
 export const INSTAGRAM = { handle: "@swim.gpt", url: "https://www.instagram.com/swim.gpt/" }
 
 /** The version of the Terms and Privacy Policy (backend/app/consents.py keeps it with every consent). */
-export const LEGAL_VERSION = "2026-10-12"
-export const LEGAL_UPDATED = "12 October 2026"
+export const LEGAL_VERSION = "2026-10-11"
+export const LEGAL_UPDATED = "11 October 2026"
 export const SITE = "swim-gpt.com"
 /** From this age athletes may use SwimGPT; below PARENTAL_CONSENT_AGE a parent or guardian must agree. */
 export const MINIMUM_AGE = 13
