@@ -2318,54 +2318,27 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 }
 
 /* ---------------------------------------------------------------- legal pages and consent cards (lg-*) */
-/* A still backdrop: nothing here animates in a loop, so long documents stay light on phones. */
-.lg-page {
-  background:
-    radial-gradient(1100px 560px at 8% -12%, rgba(87, 229, 234, 0.1), transparent 60%),
-    radial-gradient(900px 520px at 100% -6%, rgba(167, 139, 250, 0.08), transparent 62%),
-    linear-gradient(180deg, #060b10, #05090d 40%, #04080c);
-}
-.lg-grid {
-  background-image: linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: radial-gradient(ellipse at 50% 0%, #000 15%, transparent 70%);
-}
-.lg-progress { transform-origin: left; transform: scaleX(0); background: linear-gradient(90deg, #57e5ea, #7dd3fc 55%, #a78bfa); box-shadow: 0 0 12px rgba(87, 229, 234, 0.6); }
-.lg-tab-pill {
-  background: linear-gradient(135deg, #a5f3fc, #57e5ea 55%, #22d3ee);
-  box-shadow: 0 6px 18px -8px rgba(87, 229, 234, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  transition: transform 0.45s cubic-bezier(0.3, 1.25, 0.4, 1), width 0.45s cubic-bezier(0.3, 1.25, 0.4, 1);
-}
-.lg-marker { top: 0; box-shadow: 0 0 10px rgba(87, 229, 234, 0.7); transition: transform 0.35s cubic-bezier(0.3, 1.2, 0.4, 1), height 0.35s ease; }
-.lg-summary {
-  background: linear-gradient(135deg, rgba(87, 229, 234, 0.09), rgba(167, 139, 250, 0.05));
-  border: 1px solid rgba(87, 229, 234, 0.2);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-.lg-highlight { transition: border-color 0.3s, background-color 0.3s; }
-.lg-highlight:hover { border-color: rgba(87, 229, 234, 0.3); background-color: rgba(87, 229, 234, 0.05); }
-/* Revealed once on the way down; hidden only once the page script runs, so the text is always there without it. */
-.lg-ready [data-reveal] { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1); transition-delay: var(--d, 0ms); }
-.lg-ready [data-reveal].is-in { opacity: 1; transform: none; }
+/* The legal pages are plain documents: one flat background, no motion. */
+.lg-page { background: #05090d; }
 
-.lg-prose { color: rgb(203 213 225); font-size: 15px; line-height: 1.75; }
+.lg-prose { color: rgb(203 213 225); font-size: 15px; line-height: 1.7; }
 .lg-prose > * + * { margin-top: 0.9rem; }
 .lg-prose h3 { margin-top: 1.6rem; color: #fff; font-size: 15px; font-weight: 600; }
-.lg-prose a { color: #67e8f9; text-decoration: underline; text-decoration-color: rgba(103, 232, 249, 0.35); text-underline-offset: 3px; transition: text-decoration-color 0.2s; }
-.lg-prose a:hover { text-decoration-color: #67e8f9; }
+.lg-prose a { color: rgb(226 232 240); text-decoration: underline; text-decoration-color: rgba(226, 232, 240, 0.4); text-underline-offset: 3px; }
+.lg-prose a:hover { color: #fff; text-decoration-color: #fff; }
 .lg-prose strong { color: #fff; font-weight: 600; }
 .lg-prose ul, .lg-prose ol { padding-left: 1.25rem; }
 .lg-prose ul { list-style: disc; }
 .lg-prose ol { list-style: decimal; }
 .lg-prose li + li { margin-top: 0.35rem; }
-.lg-prose li::marker { color: rgba(103, 232, 249, 0.7); }
-.lg-prose .lg-table { overflow-x: auto; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; }
+.lg-prose li::marker { color: rgb(148 163 184); }
+.lg-prose .lg-table { overflow-x: auto; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; }
 .lg-prose table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 13.5px; line-height: 1.55; }
-.lg-prose th, .lg-prose td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.lg-prose th, .lg-prose td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
 .lg-prose tr:last-child td { border-bottom: 0; }
 .lg-prose th { color: #fff; font-weight: 600; background: rgba(255, 255, 255, 0.03); }
 /* Statements the law wants set apart (the right to object, the withdrawal notice and form). */
-.lg-boxed { border: 1px solid rgba(87, 229, 234, 0.28); border-left-width: 3px; border-radius: 16px; background: rgba(87, 229, 234, 0.05); padding: 1rem 1.15rem; }
+.lg-boxed { border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 4px; padding: 1rem 1.15rem; }
 .lg-boxed > * + * { margin-top: 0.75rem; }
 
 /* Consent cards (health data, a parent or guardian): ease in once. */
@@ -2373,14 +2346,11 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 @keyframes lg-consent-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .lg-ready [data-reveal] { opacity: 1; transform: none; transition: none; }
-  .lg-tab-pill, .lg-marker { transition: none; }
   .lg-consent { animation: none; }
 }
 @media print {
   .lg-no-print { display: none !important; }
   .lg-page { background: #fff !important; }
-  .lg-page, .lg-page h1, .lg-page h2, .lg-page p, .lg-page li, .lg-page td, .lg-page th, .lg-prose, .lg-prose strong { color: #000 !important; }
-  .lg-ready [data-reveal] { opacity: 1 !important; transform: none !important; }
-  .lg-summary, .lg-boxed, .lg-highlight { background: none !important; border-color: #999 !important; box-shadow: none !important; }
+  .lg-page, .lg-page h1, .lg-page h2, .lg-page p, .lg-page li, .lg-page td, .lg-page th, .lg-prose, .lg-prose strong, .lg-prose a { color: #000 !important; }
+  .lg-boxed { border-color: #999 !important; }
 }

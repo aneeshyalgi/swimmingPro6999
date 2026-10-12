@@ -15,20 +15,18 @@ const sections: LegalSection[] = [
   {
     id: "controller",
     title: "Who is responsible",
-    summary: "SwimGPT is run by the person or company named in our Legal notice. You can reach us about your data at any time.",
     body: (
       <>
         <p>The controller responsible for processing your personal data under the EU General Data Protection Regulation (GDPR) is the operator of SwimGPT named in our <Link href="/legal-notice">Legal notice</Link>, which also lists how to reach us.</p>
         <OperatorDetails />
         <p>We are not required to appoint a data protection officer (Art. 37 GDPR, § 38 BDSG). For any question about your data, <ContactUs />.</p>
-        <p>This policy covers our website <strong>swim-gpt.com</strong> and the SwimGPT app (together &ldquo;SwimGPT&rdquo;). Each section starts with a short summary; the full text below it is what applies.</p>
+        <p>This policy covers our website <strong>swim-gpt.com</strong> and the SwimGPT app (together &ldquo;SwimGPT&rdquo;).</p>
       </>
     ),
   },
   {
     id: "overview",
-    title: "At a glance",
-    summary: "We use your data to coach you, take payments and keep SwimGPT running safely. We don't sell it and there is no advertising.",
+    title: "Overview",
     body: (
       <>
         <div className="lg-table">
@@ -53,7 +51,6 @@ const sections: LegalSection[] = [
   {
     id: "hosting",
     title: "Visiting SwimGPT",
-    summary: "When you open SwimGPT, our hosting providers briefly log technical data such as your IP address so they can deliver the site securely.",
     body: (
       <>
         <p>Every time you open a page or the app talks to our server, the servers automatically log: your IP address, the date and time, the page or address requested, the referring page, your browser and operating system, the amount of data sent and whether the request succeeded.</p>
@@ -65,7 +62,6 @@ const sections: LegalSection[] = [
   {
     id: "analytics",
     title: "Page statistics",
-    summary: "We count visits with Vercel Web Analytics. It uses no cookies, stores nothing on your device and can't identify you.",
     body: (
       <>
         <p>To see which pages are used, we use <strong>Vercel Web Analytics</strong>. It records the page visited, the referring page, your country (worked out from your IP address, which is not stored), and your browser, operating system and device type. It uses no cookies and stores nothing on your device. Visits aren&apos;t linked across days: a visitor is recognised only by a code derived from the request that is discarded after 24 hours.</p>
@@ -76,7 +72,6 @@ const sections: LegalSection[] = [
   {
     id: "device",
     title: "Cookies and storage on your device",
-    summary: "We store only what the app needs to work, such as keeping you signed in. No tracking or advertising cookies.",
     body: (
       <>
         <p>SwimGPT sets no cookies. In your browser&apos;s local storage the app keeps:</p>
@@ -94,7 +89,6 @@ const sections: LegalSection[] = [
   {
     id: "account",
     title: "Your account",
-    summary: "To create an account we need your name, your email address and a password.",
     body: (
       <>
         <p>When you sign up we process your name, email address and password (stored only as a secure hash), when you signed up and signed in, the IP address of sign-in requests, and the version of our Terms and this policy you accepted.</p>
@@ -106,7 +100,6 @@ const sections: LegalSection[] = [
   {
     id: "training",
     title: "Your swimming profile and training",
-    summary: "Your swimming details let us build and adapt your plan. We use them only for your coaching.",
     body: (
       <>
         <p>During onboarding you tell us your age, gender, country, height (optional), weight, years of swimming, your events, personal bests and goal times, the kind of swimmer you are, how often and how long you can train, your facilities, your coaching situation and the coach you choose.</p>
@@ -118,7 +111,6 @@ const sections: LegalSection[] = [
   {
     id: "health",
     title: "Health information (Mind and Nutrition)",
-    summary: "How you feel, sleep and cope with stress, and the foods you avoid, are health data. We use them only with your explicit consent, which you can withdraw at any time.",
     body: (
       <>
         <p>In <strong>Mind</strong> you can rate your confidence, focus, calm, motivation and how you bounce back, and tell us how you sleep, your stress level, your mood, how you handle setbacks and which mental tools you use. You can also check in on your mood each day (we keep the last 14 check-ins). In <strong>Nutrition</strong> you can tell us your goal, meals per day and foods you avoid, such as dairy, gluten, nuts, eggs, seafood or soy, which can reveal intolerances, allergies or beliefs, and log your water (we keep the last 7 days). Daily session check-ins (effort, energy, soreness, sleep quality and notes) also count as health information.</p>
@@ -130,7 +122,6 @@ const sections: LegalSection[] = [
   {
     id: "children",
     title: "Children and teenagers",
-    summary: "SwimGPT is for swimmers aged 13 and over. For anyone under 16, a parent or guardian must agree.",
     body: (
       <>
         <p>You must be at least 13 to use SwimGPT. If you are under 16, a parent or guardian must agree when you sign up: to you using SwimGPT, to us processing your data as described in this policy (including Mind and Nutrition, if you use them), and to any paid plan.</p>
@@ -141,7 +132,6 @@ const sections: LegalSection[] = [
   {
     id: "ai",
     title: "AI coaching",
-    summary: "Your coaches, plans, voice conversations and video feedback are powered by AI models from OpenAI. We send only what each answer needs.",
     body: (
       <>
         <p>SwimGPT&apos;s coaches are AI. You are always talking to an AI system, never to a person. To create your content, we send the necessary data to <strong>OpenAI</strong> (OpenAI Ireland Ltd., Ireland, and OpenAI, L.L.C., USA), which processes it for us as our processor:</p>
@@ -159,7 +149,6 @@ const sections: LegalSection[] = [
   {
     id: "video-limit",
     title: "Free video analysis",
-    summary: "To keep the one free video analysis fair, we note which browser, network and account have used it.",
     body: (
       <>
         <p>Everyone can analyse one video for free. To stop the same person taking several, we note that the free analysis was used: by a random visitor ID kept in your browser, by your account if you are signed in, and by a scrambled code (a keyed hash) made from your IP address and browser that can&apos;t be turned back into them. We keep the network code for 30 days; the visitor ID and account notes for as long as we offer the free analysis.</p>
@@ -170,7 +159,6 @@ const sections: LegalSection[] = [
   {
     id: "payments",
     title: "Payments",
-    summary: "Payments are handled by Stripe. We never see your full card details.",
     body: (
       <>
         <p>When you subscribe, buy a training plan or pay for a coach change, you pay on Stripe&apos;s secure checkout page. Stripe processes your name, email address, billing country or address, payment details (such as your card or your Stripe Link account) and the transaction. Stripe may also use device and connection data to prevent fraud.</p>
@@ -182,7 +170,6 @@ const sections: LegalSection[] = [
   {
     id: "store",
     title: "Training plan store",
-    summary: "When you buy a training plan, we keep a record of the purchase so you can read it in the app.",
     body: (
       <p>For each purchase we keep the plan, price, currency, date, payment status and Stripe&apos;s payment reference. You read your plans in the app. The legal bases are our contract with you (Art. 6(1)(b) GDPR) and our accounting duties (Art. 6(1)(c) GDPR). We keep the purchase record for as long as you have access to the plan, and the payment record for 10 years.</p>
     ),
@@ -190,7 +177,6 @@ const sections: LegalSection[] = [
   {
     id: "emails",
     title: "Emails we send",
-    summary: "We only send emails your account needs, such as confirming your email address. No newsletters.",
     body: (
       <p>You receive account emails (confirming your email address, resetting your password), sent through Supabase. They are part of providing SwimGPT (Art. 6(1)(b) GDPR). We don&apos;t send newsletters or marketing emails; if we ever want to, we will ask you first.</p>
     ),
@@ -198,7 +184,6 @@ const sections: LegalSection[] = [
   {
     id: "contact",
     title: "When you contact us",
-    summary: "If you write to us, we use what you send only to answer you.",
     body: (
       <p>When you email us, we process your email address, your name and what you write, to answer you. The legal basis is our contract with you or steps before one (Art. 6(1)(b) GDPR), otherwise our legitimate interest in answering enquiries (Art. 6(1)(f) GDPR). We delete your message once your request is dealt with, unless we must keep it by law.</p>
     ),
@@ -206,7 +191,6 @@ const sections: LegalSection[] = [
   {
     id: "other-providers",
     title: "Content from other providers",
-    summary: "Two features load files from other servers, which then receive your IP address.",
     body: (
       <>
         <ul>
@@ -220,7 +204,6 @@ const sections: LegalSection[] = [
   {
     id: "recipients",
     title: "Who receives your data",
-    summary: "We share data only with the service providers that run SwimGPT, never for advertising.",
     body: (
       <>
         <div className="lg-table">
@@ -242,7 +225,6 @@ const sections: LegalSection[] = [
   {
     id: "transfers",
     title: "Transfers outside the EU",
-    summary: "Some providers process data in the USA. We use them only with the safeguards the GDPR requires.",
     body: (
       <p>Where a provider processes data in the USA and is certified under the EU-U.S. Data Privacy Framework, the transfer is based on the European Commission&apos;s adequacy decision of 10 July 2023 (Art. 45 GDPR). Otherwise it is based on the Standard Contractual Clauses adopted by the European Commission (Art. 46(2)(c) GDPR); you can ask us for a copy. Data in the USA may be accessed by US authorities.</p>
     ),
@@ -250,7 +232,6 @@ const sections: LegalSection[] = [
   {
     id: "retention",
     title: "How long we keep data",
-    summary: "As long as your account exists, unless something shorter applies or the law requires longer.",
     body: (
       <div className="lg-table">
         <table>
@@ -273,7 +254,6 @@ const sections: LegalSection[] = [
   {
     id: "security",
     title: "Security",
-    summary: "Encrypted connections, hashed passwords and access limited to what's needed.",
     body: (
       <p>All connections to SwimGPT are encrypted (HTTPS/TLS). Passwords are stored only as secure hashes, access to our database is restricted, and card details are handled only by Stripe, which is certified to the PCI DSS standard. We review our safeguards as SwimGPT develops. No system is completely secure, but we work to protect your data and will inform you and the authorities of any breach as the law requires.</p>
     ),
@@ -281,7 +261,6 @@ const sections: LegalSection[] = [
   {
     id: "rights",
     title: "Your rights",
-    summary: "You can see, correct, download or delete your data, object to its use, withdraw consent and complain to a data protection authority.",
     body: (
       <>
         <p>You have the right to:</p>
@@ -305,7 +284,6 @@ const sections: LegalSection[] = [
   {
     id: "changes",
     title: "Changes to this policy",
-    summary: "If we change this policy, we update the date at the top and tell you about important changes.",
     body: (
       <p>We update this policy when SwimGPT or the law changes. The current version is always here. We will tell you about important changes in the app or by email, and where a change needs your consent, we will ask for it.</p>
     ),
@@ -314,19 +292,6 @@ const sections: LegalSection[] = [
 
 export default function PrivacyPage() {
   return (
-    <LegalDocument
-      current="/privacy"
-      eyebrow="Privacy Policy"
-      title="Your data, handled with care"
-      lead="What we collect, why we need it, who helps us run SwimGPT, how long we keep it, and the rights you have. Each section starts with a short summary in plain words."
-      readMinutes={14}
-      highlights={[
-        { icon: "shield", text: "We never sell your data, and there are no ads or tracking cookies." },
-        { icon: "heart", text: "Health information is used only with your explicit consent." },
-        { icon: "chat", text: "Your coach chats are saved on your device, not on our servers." },
-        { icon: "trash", text: "See, download or delete your data whenever you ask." },
-      ]}
-      sections={sections}
-    />
+    <LegalDocument title="Privacy Policy" sections={sections} />
   )
 }

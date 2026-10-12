@@ -20,7 +20,6 @@ const sections: LegalSection[] = [
   {
     id: "scope",
     title: "Who we are and what these Terms cover",
-    summary: "These Terms are the agreement between you and the operator of SwimGPT whenever you use the website or the app.",
     body: (
       <>
         <p>These Terms of Service apply to your use of the website swim-gpt.com and the SwimGPT app (together &ldquo;SwimGPT&rdquo;), provided by the operator named in our <Link href="/legal-notice">Legal notice</Link> (&ldquo;we&rdquo;, &ldquo;us&rdquo;).</p>
@@ -33,7 +32,6 @@ const sections: LegalSection[] = [
   {
     id: "service",
     title: "What SwimGPT offers",
-    summary: "AI swim coaching: a season plan, swim and gym weeks, coach chat and voice conversations, video feedback and more.",
     body: (
       <>
         <p>SwimGPT is an AI coaching service for swimmers. With a subscription you get your personalised season plan, swim and gym weeks, the workout library and calendar, race planning and pacing, progress tracking, Mind and Nutrition guidance, chats and voice conversations with your AI coach, and video stroke analysis, as described in the app when you subscribe.</p>
@@ -44,7 +42,6 @@ const sections: LegalSection[] = [
   {
     id: "eligibility",
     title: "Who can use SwimGPT",
-    summary: "You must be at least 13. Under 16, a parent or guardian must agree. Under 18, they must also agree to paid plans and purchases.",
     body: (
       <>
         <p>You must be at least <strong>13 years old</strong> to use SwimGPT. If you are under 16, a parent or guardian must agree when you sign up. If you are under 18, you may only start a paid plan or make a purchase with the consent of a parent or guardian.</p>
@@ -55,7 +52,6 @@ const sections: LegalSection[] = [
   {
     id: "safety",
     title: "Your health and safety",
-    summary: "SwimGPT gives training guidance, not medical advice. Check with a doctor before you start, and stop if something feels wrong.",
     body: (
       <>
         <p>SwimGPT provides training information. It is <strong>not medical advice</strong> and doesn&apos;t replace a doctor, physiotherapist, dietitian or a qualified coach on the pool deck. Talk to a doctor before you start a training programme, especially if you have an illness, injury, heart or breathing problems, are pregnant or take medication.</p>
@@ -73,7 +69,6 @@ const sections: LegalSection[] = [
   {
     id: "ai",
     title: "AI coaches and AI-generated content",
-    summary: "Your coaches are AI characters. What they create can be wrong or unsuitable, so use your own judgement.",
     body: (
       <>
         <p>Plans, sessions, chat answers, coach voices and video feedback are created automatically by AI models. They can contain mistakes or suggestions that don&apos;t suit you, so check that they make sense before you follow them. We don&apos;t promise any particular result, such as times, places or qualifications.</p>
@@ -84,7 +79,6 @@ const sections: LegalSection[] = [
   {
     id: "free",
     title: "Free features",
-    summary: "Some things are free, like one video analysis. We may change or end free features.",
     body: (
       <p>Free features, such as one free video analysis per person, are a voluntary extra with no right to keep them. We may change or end them with reasonable notice. Please don&apos;t try to get more than your share, for example with extra accounts or by clearing your browser.</p>
     ),
@@ -92,7 +86,6 @@ const sections: LegalSection[] = [
   {
     id: "subscriptions",
     title: "Subscriptions, prices and renewal",
-    summary: "Choose monthly or yearly. You pay in advance and your plan renews automatically until you cancel.",
     body: (
       <>
         <h3>Plans and prices</h3>
@@ -124,7 +117,6 @@ const sections: LegalSection[] = [
   {
     id: "cancellation",
     title: "Cancelling",
-    summary: "Cancel any time in your account. You keep access until the end of the period you've paid for.",
     body: (
       <>
         <p>You can cancel your subscription at any time in the app (Subscription → Cancel subscription), or by email{OPERATOR.email ? <> to <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a></> : <> (see our <Link href="/legal-notice">Legal notice</Link>)</>}. The cancellation takes effect at the end of the current billing period (for a yearly plan after its first term, see <a href="#subscriptions">Renewal</a>). Until then you keep full access, and you can change your mind. We confirm your cancellation in the app, or by reply if you cancelled by email.</p>
@@ -136,7 +128,6 @@ const sections: LegalSection[] = [
   {
     id: "withdrawal",
     title: "Your right of withdrawal",
-    summary: "If you're a consumer living in the EU, you can withdraw within 14 days, but what you've already received is not refunded: the days of your subscription you've had, and a coach switch once it's complete. If you live outside the EU, there is no right of withdrawal, unless the law of your country gives you one.",
     body: (
       <>
         <p>If you are a consumer and live in the European Union, you have the following statutory right of withdrawal:</p>
@@ -168,7 +159,6 @@ const sections: LegalSection[] = [
   {
     id: "store",
     title: "Training plans from our store",
-    summary: "Training plans you buy are yours to read in the app, for your own personal use.",
     body: (
       <>
         <p>Training plans are one-time purchases at the price shown before you pay. You order them the same way as a subscription, using the payment button (&ldquo;Pay&rdquo;) on the checkout page. You can read a plan you&apos;ve bought in the SwimGPT reader for as long as we offer SwimGPT; if we ever stop, we will tell you in good time. Your right of withdrawal for a plan ends once it is unlocked, as described under <a href="#withdrawal">Your right of withdrawal</a>.</p>
@@ -179,7 +169,6 @@ const sections: LegalSection[] = [
   {
     id: "conduct",
     title: "Your content and fair use",
-    summary: "Use SwimGPT fairly, and only share content you're allowed to share.",
     body: (
       <>
         <p>What you put into SwimGPT, such as messages, voice recordings, videos, workouts and notes, stays yours. You allow us to use it only as far as needed to provide SwimGPT to you. Only film or upload other people if they agree (for children, their parents).</p>
@@ -199,7 +188,6 @@ const sections: LegalSection[] = [
   {
     id: "ip",
     title: "Our rights in SwimGPT",
-    summary: "SwimGPT, its content and its brand belong to us or the people we license them from.",
     body: (
       <p>The SwimGPT software, design, texts, coach characters, training programmes and plans are protected and belong to us or our licensors. During your contract you may use SwimGPT for your own personal training; this right is non-exclusive and can&apos;t be transferred or sub-licensed. You may use the plans and workouts created for you for your own training. You don&apos;t receive any rights to our name or logo.</p>
     ),
@@ -207,7 +195,6 @@ const sections: LegalSection[] = [
   {
     id: "availability",
     title: "Availability and changes to SwimGPT",
-    summary: "We work to keep SwimGPT running and improving. There may be short interruptions.",
     body: (
       <>
         <p>We aim to keep SwimGPT available around the clock, but maintenance, updates and outages at our providers can cause interruptions. We provide the updates needed to keep SwimGPT working as agreed (§ 327f BGB).</p>
@@ -218,7 +205,6 @@ const sections: LegalSection[] = [
   {
     id: "warranty",
     title: "If something doesn't work",
-    summary: "If SwimGPT doesn't work as it should, you have your statutory rights.",
     body: (
       <p>If you are a consumer, the statutory rights for digital products apply (§§ 327 ff. BGB). If you are a business, the statutory rules apply as far as they can't be limited by agreement. If something doesn&apos;t work, please <ContactUs /> so we can fix it.</p>
     ),
@@ -226,7 +212,6 @@ const sections: LegalSection[] = [
   {
     id: "support",
     title: "Customer service",
-    summary: `All customer service is by email${OPERATOR.email ? ` to ${OPERATOR.email}` : ""}. We don't handle requests sent through Instagram or any other channel.`,
     body: (
       <>
         <p>We provide customer service exclusively by email. Please send every request, question and complaint to {supportEmail}, where possible from the email address of your SwimGPT account. This covers everything, including your account, payments, subscriptions, cancellations, withdrawals, refunds, technical problems and questions about your data. Email lets us identify your account, keep a record of your request and answer it reliably.</p>
@@ -238,7 +223,6 @@ const sections: LegalSection[] = [
   {
     id: "liability",
     title: "Liability",
-    summary: "We are fully liable for intent, gross negligence and harm to life, body or health. Otherwise our liability is limited as German law allows.",
     body: (
       <>
         <p>We are liable without limitation for intent and gross negligence, for injury to life, body or health, under the Product Liability Act and where we have given a guarantee.</p>
@@ -250,7 +234,6 @@ const sections: LegalSection[] = [
   {
     id: "account-end",
     title: "Deleting your account",
-    summary: "You can ask us to delete your account at any time.",
     body: (
       <p>To delete your account, <ContactUs />. Please cancel any running subscription first, or tell us to cancel it for you. We then delete your data as described in our <Link href="/privacy">Privacy Policy</Link>, except what we must keep by law. Payments already made are not refunded, except under your statutory rights.</p>
     ),
@@ -258,7 +241,6 @@ const sections: LegalSection[] = [
   {
     id: "changes",
     title: "Changes to these Terms",
-    summary: "If we want to change these Terms for your existing plan, we ask you first.",
     body: (
       <p>New versions of these Terms apply to new contracts. We change the Terms of your existing contract only with your consent: we will send you the changes at least 30 days before they are meant to apply and ask whether you agree. If you don&apos;t agree, your current Terms continue to apply, and we may end the contract as described in <a href="#cancellation">Cancelling</a>.</p>
     ),
@@ -266,7 +248,6 @@ const sections: LegalSection[] = [
   {
     id: "law",
     title: "Applicable law and disputes",
-    summary: "German law applies, but you keep the consumer protection of the country you live in.",
     body: (
       <>
         <p>German law applies, excluding the UN Convention on Contracts for the International Sale of Goods. If you are a consumer, you also keep the protection of the mandatory rules of the country where you normally live.</p>
@@ -279,7 +260,6 @@ const sections: LegalSection[] = [
   {
     id: "final",
     title: "Final provisions",
-    summary: "If one part of these Terms is invalid, the rest still applies.",
     body: (
       <p>If any provision of these Terms is or becomes invalid, the rest remain valid; the statutory rules apply in place of the invalid provision (§ 306 BGB). We may transfer this contract to another company only if we tell you in advance, and you may then end the contract free of charge.</p>
     ),
@@ -288,19 +268,6 @@ const sections: LegalSection[] = [
 
 export default function TermsPage() {
   return (
-    <LegalDocument
-      current="/terms"
-      eyebrow="Terms of Service"
-      title="The deal, in plain words"
-      lead="What you get with SwimGPT, how subscriptions, renewal and cancelling work, your 14-day right of withdrawal, and how to train safely with an AI coach."
-      readMinutes={13}
-      highlights={[
-        { icon: "cancel", text: "Cancel any time in your account. You keep access until the period ends." },
-        { icon: "renew", text: "Plans renew automatically until you cancel. No hidden fees." },
-        { icon: "scale", text: "Consumers can withdraw within 14 days without giving a reason." },
-        { icon: "ai", text: "Your coach is AI. Train safely and use your own judgement." },
-      ]}
-      sections={sections}
-    />
+    <LegalDocument title="Terms of Service" sections={sections} />
   )
 }
