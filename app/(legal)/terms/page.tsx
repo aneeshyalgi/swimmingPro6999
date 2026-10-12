@@ -136,10 +136,10 @@ const sections: LegalSection[] = [
   {
     id: "withdrawal",
     title: "Your right of withdrawal",
-    summary: "As a consumer you can withdraw within 14 days, but what you've already received is not refunded: the days of your subscription you've had, and a coach switch once it's complete. After the 14 days, payments are refunded only where these Terms or the law require it.",
+    summary: "If you're a consumer living in the EU, you can withdraw within 14 days, but what you've already received is not refunded: the days of your subscription you've had, and a coach switch once it's complete. If you live outside the EU, there is no right of withdrawal, unless the law of your country gives you one.",
     body: (
       <>
-        <p>If you are a consumer, you have the following statutory right of withdrawal:</p>
+        <p>If you are a consumer and live in the European Union, you have the following statutory right of withdrawal:</p>
         <div className="lg-boxed">
           <p><strong>Right of withdrawal</strong></p>
           <p>You have the right to withdraw from this contract within 14 days without giving any reason. The withdrawal period will expire after 14 days from the day of the conclusion of the contract.</p>
@@ -153,6 +153,7 @@ const sections: LegalSection[] = [
         <p><strong>Coach switches.</strong> A coach switch is carried out straight away, as you ask at checkout, and is complete once your season plan has been rebuilt with your new coach. From then on, your right of withdrawal has ended and the payment for the switch is not refunded (§ 356(4) BGB).</p>
         <p><strong>Training plans.</strong> A training plan from our store (digital content not supplied on a tangible medium) is unlocked in your account as soon as your payment is confirmed. Your right of withdrawal ends at that moment, even if you never open the plan, provided you expressly agreed at checkout that we unlock it before the withdrawal period ends, confirmed that you know you thereby lose your right of withdrawal, and we have sent you a confirmation of this (§ 356(5) BGB). Once it has ended, the plan is not refunded.</p>
         <p><strong>Business customers.</strong> If you use SwimGPT for purposes of your trade, business or profession, you have no right of withdrawal, and payments are not refunded except where the law requires it.</p>
+        <p><strong>Customers outside the EU.</strong> If you live outside the European Union, the right of withdrawal described above does not apply to you, unless the law of the country where you live gives you a right of withdrawal that cannot be excluded by agreement (see <a href="#law">Applicable law and disputes</a>). Your rights if SwimGPT doesn&apos;t work as it should are not affected (see <a href="#warranty">If something doesn&apos;t work</a>).</p>
         <div className="lg-boxed">
           <p><strong>Model withdrawal form</strong></p>
           <p>(Complete and return this form only if you wish to withdraw from the contract.)</p>
@@ -269,6 +270,7 @@ const sections: LegalSection[] = [
     body: (
       <>
         <p>German law applies, excluding the UN Convention on Contracts for the International Sale of Goods. If you are a consumer, you also keep the protection of the mandatory rules of the country where you normally live.</p>
+        <p>If you are a consumer living outside the European Union, the German statutory rules on the right of withdrawal (§§ 312g and 355 ff. BGB) do not apply to your contract; whether you can withdraw from it is governed solely by the law of the country where you live.</p>
         <p>If you are a merchant, a legal entity under public law or a special fund under public law, the courts at our place of business have exclusive jurisdiction.</p>
         <p>We are neither obliged nor willing to take part in dispute resolution proceedings before a consumer arbitration board (§ 36 VSBG).</p>
       </>

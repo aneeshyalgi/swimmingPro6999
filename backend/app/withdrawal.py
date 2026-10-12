@@ -1,7 +1,8 @@
 """The right of withdrawal at checkout (Terms, "Your right of withdrawal").
 
-Before paying, a buyer ticks a box asking for what they buy to start straight away, before their 14-day withdrawal
-period ends (components/legal/start-now-consent.tsx). With a training plan they also confirm that their right of
+Before paying, a buyer ticks a box asking for what they buy to start straight away and, if they live in the EU (only
+consumers there have a right of withdrawal under the Terms), before their 14-day withdrawal period ends
+(components/legal/start-now-consent.tsx). With a training plan they also confirm that their right of
 withdrawal ends once the plan is unlocked (§ 356(5) BGB), and with a coach switch once the switch is complete
 (§ 356(4) BGB); a subscription that starts at once costs, if they withdraw, what it provided until then (§ 357a(2) BGB).
 
@@ -15,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 # The date of the boxes' wording (components/legal/start-now-consent.tsx): change it whenever the wording changes.
-START_NOW_VERSION = "2026-10-12"
+START_NOW_VERSION = "2026-10-13"
 
 
 def start_now_metadata(start_now: bool) -> dict[str, str]:

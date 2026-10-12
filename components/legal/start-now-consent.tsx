@@ -6,17 +6,18 @@ import { Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 /*
- * The box a buyer ticks before paying, asking for what they buy to start straight away, before their 14-day withdrawal
- * period ends (Terms, "Your right of withdrawal"). For a training plan or a coach switch it also says that their right
- * of withdrawal then ends (§ 356(5) and (4) BGB); for a subscription, what withdrawing then costs (§ 357a(2) BGB).
+ * The box a buyer ticks before paying, asking for what they buy to start straight away and, for a buyer living in the EU
+ * (the only ones with a right of withdrawal, see Terms, "Your right of withdrawal"), before their 14-day withdrawal
+ * period ends. For a training plan or a coach switch it also says that their right of withdrawal then ends (§ 356(5)
+ * and (4) BGB); for a subscription, what withdrawing then costs (§ 357a(2) BGB).
  *
  * Checkouts send `start_now: true` once it's ticked, and the backend keeps that with the payment in Stripe, with the
  * date of this wording (START_NOW_VERSION in backend/app/withdrawal.py: change it whenever a wording here changes).
  */
 const WORDING = {
-  plan: "I want my plan unlocked straight away, before my 14-day withdrawal period ends, and I know that I lose my right of withdrawal once it's unlocked.",
-  subscription: "I want my plan to start straight away, before my 14-day withdrawal period ends, and I know that if I withdraw, I pay for the time up to my withdrawal.",
-  switch: "I want my coach switch to happen straight away, before my 14-day withdrawal period ends, and I know that I lose my right of withdrawal once the switch is complete.",
+  plan: "I want my plan unlocked straight away. If I live in the EU, I agree that it's unlocked before my 14-day withdrawal period ends, and I know that I lose my right of withdrawal once it's unlocked.",
+  subscription: "I want my plan to start straight away. If I live in the EU, I agree that it starts before my 14-day withdrawal period ends, and I know that if I withdraw, I pay for the time up to my withdrawal.",
+  switch: "I want my coach switch to happen straight away. If I live in the EU, I agree that it happens before my 14-day withdrawal period ends, and I know that I lose my right of withdrawal once the switch is complete.",
 }
 
 export function StartNowConsent({ kind, checked, onChange, attempt = 0, disabled = false, className, style }: {
