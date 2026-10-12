@@ -8,9 +8,12 @@ export function InstagramLink() {
   return <a href={INSTAGRAM.url} target="_blank" rel="noreferrer">{INSTAGRAM.handle}</a>
 }
 
-/** Name and postal address, as a block (the Legal notice); until they're filled in, SwimGPT and its Instagram. */
+/** Name and postal address, as a block (the Legal notice); until they're filled in, SwimGPT and its email (or, without
+ * one, its Instagram). */
 export function OperatorAddress() {
-  if (!filled("name") || !filled("street") || !filled("postcodeCity")) return <p>SwimGPT<br />Instagram: <InstagramLink /></p>
+  if (!filled("name") || !filled("street") || !filled("postcodeCity")) {
+    return <p>SwimGPT<br />{filled("email") ? <>Email: <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a></> : <>Instagram: <InstagramLink /></>}</p>
+  }
   return (
     <address className="not-italic">
       {OPERATOR.name}<br />
@@ -22,14 +25,18 @@ export function OperatorAddress() {
   )
 }
 
-/** Email and phone once they're filled in, and Instagram (the Legal notice). */
+/** Email and phone once they're filled in (the Legal notice). Customer service is by email only (Terms, "Customer
+ * service"), so Instagram is named as not a channel for requests; without an email, it's how to reach us. */
 export function OperatorContact() {
+  if (!filled("email")) return <p>{filled("phone") && <>Phone: {OPERATOR.phone}<br /></>}Instagram: <InstagramLink /></p>
   return (
-    <p>
-      {filled("email") && <>Email: <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a><br /></>}
-      {filled("phone") && <>Phone: {OPERATOR.phone}<br /></>}
-      Instagram: <InstagramLink />
-    </p>
+    <>
+      <p>
+        Email: <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a>
+        {filled("phone") && <><br />Phone: {OPERATOR.phone}</>}
+      </p>
+      <p>We handle all customer service by email. Requests sent through Instagram (<InstagramLink />), other social media or any other channel are not handled.</p>
+    </>
   )
 }
 

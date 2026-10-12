@@ -170,6 +170,8 @@ class CoachSwitchRequest(BaseModel):
     """The coach an athlete switches to from the dashboard: a coach's name ("Coach Brad") or catalog key ("brad")."""
 
     coach: str = Field(min_length=1, max_length=40)
+    # Paying for the switch: the athlete ticked the box to have it happen straight away (app/withdrawal.py).
+    start_now: bool = False
 
 
 class OnboardingSubmissionResponse(BaseModel):
@@ -185,6 +187,8 @@ class CheckoutSessionRequest(BaseModel):
     auth_user_id: str
     user_key: str
     plan_id: str
+    # The athlete ticked the box to have their plan start straight away (app/withdrawal.py).
+    start_now: bool = False
 
 
 class CheckoutSessionResponse(BaseModel):

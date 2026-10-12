@@ -6,6 +6,10 @@ import { OPERATOR } from "@/lib/legal"
 
 // The operator in the withdrawal notice and form, once filled in (lib/legal.ts); until then the Legal notice has it.
 const operator = operatorLine()
+// Where customer service is reached: the email in lib/legal.ts, or until it's filled in, the Legal notice.
+const supportEmail = OPERATOR.email
+  ? <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a>
+  : <>the email address in our <Link href="/legal-notice">Legal notice</Link></>
 
 export const metadata: Metadata = {
   title: "Terms of Service · SwimGPT",
@@ -95,7 +99,7 @@ const sections: LegalSection[] = [
         <p>You can pay monthly or yearly. The price that applies is the one shown on the payment screen and on the checkout page before you order. Prices are final prices.</p>
         <h3>How you subscribe</h3>
         <ol>
-          <li>On the payment screen, choose monthly or yearly and select &ldquo;Start my plan&rdquo;.</li>
+          <li>On the payment screen, choose monthly or yearly, tick the box asking for your plan to start straight away, and select &ldquo;Start my plan&rdquo;.</li>
           <li>You are taken to the secure checkout page of our payment provider Stripe, which shows the plan, the price and how it renews.</li>
           <li>Enter your payment details. You can correct your entries at any time before ordering, or go back with the back link.</li>
           <li>By clicking the payment button (&ldquo;Subscribe&rdquo;), you make a binding offer to subscribe.</li>
@@ -109,11 +113,11 @@ const sections: LegalSection[] = [
           <li><strong>Yearly:</strong> the first term is 12 months. Unless you cancel before it ends, your plan then continues for an indefinite period and is billed yearly in advance. From then on you can cancel at any time with one month&apos;s notice, and we refund the part of any payment that covers the time after your cancellation takes effect.</li>
         </ul>
         <h3>Failed payments</h3>
-        <p>If a payment fails, Stripe will try again. Until it succeeds we may pause your access. If the amount remains unpaid after a reminder, we may end the subscription.</p>
+        <p>If a payment fails, Stripe will try again. If a payment fails or is reversed, for example through a chargeback, we may pause your access until the amount has been paid. If it remains unpaid after a reminder, we may end the subscription.</p>
         <h3>Price changes</h3>
         <p>We will only raise the price of your existing subscription with your express consent. If you don&apos;t agree, your subscription continues at the old price, and we may end it at the end of a billing period with at least one month&apos;s notice.</p>
         <h3>Changing coach</h3>
-        <p>Changing your coach from the dashboard can cost a one-time fee, which is shown before you pay.</p>
+        <p>Changing your coach from the dashboard can cost a one-time fee, which is shown before you pay. It is not refunded once the switch is complete (see <a href="#withdrawal">Your right of withdrawal</a>).</p>
       </>
     ),
   },
@@ -123,7 +127,7 @@ const sections: LegalSection[] = [
     summary: "Cancel any time in your account. You keep access until the end of the period you've paid for.",
     body: (
       <>
-        <p>You can cancel your subscription at any time in the app (Subscription → Cancel subscription), or by sending us a message, for example by email{OPERATOR.email ? <> to <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a></> : <> (see our <Link href="/legal-notice">Legal notice</Link>)</>}. The cancellation takes effect at the end of the current billing period (for a yearly plan after its first term, see <a href="#subscriptions">Renewal</a>). Until then you keep full access, and you can change your mind. We confirm your cancellation in the app, or by reply if you cancelled by message.</p>
+        <p>You can cancel your subscription at any time in the app (Subscription → Cancel subscription), or by email{OPERATOR.email ? <> to <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a></> : <> (see our <Link href="/legal-notice">Legal notice</Link>)</>}. The cancellation takes effect at the end of the current billing period (for a yearly plan after its first term, see <a href="#subscriptions">Renewal</a>). Until then you keep full access, and you can change your mind. We confirm your cancellation in the app, or by reply if you cancelled by email.</p>
         <p>Payments already made are not refunded, except under your statutory rights (in particular your <a href="#withdrawal">right of withdrawal</a>) or as described for yearly plans above.</p>
         <p>We may end a subscription with at least one month&apos;s notice to the end of a billing period, for example if we stop offering SwimGPT, and refund any amount you&apos;ve paid for the time after. Both of us may end the contract without notice for good cause (§ 314 BGB), for example if you seriously breach these Terms.</p>
       </>
@@ -132,7 +136,7 @@ const sections: LegalSection[] = [
   {
     id: "withdrawal",
     title: "Your right of withdrawal",
-    summary: "If you're a consumer, you can withdraw from a purchase within 14 days without giving any reason.",
+    summary: "As a consumer you can withdraw within 14 days, but what you've already received is not refunded: the days of your subscription you've had, and a coach switch once it's complete. After the 14 days, payments are refunded only where these Terms or the law require it.",
     body: (
       <>
         <p>If you are a consumer, you have the following statutory right of withdrawal:</p>
@@ -145,7 +149,10 @@ const sections: LegalSection[] = [
           <p>If you withdraw from this contract, we shall reimburse to you all payments received from you, including the costs of delivery (with the exception of the supplementary costs resulting from your choice of a type of delivery other than the least expensive type of standard delivery offered by us), without undue delay and in any event not later than 14 days from the day on which we are informed about your decision to withdraw from this contract. We will carry out such reimbursement using the same means of payment as you used for the initial transaction, unless you have expressly agreed otherwise; in any event, you will not incur any fees as a result of such reimbursement.</p>
           <p>If you requested to begin the performance of services during the withdrawal period, you shall pay us an amount which is in proportion to what has been provided until you have communicated us your withdrawal from this contract, in comparison with the full coverage of the contract.</p>
         </div>
-        <p><strong>Digital content.</strong> For training plans from our store (digital content not supplied on a tangible medium), your right of withdrawal expires once we have begun providing the content, if you have expressly agreed that we begin before the withdrawal period ends, have confirmed that you know you thereby lose your right of withdrawal, and we have sent you a confirmation of this (§ 356(5) BGB).</p>
+        <p><strong>Your subscription.</strong> When you start your subscription, you ask us at checkout to provide it straight away, before the withdrawal period ends, and we begin at once. From that moment, everything SwimGPT provides is a service you have received, including workout and season plan generation, coach chat and live voice calls, nutrition and mental performance support, performance tracking and every other feature of your subscription. If you withdraw within the 14 days, you pay for your subscription up to and including the day we receive your withdrawal, calculated per day from the price of your billing period, and only the remainder is refunded. Cancelling your subscription is not a withdrawal: it only ends your subscription for the future, as described under <a href="#cancellation">Cancelling</a>. Once the withdrawal period has ended, payments are not refunded, except in the cases described under <a href="#cancellation">Cancelling</a>.</p>
+        <p><strong>Coach switches.</strong> A coach switch is carried out straight away, as you ask at checkout, and is complete once your season plan has been rebuilt with your new coach. From then on, your right of withdrawal has ended and the payment for the switch is not refunded (§ 356(4) BGB).</p>
+        <p><strong>Training plans.</strong> A training plan from our store (digital content not supplied on a tangible medium) is unlocked in your account as soon as your payment is confirmed. Your right of withdrawal ends at that moment, even if you never open the plan, provided you expressly agreed at checkout that we unlock it before the withdrawal period ends, confirmed that you know you thereby lose your right of withdrawal, and we have sent you a confirmation of this (§ 356(5) BGB). Once it has ended, the plan is not refunded.</p>
+        <p><strong>Business customers.</strong> If you use SwimGPT for purposes of your trade, business or profession, you have no right of withdrawal, and payments are not refunded except where the law requires it.</p>
         <div className="lg-boxed">
           <p><strong>Model withdrawal form</strong></p>
           <p>(Complete and return this form only if you wish to withdraw from the contract.)</p>
@@ -163,7 +170,7 @@ const sections: LegalSection[] = [
     summary: "Training plans you buy are yours to read in the app, for your own personal use.",
     body: (
       <>
-        <p>Training plans are one-time purchases at the price shown before you pay. You order them the same way as a subscription, using the payment button (&ldquo;Pay&rdquo;) on the checkout page. You can read a plan you&apos;ve bought in the SwimGPT reader for as long as we offer SwimGPT; if we ever stop, we will tell you in good time.</p>
+        <p>Training plans are one-time purchases at the price shown before you pay. You order them the same way as a subscription, using the payment button (&ldquo;Pay&rdquo;) on the checkout page. You can read a plan you&apos;ve bought in the SwimGPT reader for as long as we offer SwimGPT; if we ever stop, we will tell you in good time. Your right of withdrawal for a plan ends once it is unlocked, as described under <a href="#withdrawal">Your right of withdrawal</a>.</p>
         <p>You receive a personal, non-transferable right to read the plan for your own training. You may not copy, share, publish or resell it, in whole or in part.</p>
       </>
     ),
@@ -213,6 +220,18 @@ const sections: LegalSection[] = [
     summary: "If SwimGPT doesn't work as it should, you have your statutory rights.",
     body: (
       <p>If you are a consumer, the statutory rights for digital products apply (§§ 327 ff. BGB). If you are a business, the statutory rules apply as far as they can't be limited by agreement. If something doesn&apos;t work, please <ContactUs /> so we can fix it.</p>
+    ),
+  },
+  {
+    id: "support",
+    title: "Customer service",
+    summary: `All customer service is by email${OPERATOR.email ? ` to ${OPERATOR.email}` : ""}. We don't handle requests sent through Instagram or any other channel.`,
+    body: (
+      <>
+        <p>We provide customer service exclusively by email. Please send every request, question and complaint to {supportEmail}, where possible from the email address of your SwimGPT account. This covers everything, including your account, payments, subscriptions, cancellations, withdrawals, refunds, technical problems and questions about your data. Email lets us identify your account, keep a record of your request and answer it reliably.</p>
+        <p>Instagram, other social media and any other channel are not customer service channels. We do not monitor them for requests, and requests sent through them are not handled. Messages to your AI coach in the app are answered by the AI and are not passed on to us as requests.</p>
+        <p>This does not limit your statutory rights. In particular, you can always cancel your subscription in the app, and exercise your right of withdrawal as described under <a href="#withdrawal">Your right of withdrawal</a>.</p>
+      </>
     ),
   },
   {

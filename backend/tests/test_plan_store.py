@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import json
 import unittest
@@ -10,6 +11,7 @@ import stripe
 
 from app.main import app
 from app.plan_store import BOOKS, CATALOG, CATEGORIES, book_index, for_sale
+from app.withdrawal import START_NOW_VERSION
 
 BUYER = SimpleNamespace(id="user-1", email="swimmer@example.com")
 
@@ -205,6 +207,19 @@ class PlanPurchaseTests(unittest.TestCase):
             "id": "purchase-1", "paid_at": None, "auth_user_id": "user-1", "plan_id": plan["id"], "plan_title": plan["title"],
             "amount": plan["price"], "currency": "usd", "status": "pending", "stripe_checkout_session_id": "cs_new",
         }])
+
+    def test_ticking_start_now_is_kept_with_the_payment(self, create, retrieve, expire):
+        create.return_value = checkout("cs_new")
+        plan = CATALOG[0]
+        response = self.client.post("/api/plans/checkout", json={"plan_id": plan["id"], "start_now": True}, headers=SIGNED_IN)
+        self.assertEqual(response.status_code, 200, response.text)
+        options = create.call_args.kwargs
+        metadata = options["metadata"]
+        self.assertEqual(metadata, {"kind": "pdf_plan", "plan_id": plan["id"], "auth_user_id": "user-1",
+                                    "start_now": START_NOW_VERSION, "start_now_at": metadata["start_now_at"]})
+        self.assertLess(datetime.now(timezone.utc) - datetime.fromisoformat(metadata["start_now_at"]), timedelta(minutes=1))
+        self.assertEqual(options["payment_intent_data"], {"metadata": metadata})
+        self.assertEqual([(row["plan_id"], row["status"]) for row in self.table.rows], [(plan["id"], "pending")])
 
     def test_unknown_plan_is_rejected(self, create, retrieve, expire):
         response = self.client.post("/api/plans/checkout", json={"plan_id": "free-plan"}, headers=SIGNED_IN)

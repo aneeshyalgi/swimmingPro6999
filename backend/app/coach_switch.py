@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.context import recommended_coach
 from app.db import get_supabase_client
 from app.training import find_record, record_id, save_record
+from app.withdrawal import start_now_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +92,10 @@ def amount_due(profile: dict[str, Any], coach: str, paid: dict[str, Any] | None)
     return 0 if coach in paid["coaches"] else max(price - paid["amount"], 0)
 
 
-def start_checkout(profile: dict[str, Any], coach: str) -> dict[str, Any]:
+def start_checkout(profile: dict[str, Any], coach: str, start_now: bool = False) -> dict[str, Any]:
     """Opens payment for a switch to `coach`: {"checkout_url"} for Stripe's page, which charges the price less anything
-    already paid towards a switch, or {"paid": True} when that already covers it. Raises stripe.error.StripeError."""
+    already paid towards a switch, or {"paid": True} when that already covers it. `start_now`: the athlete ticked the box
+    to have the switch happen straight away (app/withdrawal.py). Raises stripe.error.StripeError."""
     settings = get_settings()
     stripe.api_key = settings.stripe_secret_key
     record = find_record(profile["id"], RECORD_KEY)
@@ -109,7 +111,8 @@ def start_checkout(profile: dict[str, Any], coach: str) -> dict[str, Any]:
     else:
         name = f"Coach switch to {coach}" + (" (your best match)" if price == BEST_MATCH_PRICE else "")
         description = f"{coach} takes over your SwimGPT season plan, chat and voice calls. One-time payment."
-    metadata = {"purpose": PURPOSE, "auth_user_id": str(profile["auth_user_id"]), "user_key": profile["user_key"], "coach": coach}
+    metadata = {"purpose": PURPOSE, "auth_user_id": str(profile["auth_user_id"]), "user_key": profile["user_key"], "coach": coach,
+                **start_now_metadata(start_now)}
     options: dict[str, Any] = {
         "mode": "payment",
         "managed_payments": {"enabled": False},

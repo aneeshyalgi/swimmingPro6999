@@ -8,6 +8,7 @@ import { WaterBubbles } from "@/components/water-bubbles"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AccountRequired } from "@/components/plan-store/account-required"
+import { ConfirmPurchase } from "@/components/plan-store/confirm-purchase"
 import { PlanCard, PlanCardSkeleton } from "@/components/plan-store/plan-card"
 import { PlanPreview } from "@/components/plan-store/plan-preview"
 import { CategoryTabs, FeaturedPlan, HeroStack, HowItWorks, YourPlans } from "@/components/plan-store/store-ui"
@@ -49,7 +50,11 @@ export default function TrainingPlansPage() {
   const [owned, setOwned] = useState<Set<string>>(new Set())
   const [accountFor, setAccountFor] = useState<StorePlan | null>(null)
   const [accountOpen, setAccountOpen] = useState(false)
-  // Back from signing in to buy a plan (?buy=): its checkout carries on. A link to a plan (?view=) opens its details.
+  // The step before Stripe, where the buyer ticks the box to have the plan unlocked straight away.
+  const [confirming, setConfirming] = useState<StorePlan | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  // Back from signing in to buy a plan (?buy=): the purchase carries on, at the step before Stripe. A link to a plan
+  // (?view=) opens its details.
   const [resumeBuy, setResumeBuy] = useState<string | null>(null)
   const [viewId, setViewId] = useState<string | null>(null)
 
@@ -81,6 +86,13 @@ export default function TrainingPlansPage() {
     const view = params.get("view")
     if (view) setViewId(view)
     if (params.has("checkout") || buyId || view) window.history.replaceState(null, "", window.location.pathname)
+  }, [])
+
+  // Coming back from Stripe with the browser's Back button restores this page as it was left: mid-checkout.
+  useEffect(() => {
+    const onShow = (event: PageTransitionEvent) => { if (event.persisted) setBuyingId(null) }
+    window.addEventListener("pageshow", onShow)
+    return () => window.removeEventListener("pageshow", onShow)
   }, [])
 
   const plans = useMemo(() => catalog?.plans ?? [], [catalog])
@@ -126,18 +138,32 @@ export default function TrainingPlansPage() {
     setAccountOpen(true)
   }
 
-  const buy = async (plan: StorePlan) => {
+  /** Buy, from anywhere in the store: the step before Stripe comes first, where the buyer ticks the box. */
+  const buy = (plan: StorePlan) => {
     if (buyingId || owned.has(plan.id)) return
     if (signedIn === false) { askForAccount(plan); return }
+    setPreviewOpen(false)
+    setCheckoutError(null)
+    setConfirming(plan)
+    setConfirmOpen(true)
+  }
+
+  /** The box is ticked: on to Stripe. */
+  const checkout = async (plan: StorePlan) => {
+    if (buyingId) return
     setBuyingId(plan.id)
     setCheckoutError(null)
     try {
-      await startPlanCheckout(plan.id)
+      await startPlanCheckout(plan.id, true)
     } catch (error) {
       setBuyingId(null)
-      if (error instanceof SignInRequired) { askForAccount(plan); return }
-      if (error instanceof PlanStoreError && error.status === 409) setOwned((current) => new Set(current).add(plan.id))
-      openPreview(plan)
+      if (error instanceof SignInRequired) { setConfirmOpen(false); askForAccount(plan); return }
+      if (error instanceof PlanStoreError && error.status === 409) {
+        // Already bought on this account: its details show it, ready to open.
+        setOwned((current) => new Set(current).add(plan.id))
+        setConfirmOpen(false)
+        openPreview(plan)
+      }
       setCheckoutError(error instanceof Error ? error.message : "Couldn't start checkout. Please try again.")
     }
   }
@@ -156,7 +182,7 @@ export default function TrainingPlansPage() {
     const plan = catalog.plans.find((item) => item.id === resumeBuy)
     if (!plan) return
     openPreview(plan)
-    if (signedIn) void buy(plan)
+    if (signedIn) buy(plan)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeBuy, catalog, signedIn])
 
@@ -298,7 +324,7 @@ export default function TrainingPlansPage() {
                 ))}
               </div>
             )}
-            {checkoutError && !previewOpen && <p role="alert" className="mt-4 text-center text-sm text-red-300">{checkoutError}</p>}
+            {checkoutError && !previewOpen && !confirmOpen && <p role="alert" className="mt-4 text-center text-sm text-red-300">{checkoutError}</p>}
           </div>
         </div>
       </section>
@@ -336,6 +362,8 @@ export default function TrainingPlansPage() {
       <PlanPreview plan={previewing} open={previewOpen} onOpenChange={setPreviewOpen} buying={buyingId === previewing?.id}
         owned={previewing ? owned.has(previewing.id) : false} error={checkoutError} onBuy={buy} />
       <AccountRequired plan={accountFor} open={accountOpen} onOpenChange={setAccountOpen} />
+      <ConfirmPurchase plan={confirming} open={confirmOpen} buying={buyingId === confirming?.id} error={checkoutError} onPay={checkout}
+        onOpenChange={(open) => { setConfirmOpen(open); if (!open) setCheckoutError(null) }} />
     </div>
   )
 }

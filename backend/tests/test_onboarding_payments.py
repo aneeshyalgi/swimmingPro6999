@@ -9,6 +9,7 @@ import stripe
 
 from app.main import PAYMENT_PLANS, app
 from app.payments import adopt_subscription, billing_account, is_paid
+from app.withdrawal import START_NOW_VERSION
 
 
 def profiles(*rows):
@@ -90,6 +91,16 @@ class OnboardingPaymentTests(unittest.TestCase):
         self.assertEqual(options["metadata"], payload)
         self.assertEqual(options["subscription_data"], {"metadata": payload})
         self.assertEqual(options["cancel_url"], "http://localhost:3000/subscribe?checkout=cancelled&plan=performance-build-yearly")
+
+    @patch("app.main.stripe.checkout.Session.create")
+    def test_ticking_start_now_is_kept_on_the_checkout_and_the_subscription(self, create):
+        create.return_value = SimpleNamespace(url="https://checkout.stripe.com/c/pay/test", id="cs_test_1")
+        self.assertEqual(self.client.post("/api/payments/checkout", json={**self.payload, "start_now": True}).status_code, 200)
+        options = create.call_args.kwargs
+        metadata = options["metadata"]
+        self.assertEqual(metadata, {**self.payload, "start_now": START_NOW_VERSION, "start_now_at": metadata["start_now_at"]})
+        self.assertLess(datetime.now(timezone.utc) - datetime.fromisoformat(metadata["start_now_at"]), timedelta(minutes=1))
+        self.assertEqual(options["subscription_data"], {"metadata": metadata})
 
     @patch("app.main.stripe.checkout.Session.create")
     def test_checkout_bills_the_athletes_existing_stripe_customer(self, create):

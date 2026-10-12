@@ -26,7 +26,7 @@ const sections: LegalSection[] = [
   {
     id: "contact",
     title: "Contact",
-    summary: OPERATOR.email.trim() ? "The quickest way to reach us is by email." : "The quickest way to reach us is a message on Instagram.",
+    summary: OPERATOR.email.trim() ? "We handle all customer service by email." : "The quickest way to reach us is a message on Instagram.",
     body: <OperatorContact />,
   },
   {

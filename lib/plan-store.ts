@@ -84,14 +84,15 @@ export async function fetchCatalog(): Promise<Catalog> {
 }
 
 /** Creates a Stripe Checkout session for one plan and sends the browser there. The purchase is saved to the signed-in
- * account; with nobody signed in this throws SignInRequired. */
-export async function startPlanCheckout(planId: string) {
+ * account; with nobody signed in this throws SignInRequired. `startNow`: the buyer ticked the box to have the plan
+ * unlocked straight away (components/legal/start-now-consent.tsx). */
+export async function startPlanCheckout(planId: string, startNow: boolean) {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new SignInRequired("Sign in to buy a plan.")
   const response = await fetch(`${API_URL}/api/plans/checkout`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ plan_id: planId }),
+    body: JSON.stringify({ plan_id: planId, start_now: startNow }),
   })
   if (response.status === 401) throw new SignInRequired(await readError(response))
   if (!response.ok) throw new PlanStoreError(await readError(response), response.status)

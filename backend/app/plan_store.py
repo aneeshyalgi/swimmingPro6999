@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from app.auth import get_authenticated_user
 from app.config import get_settings
 from app.db import get_supabase_client
+from app.withdrawal import start_now_metadata
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/plans", tags=["Plan store"])
@@ -102,6 +103,8 @@ BY_ID = {plan["id"]: plan for plan in CATALOG}
 
 class PlanCheckoutRequest(BaseModel):
     plan_id: str = Field(min_length=1, max_length=80)
+    # The buyer ticked the box to have the plan unlocked straight away, ending their right of withdrawal (app/withdrawal.py).
+    start_now: bool = False
 
 
 def _public(plan: dict[str, Any]) -> dict[str, Any]:
@@ -219,7 +222,7 @@ def create_plan_checkout(request: PlanCheckoutRequest, authorization: str | None
     if any(row["plan_id"] == plan["id"] and row["status"] == "paid" for row in purchases):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail=f"You already own {plan['title']} on this account. Open it from Training Plans whenever you like.")
-    metadata = {"kind": "pdf_plan", "plan_id": plan["id"], "auth_user_id": buyer.id}
+    metadata = {"kind": "pdf_plan", "plan_id": plan["id"], "auth_user_id": buyer.id, **start_now_metadata(request.start_now)}
     options: dict[str, Any] = {
         "mode": "payment",
         "managed_payments": {"enabled": False},

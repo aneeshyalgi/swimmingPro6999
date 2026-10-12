@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { CoachAvatar, LOOKS, coachLookKey } from "@/components/coach-avatar"
 import type { CoachProfile } from "@/components/coach-card"
+import { StartNowConsent } from "@/components/legal/start-now-consent"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 
@@ -221,15 +222,16 @@ function Switcher({ current: initial, returned, onClose, onSwitched }: {
     }
   }
 
-  /** Pays for the switch on Stripe's page, which brings the athlete back here to finish it; nothing to pay switches straight away. */
-  const pay = async () => {
+  /** Pays for the switch on Stripe's page, which brings the athlete back here to finish it; nothing to pay switches straight
+   * away. `startNow`: they ticked the box to have the switch happen straight away (components/legal/start-now-consent.tsx). */
+  const pay = async (startNow: boolean) => {
     if (!coach) return
     if (coach.switch.due === 0) { void switchCoach(coach.name); return }
     setStage("paying")
     setPayError("")
     try {
       const result = await request<{ checkout_url?: string; paid?: boolean }>("/api/coach/checkout", {
-        method: "POST", body: JSON.stringify({ coach: coach.name }),
+        method: "POST", body: JSON.stringify({ coach: coach.name, start_now: startNow }),
       })
       if (result.checkout_url) {
         window.location.assign(result.checkout_url)
@@ -390,7 +392,7 @@ function Switcher({ current: initial, returned, onClose, onSwitched }: {
 
             {(stage === "confirm" || stage === "paying") && (
               <Confirm from={current} to={coach.name} cost={coach.switch} bestMatch={Boolean(coach.recommended)} paidAmount={paidSwitch?.amount ?? 0}
-                format={format} paying={stage === "paying"} error={payError} onCancel={() => setStage("browse")} onConfirm={() => void pay()} />
+                format={format} paying={stage === "paying"} error={payError} onCancel={() => setStage("browse")} onConfirm={(startNow) => void pay(startNow)} />
             )}
           </>
         )}
@@ -508,12 +510,19 @@ function Confirm({ from, to, cost, bestMatch, paidAmount, format, paying, error,
   paying: boolean
   error: string
   onCancel: () => void
-  onConfirm: () => void
+  /** `startNow`: they ticked the box to have the switch happen straight away, which paying needs. */
+  onConfirm: (startNow: boolean) => void
 }) {
   const first = firstName(to)
   const covered = cost.due === 0
   const rest = !covered && cost.due < cost.price
   const confirmRef = useRef<HTMLButtonElement>(null)
+  const [startNow, setStartNow] = useState(false)
+  const [startNowAttempt, setStartNowAttempt] = useState(0)
+  const confirm = () => {
+    if (!covered && !startNow) { setStartNowAttempt((count) => count + 1); return }
+    onConfirm(startNow)
+  }
   // Focused without scrolling: the sheet is still sliding up from below, and scrolling to it would shift the switcher.
   useEffect(() => { confirmRef.current?.focus({ preventScroll: true }) }, [])
   const changes = [
@@ -571,6 +580,11 @@ function Confirm({ from, to, cost, bestMatch, paidAmount, format, paying, error,
             ))}
           </ul>
 
+          {!covered && (
+            <StartNowConsent kind="switch" checked={startNow} onChange={setStartNow} attempt={startNowAttempt} disabled={paying}
+              className="rounded-2xl border border-white/[0.07] bg-white/[0.03] p-4" style={{ "--start-now-tone": "var(--csw-tone)" } as CSSProperties} />
+          )}
+
           {error && (
             <p role="alert" className="flex items-start gap-2.5 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm leading-5 text-rose-100">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />{error}
@@ -583,7 +597,7 @@ function Confirm({ from, to, cost, bestMatch, paidAmount, format, paying, error,
                 className="rounded-full border border-white/12 px-5 py-3 text-sm font-medium text-slate-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50">
                 Keep {firstName(from)}
               </button>
-              <button ref={confirmRef} type="button" onClick={onConfirm} disabled={paying}
+              <button ref={confirmRef} type="button" onClick={confirm} disabled={paying}
                 className="csw-cta group inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-bold">
                 {paying ? (
                   <><Loader2 className="relative h-4 w-4 animate-spin" /><span className="relative">Opening secure checkout…</span></>

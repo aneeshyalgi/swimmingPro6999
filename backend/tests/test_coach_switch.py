@@ -10,6 +10,7 @@ import stripe
 from app import coach_switch
 from app.main import app
 from app.training import record_id
+from app.withdrawal import START_NOW_VERSION
 
 # A sprinter whose best match (the recommended coach) is Coach Brad; their coach is Coach Tony.
 PROFILE = {
@@ -99,6 +100,12 @@ class CoachSwitchTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {"checkout_url": "https://checkout.stripe.com/c/pay/cs_new"})
         self.assertEqual(self.start_checkout.call_args.args, (self.profile, "Coach Brad"))
+
+    def test_checkout_passes_on_the_start_now_box(self):
+        self.client.post("/api/coach/checkout", json={"coach": "brad", "start_now": True}, headers=HEADERS)
+        self.assertEqual(self.start_checkout.call_args.kwargs, {"start_now": True})
+        self.client.post("/api/coach/checkout", json={"coach": "brad"}, headers=HEADERS)  # from a page before the box
+        self.assertEqual(self.start_checkout.call_args.kwargs, {"start_now": False})
 
     def test_checkout_is_only_for_a_different_known_coach(self):
         self.assertEqual(self.client.post("/api/coach/checkout", json={"coach": "Coach Tony"}, headers=HEADERS).status_code, 409)
@@ -248,6 +255,15 @@ class CoachSwitchPaymentTests(unittest.TestCase):
         # Remembered (so the payment can't be lost) before the athlete is sent to pay.
         save.assert_called_once_with("row-1", "coach_switch", "coach_switch", "Coach switch payment", None, {"session_id": "cs_new", "coach": "Coach Pete"})
         expire.assert_not_called()
+
+    def test_ticking_start_now_is_kept_with_the_payment(self, create, retrieve, expire, find, save, settings):
+        create.return_value = checkout("cs_new")
+        coach_switch.start_checkout(self.profile, "Coach Pete", start_now=True)
+        options = create.call_args.kwargs
+        metadata = options["metadata"]
+        self.assertEqual(metadata, {"purpose": "coach_switch", "auth_user_id": "user-1", "user_key": "profile-1", "coach": "Coach Pete",
+                                    "start_now": START_NOW_VERSION, "start_now_at": metadata["start_now_at"]})
+        self.assertEqual(options["payment_intent_data"]["metadata"], metadata)
 
     def test_the_best_match_is_two_ninety_nine(self, create, retrieve, expire, find, save, settings):
         create.return_value = checkout("cs_new")

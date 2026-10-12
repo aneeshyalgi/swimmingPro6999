@@ -8,6 +8,7 @@ import {
   TrendingUp, Trophy, Waves, Zap,
 } from "lucide-react"
 import { CoachAvatar } from "@/components/coach-avatar"
+import { StartNowConsent } from "@/components/legal/start-now-consent"
 import { Tilt } from "@/components/plan-store/plan-cover"
 import { WaterBubbles } from "@/components/water-bubbles"
 import { supabase } from "@/lib/supabase"
@@ -104,6 +105,9 @@ function SubscribeContent() {
   const [starting, setStarting] = useState(false)
   const [checkoutError, setCheckoutError] = useState("")
   const [errorKey, setErrorKey] = useState(0)
+  // The box to tick before paying, asking for the plan to start straight away; tries to pay without it point to it.
+  const [startNow, setStartNow] = useState(false)
+  const [startNowAttempt, setStartNowAttempt] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -153,6 +157,10 @@ function SubscribeContent() {
 
   const startCheckout = async () => {
     if (!screen || starting) return
+    if (!startNow) {
+      setStartNowAttempt((count) => count + 1)
+      return
+    }
     setStarting(true)
     setCheckoutError("")
     try {
@@ -161,7 +169,7 @@ function SubscribeContent() {
       const response = await fetch(`${API_URL}/api/payments/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ auth_user_id: session.user.id, user_key: screen.user_key, plan_id: plansOf(screen, planId).chosen.id }),
+        body: JSON.stringify({ auth_user_id: session.user.id, user_key: screen.user_key, plan_id: plansOf(screen, planId).chosen.id, start_now: true }),
       })
       // Already paid (an earlier checkout went through, or this email already has a subscription): nothing to charge.
       if (response.status === 409) {
@@ -354,13 +362,16 @@ function SubscribeContent() {
                       ))}
                     </ul>
 
+                    <StartNowConsent kind="subscription" checked={startNow} onChange={setStartNow} attempt={startNowAttempt} disabled={starting}
+                      className="mt-7 rounded-2xl border border-white/[0.08] bg-black/25 p-4" />
+
                     {checkoutError && (
-                      <div key={errorKey} role="alert" className="au-shake mt-6 flex items-start gap-2.5 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                      <div key={errorKey} role="alert" className="au-shake mt-4 flex items-start gap-2.5 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />{checkoutError}
                       </div>
                     )}
 
-                    <div className="relative mt-7">
+                    <div className="relative mt-4">
                       {starting && <span aria-hidden className="sb-burst pointer-events-none absolute inset-0 rounded-2xl" />}
                       <button type="button" onClick={startCheckout} disabled={starting}
                         className={cn("au-submit group relative flex h-[58px] w-full items-center justify-center overflow-hidden rounded-2xl text-base font-semibold text-slate-950 transition-transform duration-300 enabled:hover:-translate-y-0.5 disabled:cursor-progress",

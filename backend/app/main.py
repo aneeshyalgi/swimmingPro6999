@@ -39,6 +39,7 @@ from app.consents import PARENTAL_CONSENT_AGE, Guardian, record_new_athlete, rou
 from app.payments import PAYMENT_PLANS, adopt_subscription, billing_account, is_paid, record_payment, subscription_summary
 from app.video_access import checked_access, identify, release, start_analysis
 from app.swim_times import with_display_times
+from app.withdrawal import start_now_metadata
 from app.schemas import (
     CoachChatRequest,
     CoachChatResponse,
@@ -172,7 +173,7 @@ def coach_switch_checkout(request: CoachSwitchRequest, authorization: str | None
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="STRIPE_SECRET_KEY is not configured.")
     try:
-        return start_checkout(profile, name)
+        return start_checkout(profile, name, start_now=request.start_now)
     except stripe.error.StripeError as exc:
         logger.warning("Coach switch checkout failed", exc_info=True)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
@@ -370,7 +371,8 @@ def create_checkout_session(request: CheckoutSessionRequest, authorization: str 
         except stripe.error.StripeError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Stripe checkout error: {exc}") from exc
 
-    metadata = {"auth_user_id": request.auth_user_id, "user_key": request.user_key, "plan_id": request.plan_id}
+    metadata = {"auth_user_id": request.auth_user_id, "user_key": request.user_key, "plan_id": request.plan_id,
+                **start_now_metadata(request.start_now)}
     # One Stripe customer per athlete: the one their email already has, otherwise a new one billed to that email.
     customer = {"customer": customer_id} if customer_id else {"customer_email": user.email} if user.email else {}
     try:
