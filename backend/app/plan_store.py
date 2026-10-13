@@ -1,8 +1,7 @@
 """Training Plan store: SwimGPT's premade training plans, sold one at a time through Stripe Checkout and read in SwimGPT.
 
 The catalog lives here (never in the browser) so prices can't be changed client-side. Checkout uses a one-off
-payment; the success page verifies the session server-side before showing a confirmation. A buyer who ticked the box to
-have the plan unlocked straight away is also emailed Stripe's receipt and a paid invoice confirming that (app/withdrawal.py).
+payment; the success page verifies the session server-side before showing a confirmation.
 
 Buying needs a SwimGPT account, and only that: no subscription or onboarding. Every purchase is kept against the account
 in the user_plan_purchases table: a row is written as checkout opens ("pending") and marked "paid" once Stripe confirms
@@ -29,7 +28,7 @@ from pydantic import BaseModel, Field
 from app.auth import get_authenticated_user
 from app.config import get_settings
 from app.db import get_supabase_client
-from app.withdrawal import plan_confirmation, plan_invoice_footer, start_now_metadata
+from app.withdrawal import start_now_metadata
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/plans", tags=["Plan store"])
@@ -243,13 +242,6 @@ def create_plan_checkout(request: PlanCheckoutRequest, authorization: str | None
         "client_reference_id": buyer.id,
         **({"customer_email": buyer.email} if buyer.email else {}),
     }
-    if request.start_now:
-        # The buyer asked for the plan straight away: Stripe's receipt and a paid invoice confirm that to them by email, the
-        # confirmation that ends their right of withdrawal once the plan is unlocked (app/withdrawal.py).
-        confirmation = plan_confirmation(plan["title"])
-        options["payment_intent_data"]["description"] = confirmation
-        options["invoice_creation"] = {"enabled": True, "invoice_data": {
-            "description": confirmation, "footer": plan_invoice_footer(f"{settings.frontend_url}/terms")}}
     try:
         session = stripe.checkout.Session.create(**options)
     except stripe.error.StripeError as exc:

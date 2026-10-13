@@ -218,22 +218,9 @@ class PlanPurchaseTests(unittest.TestCase):
         self.assertEqual(metadata, {"kind": "pdf_plan", "plan_id": plan["id"], "auth_user_id": "user-1",
                                     "start_now": START_NOW_VERSION, "start_now_at": metadata["start_now_at"]})
         self.assertLess(datetime.now(timezone.utc) - datetime.fromisoformat(metadata["start_now_at"]), timedelta(minutes=1))
-        # The confirmation that ends the right of withdrawal: on Stripe's receipt and on a paid invoice, both emailed.
-        confirmation = options["payment_intent_data"]["description"]
-        self.assertEqual(options["payment_intent_data"], {"metadata": metadata, "description": confirmation})
-        self.assertIn(plan["title"], confirmation)
-        self.assertIn("you confirmed that you know you lose your right of withdrawal once it is unlocked", confirmation)
-        invoice = options["invoice_creation"]
-        self.assertEqual((invoice["enabled"], invoice["invoice_data"]["description"]), (True, confirmation))
-        self.assertIn("http://localhost:3000/terms#withdrawal", invoice["invoice_data"]["footer"])
+        self.assertEqual(options["payment_intent_data"], {"metadata": metadata})
+        self.assertNotIn("invoice_creation", options)  # no paid invoice: Stripe charges for each
         self.assertEqual([(row["plan_id"], row["status"]) for row in self.table.rows], [(plan["id"], "pending")])
-
-    def test_without_the_box_nothing_is_confirmed(self, create, retrieve, expire):
-        create.return_value = checkout("cs_new")
-        self.assertEqual(self.buy(CATALOG[0]).status_code, 200)  # a page from before the box
-        options = create.call_args.kwargs
-        self.assertNotIn("invoice_creation", options)
-        self.assertNotIn("description", options["payment_intent_data"])
 
     def test_unknown_plan_is_rejected(self, create, retrieve, expire):
         response = self.client.post("/api/plans/checkout", json={"plan_id": "free-plan"}, headers=SIGNED_IN)
