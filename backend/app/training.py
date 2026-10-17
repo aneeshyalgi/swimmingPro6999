@@ -24,7 +24,7 @@ from app.auth import get_authenticated_profile
 from app.config import get_settings
 from app.coach_programs import program_for, render_overview, session_lines
 from app.context import athlete_coach, chat_context
-from app.swim_planner import assign_week, main_strokes, session_parts, taper_meet
+from app.swim_planner import SwimAssignment, assign_week, main_strokes, session_parts, taper_meet
 from app.db import get_supabase_client
 from app import jobs as week_jobs
 from app.swim_times import with_display_times
@@ -1693,6 +1693,15 @@ async def generate_week(request: WeekRequest, http: Request, authorization: str 
                                      lambda: build_week(profile, request.week_start))
 
 
+@router.post("/week/replan")
+async def replan_generated_week(request: WeekRequest, http: Request, authorization: str | None = Header(default=None)):
+    """Plan the rest of a generated swim week again (see replan_week). It runs as generating a week does: one run at a
+    time per week, cancelled when the athlete leaves, and nothing from it is saved unless it finishes."""
+    profile = await run_in_threadpool(get_authenticated_profile, authorization)
+    return await week_jobs.run_generation(http, profile["id"], "swim", request.week_start, request.job_id,
+                                          lambda: replan_week(profile, request.week_start))
+
+
 @router.post("/generation/cancel", status_code=204)
 async def cancel_generation(http: Request):
     """Sent by the page as it unloads (a beacon: no auth header, the job id is the secret). Unknown ids are ignored."""
@@ -1705,14 +1714,8 @@ async def cancel_generation(http: Request):
     return Response(status_code=204)
 
 
-def build_week(profile, week_start: date) -> dict[str, Any]:
-    """Generate and save the athlete's swim week (returns the saved week unchanged when it was already generated)."""
-    existing = week_view(profile, week_start)
-    if existing["generated"]:
-        return existing
-    end = week_start + timedelta(days=7)
-    if end <= datetime.now(timezone.utc).date():
-        raise HTTPException(status_code=409, detail="Past weeks cannot be generated retrospectively.")
+def _week_settings(profile) -> tuple[str | None, int]:
+    """The season plan's training phase and the athlete's swims a week, which planning a week needs."""
     saved = get_supabase_client().table("user_ai_plans").select("plan").eq("user_id", profile["id"]).limit(1).execute()
     if not saved.data:
         raise HTTPException(status_code=409, detail="Complete onboarding before generating a swim week.")
@@ -1724,6 +1727,28 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
         swims = gyms = -1
     if not 0 <= swims <= 14 or not 0 <= gyms <= 7:
         raise HTTPException(status_code=422, detail="Update onboarding to use 0–14 swim and 0–7 strength sessions per week.")
+    return phase, swims
+
+
+def _spread(candidates: list[date], count: int) -> list[date]:
+    """`count` of the candidate days, spread evenly through them (the first one always among them)."""
+    return [candidates[int(index * len(candidates) / count)] for index in range(count)] if count else []
+
+
+def _session_title(assignment: SwimAssignment) -> str:
+    """A generated swim's title: the coach session it is."""
+    return f"{assignment.session.type} #{assignment.session.number} ({assignment.coach.name})"
+
+
+def build_week(profile, week_start: date) -> dict[str, Any]:
+    """Generate and save the athlete's swim week (returns the saved week unchanged when it was already generated)."""
+    existing = week_view(profile, week_start)
+    if existing["generated"]:
+        return existing
+    end = week_start + timedelta(days=7)
+    if end <= datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=409, detail="Past weeks cannot be generated retrospectively.")
+    phase, swims = _week_settings(profile)
     fixed = []
     manual = [item for day in existing["days"] for item in day["workouts"] if item["origin"] in MANUAL_ORIGINS]
     fixed_swims = sum(item["origin"] not in MANUAL_ORIGINS for day in existing["days"] for item in day["workouts"])
@@ -1737,9 +1762,6 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
                 "swims": [item["workout"] for item in day["workouts"] if item["origin"] not in MANUAL_ORIGINS],
                 "strength": day["strength"], "mobility": day["mobility"], "recovery": day["recovery"], "rest": False,
             })
-    pool = default_pool(profile) or 25
-    max_minutes = int(profile.get("session_duration") or 180)
-    main_events = profile.get("main_events") or []
     fixed_dates = {day["date"] for day in fixed}
     manual_on: dict[str, int] = {}
     for item in manual:
@@ -1749,16 +1771,13 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     swims_to_place = prescribed_swims - sum(len(day["swims"]) for day in fixed)
     strength_to_place = 0  # Strength is planned in the Workout Library around this swim week.
 
-    def spread(candidates: list[date], count: int) -> list[date]:
-        return [candidates[int(index * len(candidates) / count)] for index in range(count)] if count else []
-
     # Deterministic weekly layout: sessions are spread evenly; doubles only when there are more swims than days.
     swim_plan = {day: 0 for day in free_days}
     remaining = swims_to_place
     for level in (1, 2):
         candidates = [day for day in free_days if swim_plan[day] + manual_on.get(day.isoformat(), 0) < level]
         take = min(remaining, len(candidates))
-        for day in spread(candidates, take):
+        for day in _spread(candidates, take):
             swim_plan[day] += 1
         remaining -= take
     # Race day: the athlete races, so no coach session goes on it (that day's sessions leave the week, not move).
@@ -1772,7 +1791,7 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     for group in ([day for day in free_days if sessions_on[day] == 0],
                   [day for day in free_days if sessions_on[day] == 1],
                   [day for day in free_days if sessions_on[day] >= 2]):
-        strength_days += spread(group, min(strength_to_place - len(strength_days), len(group)))
+        strength_days += _spread(group, min(strength_to_place - len(strength_days), len(group)))
     if remaining > 0 or len(strength_days) < strength_to_place:
         raise HTTPException(status_code=409, detail="This week's scheduled sessions leave no room for your onboarding availability. Remove a scheduled workout or update your availability.")
 
@@ -1780,7 +1799,6 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     swim_slots = [(day, index) for day in week_days if day.isoformat() not in fixed_dates for index in range(swim_plan.get(day, 0))]
     tapering = taper_meet(competitions(profile), week_start)
     assignments = dict(zip(swim_slots, assign_week(athlete_coach(profile), week_start, len(swim_slots), tapering is not None)))
-    strokes = main_strokes(main_events)
 
     layout = []
     for day in week_days:
@@ -1800,9 +1818,47 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
                 ["the athlete's own scheduled swim (do not duplicate it)"] if manual_on.get(day.isoformat()) else [])
         layout.append(label + "; ".join(parts) + "; plus mobility and recovery.")
 
+    week_context = f"""Week {week_start} to {end - timedelta(days=1)}. Training phase: {phase or "use the athlete's goals"}.
+Day-by-day layout (already matches the athlete's weekly availability):
+{chr(10).join("- " + line for line in layout)}
+User-entered competitions: {json.dumps([{"date": day["date"], "competitions": day["competitions"]} for day in existing["days"] if day["competitions"]])}.
+The athlete's own scheduled swims (never duplicate): {json.dumps([{"date": item["date"], "title": item["workout"]["title"]} for item in manual])}.
+Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
+{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
+    days_to_plan = [day for day in week_days if day.isoformat() not in fixed_dates]
+    note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments, days_to_plan)
+
+    fixed_by_date = {day["date"]: day for day in fixed}
+    days = []
+    for day in week_days:
+        if day.isoformat() in fixed_dates:
+            days.append(WeekDay.model_validate(fixed_by_date[day.isoformat()]))
+            continue
+        swims = [written[(day, index)] for index in range(swim_plan.get(day, 0))]
+        plan_day = day_plans[day]
+        days.append(WeekDay(date=day, objective=plan_day.objective, swims=swims, strength=None, mobility=plan_day.mobility,
+                            recovery=plan_day.recovery, rest=not swims and not manual_on.get(day.isoformat()) and day not in race_meets))
+    plan = WeekPlan(phase=phase or note.phase, days=days, coaching_note=note.coaching_note)
+    sources = [assignment.label for assignment in assignments.values()]
+    with week_jobs.committing():
+        save_record(profile["id"], f"week:{week_start}", "week_plan", "Training week", week_start,
+                    {"plan": plan.model_dump(mode="json"), "pool_length": default_pool(profile), "source_files": sources}, True)
+    return week_view(profile, week_start)
+
+
+def _write_week(profile, week_start: date, phase: str | None, layout: list[str], week_context: str, swim_plan: dict[date, int],
+                swim_slots: list[tuple[date, int]], assignments: dict[tuple[date, int], SwimAssignment],
+                days_to_plan: list[date]) -> tuple[WeekNote, dict[date, DayPlan], dict[tuple[date, int], SwimSession]]:
+    """Write a week: its note, the plan of each day in `days_to_plan` and each swim in `swim_slots` ((day, n): a day's
+    n-th new swim, of the `swim_plan[day]` it gets), as the coach session `assignments` gives its slot. `layout` has a
+    line for each day of the week and `week_context` goes with every call. Generating a week and re-planning one share it."""
+    pool = default_pool(profile) or 25
+    max_minutes = int(profile.get("session_duration") or 180)
+    main_events = profile.get("main_events") or []
+    week_days = [week_start + timedelta(days=index) for index in range(7)]
+    strokes = main_strokes(main_events)
     per_minute = volume_rate(profile)
     fastest = best_pace(profile)
-    fixed_by_date = {day["date"]: day for day in fixed}
     # Every call of the week shares the coach's overview (not a keyword pick of the program). A session's own text goes
     # only to the calls that write about it (its swim, its day, the week's note): sent with every call, the week's
     # sessions were nearly half of each prompt, against the OpenAI account's per-minute token limit.
@@ -1811,13 +1867,6 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     grounding = build_grounding(profile, f"{phase} weekly swim training plan for {', '.join(main_events)}", program=(
         f"=== {program.name} PROGRAM ===\n{render_overview(program)}",
         [item.label for item in week_sessions]) if program and week_sessions else None)
-    week_context = f"""Week {week_start} to {end - timedelta(days=1)}. Training phase: {phase or "use the athlete's goals"}.
-Day-by-day layout (already matches the athlete's weekly availability):
-{chr(10).join("- " + line for line in layout)}
-User-entered competitions: {json.dumps([{"date": day["date"], "competitions": day["competitions"]} for day in existing["days"] if day["competitions"]])}.
-The athlete's own scheduled swims (never duplicate): {json.dumps([{"date": item["date"], "title": item["workout"]["title"]} for item in manual])}.
-Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
-{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
     adapt = adaptation_rules(strokes, pool)
 
     job = week_jobs.current()
@@ -1854,7 +1903,7 @@ Plan {layout[week_days.index(day)]}
         # A set for each of the coach's sections that swims (some sessions warm up on dry land).
         min_sets = min(2, len({line.section for line in all_lines if line.meters > 0})) or 1
         others = [assignments[(day, other)].label for other in range(swim_plan[day]) if other != index]
-        title = f"{assignment.session.type} #{assignment.session.number} ({assignment.coach.name})"
+        title = _session_title(assignment)
 
         coach_text = " ".join(line.text for line in all_lines)
 
@@ -1983,7 +2032,6 @@ Its sets are written separately, at the same time. Write only:
 
     # Everything is written at the same time: the week note, each day's plan and every swim (each fixed by the layout,
     # the coach's session for its slot). One worker each, so nothing waits for a free thread.
-    days_to_plan = [day for day in week_days if day.isoformat() not in fixed_dates]
     with ThreadPoolExecutor(max_workers=1 + len(days_to_plan) + len(swim_slots)) as pool_executor:
         note_future = pool_executor.submit(write_note)
         day_futures = {day: pool_executor.submit(write_day, day) for day in days_to_plan}
@@ -1991,21 +2039,192 @@ Its sets are written separately, at the same time. Write only:
         note = note_future.result()
         day_plans = {day: future.result() for day, future in day_futures.items()}
         written = {slot: future.result() for slot, future in swim_futures.items()}
+    return note, day_plans, written
 
+
+# ---------------------------------------------------------------- re-planning a week
+# A generated week can be planned again from today (all of it while it's still ahead), like the Gym week: the coach writes
+# its remaining days again around what stays. A plan swim's key is its position ("{week id}:{date}:{n}"), and its tick
+# and favorite are kept under that key, so a swim that stays never moves and a new swim never takes the position of one
+# that was ticked or favorited.
+def _replan_state(profile, week_start: date, today: date) -> dict[str, Any] | None:
+    """What re-planning a swim week works from, or None while the week isn't generated: its record (`row`) and, for each
+    day, whether it stays as it is (`locked`: before today, or a legacy Today plan) or is planned again. A day planned
+    again lists its plan's swims by position (`entries`: key, `shown`, and whether it `stays`), `kept`: every swim on it
+    that stays (plan swims and the athlete's own), and `plan_kept`: the titles of those that are this plan's coach
+    sessions (a locked day's too). `fingerprint` sums it all up: read again just before saving, a different one means
+    the week changed meanwhile (a tick or an edit in another tab, the day turning over)."""
+    week = week_view(profile, week_start)
+    row = find_record(profile["id"], f"week:{week_start}") if week["generated"] else None
+    if row is None:
+        return None
+    records = load_records(profile["id"], ["swim", "workout_state", "daily_plan"])
+    # A swim that's hidden (deleted, or moved to another day) but was ticked or favorited keeps its position too.
+    marked = {record["details"].get("workout_key") for record in records if record["session_type"] == "swim"}
+    marked |= {record["details"].get("key") for record in records if record["session_type"] == "workout_state"
+               and (record["details"].get("favorite") or record["details"].get("template"))}
+    daily = {record["session_date"][:10] for record in records if record["session_type"] == "daily_plan" and record["session_date"]}
+    stored_days = {str(day.get("date")): day for day in row["details"]["plan"]["days"]}
+    prefix = f"{row['id']}:"
     days = []
-    for day in week_days:
-        if day.isoformat() in fixed_dates:
-            days.append(WeekDay.model_validate(fixed_by_date[day.isoformat()]))
+    for view in week["days"]:
+        stored = stored_days.get(view["date"])
+        if stored is None:
+            raise HTTPException(status_code=409, detail="This week's saved plan is missing a day, so it can't be re-planned. Please contact support.")
+        items = view["workouts"]
+        if view["date"] < today.isoformat() or view["date"] in daily:
+            days.append({"date": view["date"], "locked": True, "swims": len(items),
+                         "plan_kept": [item["workout"]["title"] for item in items if item["origin"] == "Weekly plan" and item["key"].startswith(prefix)]})
             continue
-        swims = [written[(day, index)] for index in range(swim_plan.get(day, 0))]
+        shown = {item["key"]: item for item in items}
+        entries = []
+        for position in range(len(stored["swims"])):
+            key = f"{prefix}{view['date']}:{position}"
+            item = shown.get(key)
+            entries.append({"key": key, "shown": item is not None,
+                            "stays": bool(item["completed"] or item["favorite"] or item["template"]) if item else key in marked})
+        replaced = {entry["key"] for entry in entries if entry["shown"] and not entry["stays"]}
+        kept = [item for item in items if item["key"] not in replaced]
+        days.append({
+            "date": view["date"], "locked": False, "entries": entries,
+            "kept": [{"date": view["date"], "title": item["workout"]["title"]} for item in kept],
+            "plan_kept": [item["workout"]["title"] for item in kept if item["key"] in {entry["key"] for entry in entries}],
+            "strength": bool(stored.get("strength")), "mobility_done": view["mobility_completed"],
+            "race": [meet.get("name") or "a meet" for meet in view["competitions"]],
+        })
+    fingerprint = json.dumps({"today": today.isoformat(), "details": row["details"], "days": days}, sort_keys=True, default=str)
+    return {"row": row, "days": days, "week": week, "fingerprint": fingerprint}
+
+
+def replan_week(profile, week_start: date) -> dict[str, Any]:
+    """Plan a generated swim week again from today (the whole week while it's still ahead), around what stays.
+
+    Stays as it is: the days before today (and legacy Today plans), swims ticked off, favorited or saved as a template,
+    the athlete's own swims (added, scheduled, moved or copied), ticked-off mobility and the strength sessions of older
+    weeks. Written again on each remaining day: its plan, mobility and swims. The new swims are the coach sessions left
+    of their weekly order, as many as the athlete's weekly availability still has room for beside every swim that stays,
+    laid out as generating a week lays them out. Saved in one write of the week's record, so it's never half saved."""
+    today = datetime.now(timezone.utc).date()
+    if week_start + timedelta(days=7) <= today:
+        raise HTTPException(status_code=409, detail="This week is over. Re-plan this week or a future one.")
+    state = _replan_state(profile, week_start, today)
+    if state is None:
+        return build_week(profile, week_start)  # nothing planned yet, so planning it again is planning it
+    phase, swims = _week_settings(profile)
+    row, days = state["row"], state["days"]
+    week_days = [week_start + timedelta(days=index) for index in range(7)]
+    planned = {day: info for day, info in zip(week_days, days) if not info["locked"]}
+    if not planned:
+        raise HTTPException(status_code=409, detail="There's nothing left to re-plan this week: its remaining days keep their own plans.")
+
+    # Every swim that stays counts toward the week's swims (the days before today too: a missed swim isn't made up for
+    # by squeezing it into the days left). The new ones are spread as generating a week spreads them: at most two on a
+    # day, a second only when there are more swims than days, and none in a position a swim that stays keeps.
+    staying = sum(info["swims"] if info["locked"] else len(info["kept"]) for info in days)
+    on_day = {day: len(info["kept"]) for day, info in planned.items()}
+    room = {day: 2 - sum(entry["stays"] for entry in info["entries"]) for day, info in planned.items()}
+    swim_plan = {day: 0 for day in planned}
+    remaining = max(0, swims - staying)
+    for level in (1, 2):
+        candidates = [day for day in planned if swim_plan[day] + on_day[day] < level and swim_plan[day] < room[day]]
+        take = min(remaining, len(candidates))
+        for day in _spread(candidates, take):
+            swim_plan[day] += 1
+        remaining -= take
+    # Race day: the athlete races, so no coach session goes on it (as when the week was generated).
+    race_meets = {day: info["race"] for day, info in planned.items() if info["race"]}
+    for day in race_meets:
+        swim_plan[day] = 0
+
+    # The coach sessions left of their weekly order: a swim that stays takes its own session (one that can't be told
+    # apart, edited or another coach's, takes the first one left), and the new swims get the rest, in order.
+    swim_slots = [(day, index) for day in planned for index in range(swim_plan[day])]
+    tapering = taper_meet(competitions(profile), week_start)
+    kept_sessions = [title for info in days for title in info["plan_kept"]]
+    order = assign_week(athlete_coach(profile), week_start, len(kept_sessions) + len(swim_slots), tapering is not None)
+    left = list(range(len(order)))
+    unmatched = 0
+    for title in kept_sessions:
+        match = next((index for index in left if _session_title(order[index]) == title), None)
+        if match is None:
+            unmatched += 1
+        else:
+            left.remove(match)
+    assignments = dict(zip(swim_slots, [order[index] for index in left[unmatched:]]))
+
+    layout = []
+    for day, info in zip(week_days, days):
+        label = f"{day.isoformat()} ({day:%A}): "
+        if info["locked"]:
+            layout.append(label + "already planned; keep the preserved plan for this date unchanged.")
+            continue
+        sessions_today = [assignments[(day, index)].label for index in range(swim_plan[day]) if (day, index) in assignments]
+        kept = len(info["kept"])
+        stays = [f"{kept} swim{'s' if kept != 1 else ''} already planned that stay{'s' if kept == 1 else ''} (do not duplicate {'it' if kept == 1 else 'them'})"] if kept else []
+        parts = [f"exactly {swim_plan[day]} generated swim{'s' if swim_plan[day] != 1 else ''} ({'; '.join(sessions_today)})" if swim_plan[day] else "no generated swim"]
+        parts += stays + ["its strength session, which stays" if info["strength"] else "no strength session"]
+        if not swim_plan[day] and not kept and not info["strength"]:
+            parts = ["rest / recovery day: no swim and no strength session"]
+        if day in race_meets:
+            parts = [f"race day ({', '.join(race_meets[day])}): the athlete races, so no coach session"] + stays
+        layout.append(label + "; ".join(parts) + "; plus mobility and recovery.")
+    start = max(today, week_start)
+    week_context = f"""Week {week_start} to {week_start + timedelta(days=6)}. Training phase: {phase or "use the athlete's goals"}.
+The week is planned again from {start}{": the days before it stay as they were" if start > week_start else ""}.
+Day-by-day layout (already matches the athlete's weekly availability):
+{chr(10).join("- " + line for line in layout)}
+User-entered competitions: {json.dumps([{"date": view["date"], "competitions": view["competitions"]} for view in state["week"]["days"] if view["competitions"]])}.
+Swims already planned on these days that stay (never duplicate): {json.dumps([item for info in planned.values() for item in info["kept"]])}.
+Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
+{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
+    note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments, list(planned))
+
+    details = row["details"]
+    removed = set(details.get("removed", []))
+    stored_days = {str(day.get("date")): day for day in details["plan"]["days"]}
+    plan_days = []
+    for day, info in zip(week_days, days):
+        stored = stored_days[day.isoformat()]
+        if info["locked"]:
+            plan_days.append(stored)
+            continue
+        # The new swims take the first positions no swim that stays keeps. A position left without a swim below one
+        # that's taken keeps its old swim, hidden, so the swim after it keeps its key.
+        staying_at = {position for position, entry in enumerate(info["entries"]) if entry["stays"]}
+        placed = dict(zip([position for position in (0, 1) if position not in staying_at],
+                          [written[(day, index)] for index in range(swim_plan[day])]))
+        swims_json = []
+        for position in range(max(staying_at | set(placed), default=-1) + 1):
+            key = f"{row['id']}:{day}:{position}"
+            if position in placed:
+                swims_json.append(placed[position].model_dump(mode="json"))
+                removed.discard(key)
+            else:
+                swims_json.append(stored["swims"][position])
+                if position not in staying_at:
+                    removed.add(key)
         plan_day = day_plans[day]
-        days.append(WeekDay(date=day, objective=plan_day.objective, swims=swims, strength=None, mobility=plan_day.mobility,
-                            recovery=plan_day.recovery, rest=not swims and not manual_on.get(day.isoformat()) and day not in race_meets))
-    plan = WeekPlan(phase=phase or note.phase, days=days, coaching_note=note.coaching_note)
-    sources = [assignment.label for assignment in assignments.values()]
+        plan_days.append({
+            **stored, "objective": plan_day.objective, "swims": swims_json,
+            "mobility": stored["mobility"] if info["mobility_done"] else [item.model_dump(mode="json") for item in plan_day.mobility],
+            "recovery": plan_day.recovery,
+            "rest": not swims_json and not info["kept"] and not stored.get("strength") and day not in race_meets,
+        })
+    plan = {**details["plan"], "phase": phase or note.phase, "days": plan_days, "coaching_note": note.coaching_note}
+    WeekPlan.model_validate(plan)  # the rules every week keeps: at most two swims a day, daily volume, rest days
+    replanned = {**details, "plan": plan, "pool_length": default_pool(profile) or details.get("pool_length"),
+                 "source_files": list(dict.fromkeys([*details.get("source_files", []), *(item.label for item in assignments.values())])),
+                 "replanned_at": datetime.now(timezone.utc).isoformat()}
+    if removed or "removed" in details:
+        replanned["removed"] = sorted(removed)
     with week_jobs.committing():
-        save_record(profile["id"], f"week:{week_start}", "week_plan", "Training week", week_start,
-                    {"plan": plan.model_dump(mode="json"), "pool_length": default_pool(profile), "source_files": sources}, True)
+        latest = _replan_state(profile, week_start, datetime.now(timezone.utc).date())
+        if latest is None or latest["fingerprint"] != state["fingerprint"]:
+            raise HTTPException(status_code=409, detail="Your swim week changed while it was being re-planned, so nothing was saved. Please try again.")
+        saved = (get_supabase_client().table("user_training_sessions").update({"details": replanned})
+                 .eq("user_id", profile["id"]).eq("id", row["id"]).execute()).data
+        if not saved:
+            raise HTTPException(status_code=500, detail="Your re-planned week wasn't saved. Please try again.")
     return week_view(profile, week_start)
 
 

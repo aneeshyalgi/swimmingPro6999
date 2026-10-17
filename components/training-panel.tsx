@@ -92,7 +92,9 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   // The day a swim of the athlete's own is being written for (in the full-page swim editor).
   const [adding, setAdding] = useState<string | null>(null)
   const [resultKey, setResultKey] = useState<string | null>(null)
-  const [generating, setGenerating] = useState(false)
+  // A week being generated, or re-planned from today; and the question before re-planning.
+  const [generating, setGenerating] = useState<"week" | "replan" | null>(null)
+  const [confirmReplan, setConfirmReplan] = useState(false)
   const generation = useWeekGeneration()
   // Ticks save in the background, several at once: the sessions being saved, and their saves (resolving whether saved).
   const [ticking, setTicking] = useState<ReadonlySet<string>>(() => new Set())
@@ -458,30 +460,40 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const weekSessions = week?.days.flatMap(daySessionList) ?? []
   const openWorkout = weekSessions.find((session) => session.id === focusSession) ?? null
 
-  /** The reply is the saved week, so it's shown straight away; the dashboard summary catches up in the background. */
-  const generateWeek = async () => {
+  /**
+   * Generate the week, or re-plan it (`replan`: from today, around everything that stays; the guided setup only follows
+   * generating). The reply is the saved week, so it's shown straight away; the dashboard summary catches up in the background.
+   */
+  const runWeek = async (replan: boolean) => {
     if (inFlight.current) return
     inFlight.current = true
-    setBusy(true); setGenerating(true); setError(null); setNotice(null)
-    onGuideEvent?.("swim-started")
+    const fromToday = weekStart <= today
+    setBusy(true); setGenerating(replan ? "replan" : "week"); setError(null); setNotice(null)
+    if (!replan) onGuideEvent?.("swim-started")
     let outcome: GuideEvent = "swim-failed"
     try {
       // Ticks still saving go first, so the generated week shows them.
       await Promise.all(ticks.current.values())
-      const generated = await generation.run("/week/generate", weekSchema, { week_start: weekStart })
+      const generated = await generation.run(replan ? "/week/replan" : "/week/generate", weekSchema, { week_start: weekStart })
       if (mounted.current && activeWeek.current === generated.week_start) setWeek(generated)
       outcome = "swim-done"
-      if (mounted.current) setNotice("Your personalised swim week is ready.")
+      if (mounted.current) setNotice(!replan ? "Your personalised swim week is ready."
+        : `Your swim week is re-planned${fromToday ? " from today" : ""}. Everything you'd ticked off, favorited or added is as it was.`)
       void onChanged().catch(() => { /* the summary refreshes on the next visit */ })
     } catch (failure) {
       if (failure instanceof Error && failure.message === GENERATION_CANCELLED) outcome = "swim-cancelled"
-      if (mounted.current) setError(failure instanceof Error ? failure.message : "Your swim week couldn't be generated. Please try again.")
+      if (mounted.current) setError(failure instanceof Error ? failure.message : `Your swim week couldn't be ${replan ? "re-planned" : "generated"}. Please try again.`)
     } finally {
       inFlight.current = false
-      if (mounted.current) { setBusy(false); setGenerating(false) }
+      if (mounted.current) { setBusy(false); setGenerating(null) }
     }
-    onGuideEvent?.(outcome)
+    if (!replan) onGuideEvent?.(outcome)
   }
+  const generateWeek = () => runWeek(false)
+  const replanWeek = () => runWeek(true)
+  // A generated week can be re-planned until it's over (from today, or in full while it's still ahead).
+  const canReplan = !!week?.generated && weekEnd >= today
+  const replanFromToday = weekStart <= today
 
   return (
     <div className="space-y-6">
@@ -540,8 +552,9 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                     <Button size="sm" variant="ghost" className="h-8 rounded-full px-3 text-xs" disabled={busy || loading} onClick={() => setWeekStart(mondayISO())}>This Week</Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full" aria-label="Next week" disabled={busy || loading} onClick={() => setWeekStart(shiftWeek(weekStart, 1))}><ChevronRight className="h-4 w-4" /></Button>
                   </div>
-                  <ExportWeekButton onExport={exportWeek} disabled={!week || loading || generating} />
+                  <ExportWeekButton onExport={exportWeek} disabled={!week || loading || !!generating} />
                   {!week?.generated && week && <Button data-guide="swim-generate" disabled={busy || loading} onClick={generateWeek} className="rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950 shadow-[0_10px_30px_rgba(87,229,234,0.3)] transition-transform hover:-translate-y-0.5 hover:from-cyan-200 hover:to-sky-300"><Sparkles className="mr-2 h-4 w-4" />Generate Swim Week</Button>}
+                  {canReplan && <Button disabled={busy || loading} onClick={() => setConfirmReplan(true)} className="rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950 shadow-[0_10px_30px_rgba(87,229,234,0.3)] transition-transform hover:-translate-y-0.5 hover:from-cyan-200 hover:to-sky-300"><Sparkles className="mr-2 h-4 w-4" />Re-plan with AI</Button>}
                 </div>
               </div>
 
@@ -567,7 +580,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
               {week && <p className="relative mt-3 flex items-center gap-1.5 text-[11px] text-slate-400"><Maximize2 className="h-3 w-3" />Tap a day to open its sessions full screen</p>}
             </section>
           </Reveal>
-          {generating && <GenerationOverlay title="Your coach is building this week" subtitle="Every session is checked against your onboarding before it's saved." steps={generationSteps} interval={1800} />}
+          {generating === "week" && <GenerationOverlay title="Your coach is building this week" subtitle="Every session is checked against your onboarding before it's saved." steps={generationSteps} interval={1800} />}
+          {generating === "replan" && <GenerationOverlay title="Your coach is re-planning this week" subtitle={`${replanFromToday ? "Today to Sunday, around" : "Around"} everything you've ticked off, favorited or added.`} steps={replanSteps} interval={1800} />}
           <p className="px-1 text-xs text-slate-500">Monday-Sunday · Calendar dates use UTC · Totals are planned, not proof of completion. Saved sessions and scheduled workouts are preserved.</p>
 
           {loading && !week && <>
@@ -718,6 +732,24 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={confirmReplan} onOpenChange={setConfirmReplan}>
+        <AlertDialogContent className="border-white/10 bg-[#0d151c]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">{replanFromToday ? "Re-plan the rest of this week?" : "Re-plan this week?"}</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-slate-400">
+                <p>Your coach writes {replanFromToday ? "today to Sunday" : "this week"} again around your availability, meets and profile: new swims, mobility and day plans.</p>
+                <p>These stay as they are: {replanFromToday && "the days before today, "}swims you&apos;ve ticked off, favorited or saved as a template, swims you&apos;ve added, moved or copied, and mobility you&apos;ve ticked off. To keep any other swim, favorite it first.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full">Cancel</AlertDialogCancel>
+            <AlertDialogAction className="rounded-full bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => void replanWeek()}>Re-plan week</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={!!deletingMeet} onOpenChange={(open) => { if (!open) setDeletingMeet(null) }}>
         <AlertDialogContent className="border-white/10 bg-[#0d151c]">
           <AlertDialogHeader>
@@ -797,6 +829,14 @@ const generationSteps = [
   "Laying out the week around your availability",
   "Writing each swim session",
   "Building strength work for your equipment",
+  "Checking volume, pool length and session timing",
+]
+
+const replanSteps = [
+  "Keeping what you've ticked off, favorited or added",
+  "Reading your onboarding, meets and check-ins",
+  "Choosing your coach's sessions for the days left",
+  "Writing each swim session",
   "Checking volume, pool length and session timing",
 ]
 
