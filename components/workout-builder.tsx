@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useCountUp } from "@/components/dashboard-ui"
-import { Segmented, inputClass, shortDate } from "@/components/training-ui"
+import { RemovalError, RemovalVeil, Segmented, inputClass, removalDone, shortDate, type Removal } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import { downloadGymPdf, gymSavedSchema, gymWeekSchema, trainingRequest, type BuilderExercise, type BuilderSection, type GymItem, type GymWeek } from "@/lib/training"
 import {
@@ -85,6 +85,9 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
   const [duplicateDate, setDuplicateDate] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [deleteArmed, setDeleteArmed] = useState<string | null>(null)
+  // The workout being deleted: it's seen going here, then the builder closes.
+  const [removal, setRemoval] = useState<Removal | null>(null)
+  const removing = removal?.phase === "deleting" || removal?.phase === "deleted"
   const docRef = useRef(doc)
   const keyRef = useRef(key)
   const timer = useRef<number | null>(null)
@@ -196,11 +199,23 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
     if (timer.current) window.clearTimeout(timer.current)
     dirty.current = false
     if (!keyRef.current) { onBack(false); return }
+    setRemoval({ phase: "deleting" }); setError(null)
     try {
       const week = await trainingRequest(`/gym/${encodeURIComponent(keyRef.current)}`, gymWeekSchema, { method: "DELETE" })
+      // It's seen going: it says it's deleted and slides away, and only then does the builder close.
+      setRemoval({ phase: "deleted" })
+      await removalDone()
       onDeleted(week)
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "The workout could not be deleted.") }
+    } catch (failure) {
+      setRemoval({ phase: "failed", message: failure instanceof Error ? failure.message : "Please try again." })
+    }
   }
+  // Why a delete failed goes away on its own after a while.
+  useEffect(() => {
+    if (removal?.phase !== "failed") return
+    const hide = window.setTimeout(() => setRemoval(null), 8000)
+    return () => window.clearTimeout(hide)
+  }, [removal])
 
   const statusView = {
     draft: { text: "Draft · not saved yet", dot: "bg-slate-500" },
@@ -214,12 +229,15 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
     <div className="dash-reveal space-y-5">
       {/* Toolbar */}
       <div className="sticky top-[124px] z-30 lg:top-[72px]">
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-[#0b1218]/85 px-3 py-2.5 shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:px-4">
+        <div inert={removing} className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-[#0b1218]/85 px-3 py-2.5 shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:px-4">
           <Button variant="ghost" onClick={() => void back()} className="h-9 rounded-full px-3 text-slate-300 hover:text-white"><ArrowLeft className="mr-1.5 h-4 w-4" />{backLabel}</Button>
           <span className="hidden h-5 w-px bg-white/10 sm:block" />
           <p className="flex items-center gap-2 text-sm font-semibold text-white"><Dumbbell className="h-4 w-4 text-violet-300" /><span className="hidden sm:inline">Workout Builder</span></p>
-          <span role="status" aria-live="polite" className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-slate-300">
-            {status === "saving" ? <Loader2 className="h-3 w-3 animate-spin text-cyan-300" /> : <span className={cn("h-1.5 w-1.5 rounded-full", statusView.dot)} />}{statusView.text}
+          <span role="status" aria-live="polite" className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors duration-300",
+            removing ? "border-rose-300/40 bg-rose-500/10 text-rose-100" : "border-white/10 bg-white/[0.04] text-slate-300")}>
+            {removal?.phase === "deleted" ? <><Trash2 className="h-3 w-3 text-rose-300" />Deleted</>
+              : removing ? <><Loader2 className="h-3 w-3 animate-spin text-rose-300" />Deleting…</>
+              : <>{status === "saving" ? <Loader2 className="h-3 w-3 animate-spin text-cyan-300" /> : <span className={cn("h-1.5 w-1.5 rounded-full", statusView.dot)} />}{statusView.text}</>}
           </span>
           <span className="flex-1" />
           <DropdownMenu>
@@ -251,10 +269,13 @@ export function WorkoutBuilder({ initial, itemKey, isNew, onBack, onSaved, onDel
         {error && <p role="alert" className="mt-2 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{error} <button type="button" className="ml-2 underline" onClick={() => { dirty.current = true; void persist() }}>Try again</button></p>}
       </div>
 
+      {removal?.phase === "failed" && <RemovalError className="mt-0" message={removal.message} onDismiss={() => setRemoval(null)} />}
       {/* Document */}
-      <div className="relative overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(170deg,rgba(22,30,40,0.92),rgba(9,13,18,0.96))] shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
+      <div className={cn("relative overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(170deg,rgba(22,30,40,0.92),rgba(9,13,18,0.96))] shadow-[0_24px_60px_rgba(0,0,0,0.35)]",
+        removal?.phase === "deleted" && "removal-out", removal?.phase === "failed" && "removal-shake")}>
         <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="relative space-y-7 p-5 sm:p-8 lg:p-10">
+        {removing && <RemovalVeil done={removal?.phase === "deleted"} label={false} className="z-10 rounded-[28px]" />}
+        <div inert={removing} className={cn("relative space-y-7 p-5 transition-[opacity,filter] duration-300 sm:p-8 lg:p-10", removing && "opacity-45 saturate-[0.35]")}>
           <div className="flex flex-wrap items-end justify-between gap-6">
             <div className="min-w-0 flex-1 basis-80">
               <label htmlFor="builder-title" className={fieldLabel}>Workout title</label>

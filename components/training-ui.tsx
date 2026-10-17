@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react"
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileDown, FileText, Loader2, Maximize2, Sparkles, type LucideIcon } from "lucide-react"
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react"
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileDown, FileText, Loader2, Maximize2, Sparkles, Trash2, X, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -329,12 +329,100 @@ export function CheckToggle({ checked, burst = 0, disabled, onClick, label, hint
   )
 }
 
+// ---------------------------------------------------------------- deleting a workout in place
+/**
+ * A workout being deleted, shown on the workout itself rather than in a banner: `deleting` while the delete is saved,
+ * `deleted` while it slides away and its space closes, `failed` with the reason under it.
+ */
+export type Removal = { phase: "deleting" | "deleted" | "failed"; message?: string }
+
+/** How long a deleted workout takes to say so, slide away and close up its space (the removal-* styles). */
+export const REMOVAL_MS = 700
+
+const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+
+/** Resolves once a deleted workout has slid away. */
+export const removalDone = () => new Promise<void>((resolve) => window.setTimeout(resolve, reducedMotion() ? 150 : REMOVAL_MS))
+
+/**
+ * Workouts being deleted in place, by id (shown by CompletionRow's `removal`). `run` deletes one: it shows as deleting
+ * while `remove` saves, then as deleted while it slides away, and only then does `done` take it out of the week (with
+ * what `remove` returned), so nothing below it jumps. A delete that fails stays on the workout with its reason and
+ * resolves false. `announcement` tells screen readers what happened.
+ */
+export function useRemovals() {
+  const [removals, setRemovals] = useState<ReadonlyMap<string, Removal>>(() => new Map())
+  const [announcement, setAnnouncement] = useState("")
+  const set = useCallback((id: string, removal: Removal | null) => setRemovals((current) => {
+    const next = new Map(current)
+    if (removal) next.set(id, removal)
+    else next.delete(id)
+    return next
+  }), [])
+  const run = useCallback(async <T,>(id: string, title: string, remove: () => Promise<T>, done: (result: T) => void): Promise<boolean> => {
+    set(id, { phase: "deleting" })
+    setAnnouncement(`Deleting ${title}…`)
+    let result: T
+    try {
+      result = await remove()
+    } catch (failure) {
+      set(id, { phase: "failed", message: failure instanceof Error ? failure.message : "Please try again." })
+      setAnnouncement("")
+      return false
+    }
+    set(id, { phase: "deleted" })
+    setAnnouncement(`${title} deleted.`)
+    await removalDone()
+    done(result)
+    set(id, null)
+    return true
+  }, [set])
+  const dismiss = useCallback((id: string) => set(id, null), [set])
+  return {
+    get: (id: string) => removals.get(id),
+    /** A delete is under way (not just a failed one still showing its reason). */
+    active: [...removals.values()].some((removal) => removal.phase !== "failed"),
+    run, dismiss, announcement,
+  }
+}
+
+/**
+ * Over a workout being deleted: a rose veil with a passing shine and, over its controls, a label saying what's happening
+ * (`done`: deleted). Without `label` (a workout open in the builder, whose toolbar says it) it's just the veil.
+ */
+export function RemovalVeil({ done, label = true, className }: { done: boolean; label?: boolean; className?: string }) {
+  return (
+    <span aria-hidden className={cn("removal-veil pointer-events-none absolute inset-0 rounded-2xl", done && "removal-veil-done", className)}>
+      {label && <>
+        <span className="removal-veil-fade absolute inset-y-0 right-0 w-2/5 rounded-r-[inherit]" />
+        <span key={done ? "done" : "deleting"} className="chip-pop absolute right-3 top-[min(50%,2.5rem)] inline-flex -translate-y-1/2 items-center gap-1.5 rounded-full border border-rose-300/40 bg-[#1d0b12]/95 px-2.5 py-1 text-[11px] font-semibold text-rose-100 shadow-[0_6px_20px_rgba(244,63,94,0.3)]">
+          {done ? <Trash2 className="h-3.5 w-3.5 text-rose-300" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-300" />}
+          {done ? "Deleted" : "Deleting…"}
+        </span>
+      </>}
+    </span>
+  )
+}
+
+/** Why a workout couldn't be deleted, right under it. */
+export function RemovalError({ message, onDismiss, className }: { message?: string; onDismiss?: () => void; className?: string }) {
+  return (
+    <div role="alert" className={cn("dash-reveal mt-2 flex items-start gap-2 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs leading-5 text-rose-100", className)}>
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-300" />
+      <span className="min-w-0 flex-1">Couldn&apos;t delete this. {message}</span>
+      {onDismiss && <button type="button" aria-label="Dismiss" onClick={onDismiss}
+        className="-m-1 shrink-0 rounded-full p-1 text-rose-200/70 transition-colors hover:bg-white/10 hover:text-white"><X className="h-3.5 w-3.5" /></button>}
+    </div>
+  )
+}
+
 /**
  * A workout with its completion tick. The tick responds instantly (optimistic) and saves in the background, so the next
  * workout can be ticked straight away. It shows its own save progress: a ring orbits the checkbox while saving, a glow
- * confirms the save, a shake and revert signal a failure.
+ * confirms the save, a shake and revert signal a failure. A workout being deleted (`removal`) says so on itself, then
+ * slides away while its row closes up, so the workouts below rise into its place.
  */
-export function CompletionRow({ checked, saving, locked, busy, label, hint, onToggle, children }: {
+export function CompletionRow({ checked, saving, locked, busy, label, hint, onToggle, removal, onDismissRemoval, children }: {
   checked: boolean; locked?: boolean; label: string; hint?: string; children: ReactNode
   /** This workout's tick is being saved, from here or from another view of it (the day or workout opened full screen). */
   saving?: boolean
@@ -342,11 +430,18 @@ export function CompletionRow({ checked, saving, locked, busy, label, hint, onTo
   busy?: boolean
   /** Saves the opposite of `checked`; resolves whether it was saved (the owner then shows what is saved). */
   onToggle: () => Promise<boolean>
+  /** This workout is being deleted (see useRemovals). */
+  removal?: Removal
+  /** Hides why a delete failed. */
+  onDismissRemoval?: () => void
 }) {
   const [pending, setPending] = useState<boolean | null>(null)
   const [burst, setBurst] = useState(0)
   const [result, setResult] = useState<"saved" | "failed" | null>(null)
   const alive = useRef(false)
+  const row = useRef<HTMLDivElement>(null)
+  const dismiss = useRef(onDismissRemoval)
+  useEffect(() => { dismiss.current = onDismissRemoval })
   useEffect(() => {
     alive.current = true
     return () => { alive.current = false }
@@ -356,10 +451,26 @@ export function CompletionRow({ checked, saving, locked, busy, label, hint, onTo
     const timer = window.setTimeout(() => setResult(null), result === "saved" ? 900 : 1200)
     return () => window.clearTimeout(timer)
   }, [result])
+  const phase = removal?.phase
+  const gone = phase === "deleted"
+  const removing = phase === "deleting" || gone
+  // A workout deleted out of sight (from its editor, or a day scrolled away) is brought into view to be seen going.
+  useEffect(() => {
+    const element = row.current
+    if (!removing || !element) return
+    const box = element.getBoundingClientRect()
+    if (box.bottom < 0 || box.top > window.innerHeight) element.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" })
+  }, [removing])
+  // Why a delete failed goes away on its own after a while.
+  useEffect(() => {
+    if (phase !== "failed") return
+    const timer = window.setTimeout(() => dismiss.current?.(), 8000)
+    return () => window.clearTimeout(timer)
+  }, [phase, removal?.message])
   const shown = pending ?? checked
   const save: SaveState = pending !== null || saving ? "saving" : result ?? "idle"
   const toggle = () => {
-    if (locked || busy || saving || pending !== null) return
+    if (locked || busy || saving || removing || pending !== null) return
     const next = !shown
     setResult(null)
     setPending(next)
@@ -375,13 +486,19 @@ export function CompletionRow({ checked, saving, locked, busy, label, hint, onTo
     })
   }
   return (
-    <div className="flex items-start gap-3">
-      <CheckToggle className="mt-[18px]" checked={shown} burst={burst} disabled={locked} onClick={toggle} save={save}
-        label={`${shown ? "Untick" : "Mark completed"}: ${label}`} hint={hint} />
-      <div className={cn("relative min-w-0 flex-1 rounded-2xl transition-[box-shadow,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-        shown && "shadow-[0_0_0_1px_rgba(52,211,153,0.35),0_12px_32px_rgba(52,211,153,0.10)]")}>
-        {children}
-        {shown && burst > 0 && <span key={burst} aria-hidden className="completion-sweep pointer-events-none absolute inset-0 rounded-2xl" />}
+    <div ref={row} data-gone={gone || undefined} className="removal-row">
+      <div className={cn("min-h-0", gone && "overflow-hidden")}>
+        <div className={cn("flex items-start gap-3", gone && "removal-out", phase === "failed" && "removal-shake")}>
+          <CheckToggle className={cn("mt-[18px] transition-opacity duration-300", removing && "opacity-30")} checked={shown} burst={burst} disabled={locked || removing}
+            onClick={toggle} save={save} label={`${shown ? "Untick" : "Mark completed"}: ${label}`} hint={hint} />
+          <div className={cn("relative min-w-0 flex-1 rounded-2xl transition-[box-shadow,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            shown && "shadow-[0_0_0_1px_rgba(52,211,153,0.35),0_12px_32px_rgba(52,211,153,0.10)]")}>
+            <div inert={removing} className={cn("transition-[opacity,filter] duration-300", removing && "opacity-45 saturate-[0.35]")}>{children}</div>
+            {shown && burst > 0 && <span key={burst} aria-hidden className="completion-sweep pointer-events-none absolute inset-0 rounded-2xl" />}
+            {removing && <RemovalVeil done={gone} />}
+            {phase === "failed" && <RemovalError message={removal?.message} onDismiss={onDismissRemoval} />}
+          </div>
+        </div>
       </div>
       <span className="sr-only" aria-live="polite">{save === "saving" ? "Saving" : save === "saved" ? "Saved" : save === "failed" ? "Couldn't save" : ""}</span>
     </div>

@@ -22,7 +22,7 @@ import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
 import { CalendarDay } from "@/components/calendar-day"
 import { WorkoutBuilder } from "@/components/workout-builder"
 import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
-import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, LoadingLane, TwoColumnFlow, WeekSkeleton, inputClass, shortDate, todayISO } from "@/components/training-ui"
+import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, LoadingLane, TwoColumnFlow, WeekSkeleton, inputClass, shortDate, todayISO, useRemovals } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import { blankDoc, docFromItem, type BuilderDoc } from "@/lib/workout-builder"
 import { GENERATION_CANCELLED, downloadGymPdf, downloadWeekPdf, gymSavedSchema, gymWeekSchema, mondayISO, shiftWeek, trainingRequest, type GymItem, type GymWeek } from "@/lib/training"
@@ -72,6 +72,8 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
   // Ticks save in the background, several at once: the workouts being saved, and their saves (resolving whether saved).
   const [ticking, setTicking] = useState<ReadonlySet<string>>(() => new Set())
   const ticks = useRef(new Map<string, Promise<boolean>>())
+  // Workouts being deleted: each is shown going on itself, not in a banner.
+  const removals = useRemovals()
   const inFlight = useRef(false)
   const activeWeek = useRef(weekStart)
   activeWeek.current = weekStart
@@ -198,25 +200,42 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
       if (date < weekStart || date >= shiftWeek(weekStart, 1)) void load()
     }
   }
+  /** Delete a workout: it's shown going on the workout itself (see useRemovals). */
   const remove = async () => {
     if (!deleting) return
     const item = deleting
     setDeleting(null)
-    await perform(() => trainingRequest(`/gym/${encodeURIComponent(item.key)}`, gymWeekSchema, { method: "DELETE" }), "Workout deleted.")
+    if (inFlight.current) return
+    inFlight.current = true; setBusy(true); setError(null); setNotice(null)
+    // A workout open full screen closes back into its card, which is what's seen going.
+    setFocusSession(null)
+    try {
+      // Ticks still saving go first, so the week that comes back includes them.
+      await Promise.all(ticks.current.values())
+      await removals.run(item.key, `“${item.workout.title}”`,
+        () => trainingRequest(`/gym/${encodeURIComponent(item.key)}`, gymWeekSchema, { method: "DELETE" }),
+        (saved) => {
+          showWeek(saved)
+          void onChanged().catch(() => { /* the summary catches up with the next change */ })
+        })
+    } finally {
+      inFlight.current = false; setBusy(false)
+    }
   }
 
   if (editing) {
+    // A workout deleted in the builder is seen going there; the week then shows without it.
     return <WorkoutBuilder key={editing.token} initial={editing.doc} itemKey={editing.key} isNew={editing.isNew}
       onBack={(saved) => { setEditing(null); if (saved) setNotice("Workout saved."); void load() }}
       onSaved={(data) => { showWeek(data); void onChanged() }}
-      onDeleted={(data) => { setEditing(null); showWeek(data); setNotice("Workout deleted."); void onChanged() }}
+      onDeleted={(data) => { setEditing(null); showWeek(data); void onChanged() }}
       onNotice={setNotice} />
   }
 
   const cardMenu = (item: GymItem) => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="icon" variant="ghost" aria-label={`Actions for ${item.workout.title}`} className="h-8 w-8 rounded-full"><MoreHorizontal className="h-4 w-4" /></Button>
+        <Button size="icon" variant="ghost" disabled={busy} aria-label={`Actions for ${item.workout.title}`} className="h-8 w-8 rounded-full"><MoreHorizontal className="h-4 w-4" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52 border-white/10 bg-[#0d151c]">
         <DropdownMenuItem onSelect={() => setDateAction({ mode: "duplicate", item, date: item.date })}><Copy className="mr-2 h-4 w-4" />Duplicate to…</DropdownMenuItem>
@@ -243,7 +262,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
     return (
       <div className="space-y-3">
         {item.workouts.map((workout) => <CompletionRow key={workout.key} checked={workout.completed} saving={ticking.has(workout.key)} locked={future} busy={busy} hint={future ? "You can tick this off on the day" : undefined}
-          label={workout.workout.title} onToggle={() => toggle(workout)}>
+          label={workout.workout.title} onToggle={() => toggle(workout)} removal={removals.get(workout.key)} onDismissRemoval={() => removals.dismiss(workout.key)}>
           <GymWorkoutCard item={workout} defaultOpen={expanded} onOpen={expanded ? undefined : (event) => openSession(workout.key, event.currentTarget)}
             onEdit={() => openBuilder(docFromItem(workout), workout.key, false)} actions={cardMenu(workout)} />
         </CompletionRow>)}
@@ -261,6 +280,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
     <div className="space-y-5">
       {error && <Banner tone="error" action={<Button size="sm" variant="outline" className="rounded-full border-rose-300/30 bg-transparent" disabled={busy} onClick={() => { setError(null); void load() }}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />Reload</Button>}>{error}</Banner>}
       {notice && <Banner tone="success" action={<button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="rounded-full p-1 text-emerald-200/70 transition-colors hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button>}>{notice}</Banner>}
+      <p className="sr-only" role="status" aria-live="polite">{removals.announcement}</p>
 
       <Reveal index={0}>
         <section data-guide="gym-week" aria-busy={loading} className="relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(167,139,250,0.16),rgba(12,20,28,0.95)_45%,rgba(87,229,234,0.1))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-6">

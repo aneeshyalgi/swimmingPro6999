@@ -23,7 +23,7 @@ import { CompetitionForm, RaceResultForm } from "@/components/training-forms"
 import { GrowBar, Reveal, Tile, TileHeader, useCountUp } from "@/components/dashboard-ui"
 import {
   Banner, CompetitionSkeleton, CompletionRow, DayTileSkeleton, EmptyState, ExportWeekButton, Expander, LoadingLane, TwoColumnFlow, WeekSkeleton, ZoneChip, ZoneStack, daysUntil, inputClass, labelClass, shortDate,
-  todayISO, zoneTone,
+  todayISO, useRemovals, zoneTone,
 } from "@/components/training-ui"
 import { WorkoutCalendar } from "@/components/workout-calendar"
 import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
@@ -40,6 +40,8 @@ import {
 type CompetitionData = z.infer<typeof competitionsSchema>
 /** A Training Week item that can be duplicated, moved, exported or deleted. */
 type WeekItem = { completed: boolean; date: string; title: string } & ({ kind: "swim"; key: string } | { kind: "strength" | "mobility" })
+/** The id of an item's row in the week (its session's id). */
+const weekItemId = (item: WeekItem) => (item.kind === "swim" ? `swim:${item.key}` : `${item.kind}:${item.date}`)
 
 /** Rough height of a Training Week day card, used to balance the two columns. */
 const dayWeight = (day: TrainingWeek["days"][number]) => 2.4
@@ -99,6 +101,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   // Ticks save in the background, several at once: the sessions being saved, and their saves (resolving whether saved).
   const [ticking, setTicking] = useState<ReadonlySet<string>>(() => new Set())
   const ticks = useRef(new Map<string, Promise<boolean>>())
+  // Sessions being deleted: each is shown going on itself, not in a banner.
+  const removals = useRemovals()
   // The day open in the full-screen view, and the calendar tile it grew out of.
   const [focusDate, setFocusDate] = useState<string | null>(null)
   const [focusOrigin, setFocusOrigin] = useState<{ x: number; y: number } | null>(null)
@@ -259,14 +263,30 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       else await trainingRequest(`/week/${item.kind}/${mode}`, weekSchema, { body: { date: item.date, target: date } })
     }, `${mode === "move" ? "Moved" : "Duplicated"} to ${dayLabel(date)}.`)
   }
+  /** Delete a swim, a day's strength session or its mobility: it's shown going on the session itself (see useRemovals). */
   const removeItem = async () => {
     if (!deleting) return
     const item = deleting
     setDeleting(null)
-    await perform(async () => {
-      if (item.kind === "swim") await trainingRequest(`/library/${encodeURIComponent(item.key)}`, weekSchema, { method: "DELETE" })
-      else await trainingRequest(`/week/${item.kind}?date=${item.date}`, weekSchema, { method: "DELETE" })
-    }, `“${item.title}” deleted.`)
+    if (inFlight.current) return
+    inFlight.current = true; setBusy(true); setError(null); setNotice(null)
+    // A session open full screen closes back into its card, which is what's seen going.
+    setFocusSession(null)
+    try {
+      // Ticks still saving go first, so the week that comes back includes them.
+      await Promise.all(ticks.current.values())
+      await removals.run(weekItemId(item), `“${item.title}”`,
+        () => (item.kind === "swim"
+          ? trainingRequest(`/library/${encodeURIComponent(item.key)}`, weekSchema, { method: "DELETE" })
+          : trainingRequest(`/week/${item.kind}?date=${item.date}`, weekSchema, { method: "DELETE" })),
+        (saved) => {
+          if (mounted.current && activeWeek.current === saved.week_start) setWeek(saved)
+          void onChanged().catch(() => { /* the summary catches up with the next change */ })
+        })
+    } finally {
+      inFlight.current = false
+      if (mounted.current) setBusy(false)
+    }
   }
   const removeMeet = async () => {
     if (!deletingMeet) return
@@ -433,7 +453,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const tickHint = (date: string) => (date > today ? "You can tick this off on the day" : undefined)
   /** `expanded`: the full-screen day view, where every card is open; on the page each card opens full screen instead. */
   const sessionRow = (session: Session, expanded: boolean) => (
-    <CompletionRow key={session.id} checked={session.completed} saving={ticking.has(session.id)} locked={session.date > today} busy={busy} hint={tickHint(session.date)} label={session.title} onToggle={session.onToggle}>
+    <CompletionRow key={session.id} checked={session.completed} saving={ticking.has(session.id)} locked={session.date > today} busy={busy} hint={tickHint(session.date)} label={session.title} onToggle={session.onToggle}
+      removal={removals.get(session.id)} onDismissRemoval={() => removals.dismiss(session.id)}>
       <Expander className={session.className} actions={session.menu} header={session.header}
         {...(expanded ? { defaultOpen: true } : { onOpen: (event) => openSession(session.id, event.currentTarget) })}>
         {session.body}
@@ -499,7 +520,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     <div className="space-y-6">
       {error && <Banner tone="error" action={<Button size="sm" variant="outline" className="rounded-full border-rose-300/30 bg-transparent" disabled={busy} onClick={() => perform(async () => {}, "Training refreshed.")}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />Reload</Button>}>{error}</Banner>}
       {notice && <Banner tone="success" action={<button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="rounded-full p-1 text-emerald-200/70 transition-colors hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button>}>{notice}</Banner>}
-      {busy && !generating && <Banner tone="busy">Saving your training data...</Banner>}
+      {busy && !generating && !removals.active && <Banner tone="busy">Saving your training data...</Banner>}
+      <p className="sr-only" role="status" aria-live="polite">{removals.announcement}</p>
       <Tabs value={subTab} onValueChange={setSubTab}>
         <TabsList className="mb-6 grid h-auto w-full grid-cols-3 gap-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-1.5 backdrop-blur-xl">
           {subTabs.map((tab) => (
