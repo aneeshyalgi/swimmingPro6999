@@ -330,39 +330,36 @@ export function CheckToggle({ checked, burst = 0, disabled, onClick, label, hint
 }
 
 /**
- * A workout with its completion tick. The tick responds instantly (optimistic) and shows its own save progress:
- * a ring orbits the checkbox while saving, a glow confirms the save, a shake and revert signal a failure.
+ * A workout with its completion tick. The tick responds instantly (optimistic) and saves in the background, so the next
+ * workout can be ticked straight away. It shows its own save progress: a ring orbits the checkbox while saving, a glow
+ * confirms the save, a shake and revert signal a failure.
  */
-export function CompletionRow({ checked, locked, busy, label, hint, onToggle, children }: {
-  checked: boolean; locked?: boolean; busy?: boolean; label: string; hint?: string; onToggle: () => void; children: ReactNode
+export function CompletionRow({ checked, saving, locked, busy, label, hint, onToggle, children }: {
+  checked: boolean; locked?: boolean; label: string; hint?: string; children: ReactNode
+  /** This workout's tick is being saved, from here or from another view of it (the day or workout opened full screen). */
+  saving?: boolean
+  /** Another change is being saved: ticking waits until it's done. */
+  busy?: boolean
+  /** Saves the opposite of `checked`; resolves whether it was saved (the owner then shows what is saved). */
+  onToggle: () => Promise<boolean>
 }) {
   const [pending, setPending] = useState<boolean | null>(null)
   const [burst, setBurst] = useState(0)
   const [result, setResult] = useState<"saved" | "failed" | null>(null)
-  const wasBusy = useRef(false)
-  const pendingRef = useRef<boolean | null>(null)
-  pendingRef.current = pending
+  const alive = useRef(false)
   useEffect(() => {
-    if (pendingRef.current !== null && pendingRef.current === checked) setResult("saved")
-    setPending(null)
-  }, [checked])
-  useEffect(() => {
-    if (wasBusy.current && !busy && pendingRef.current !== null) {
-      // The save finished without the saved state changing to what was ticked: it failed and the tick reverts.
-      setResult(pendingRef.current === checked ? "saved" : "failed")
-      setPending(null)
-    }
-    wasBusy.current = !!busy
-  }, [busy, checked])
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
   useEffect(() => {
     if (!result) return
     const timer = window.setTimeout(() => setResult(null), result === "saved" ? 900 : 1200)
     return () => window.clearTimeout(timer)
   }, [result])
   const shown = pending ?? checked
-  const save: SaveState = pending !== null ? "saving" : result ?? "idle"
+  const save: SaveState = pending !== null || saving ? "saving" : result ?? "idle"
   const toggle = () => {
-    if (locked || busy || pending !== null) return
+    if (locked || busy || saving || pending !== null) return
     const next = !shown
     setResult(null)
     setPending(next)
@@ -370,7 +367,12 @@ export function CompletionRow({ checked, locked, busy, label, hint, onToggle, ch
       setBurst((value) => value + 1)
       try { navigator.vibrate?.(14) } catch { /* vibration unsupported */ }
     }
-    onToggle()
+    void onToggle().catch(() => false).then((saved) => {
+      if (!alive.current) return
+      // A failed save leaves `checked` as it was, so the tick reverts.
+      setPending(null)
+      setResult(saved ? "saved" : "failed")
+    })
   }
   return (
     <div className="flex items-start gap-3">

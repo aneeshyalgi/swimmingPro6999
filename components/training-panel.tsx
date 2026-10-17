@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { z } from "zod"
 import {
   Activity, BookMarked, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock, Copy, Download, Dumbbell, MoreHorizontal, Pencil, Trash2,
@@ -92,7 +92,9 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const [resultKey, setResultKey] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const generation = useWeekGeneration()
-  const [quiet, setQuiet] = useState(false)
+  // Ticks save in the background, several at once: the sessions being saved, and their saves (resolving whether saved).
+  const [ticking, setTicking] = useState<ReadonlySet<string>>(() => new Set())
+  const ticks = useRef(new Map<string, Promise<boolean>>())
   // The day open in the full-screen view, and the calendar tile it grew out of.
   const [focusDate, setFocusDate] = useState<string | null>(null)
   const [focusOrigin, setFocusOrigin] = useState<{ x: number; y: number } | null>(null)
@@ -104,6 +106,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   activeWeek.current = weekStart
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    // Ticks still saving go first, so the week read includes them.
+    await Promise.all(ticks.current.values())
     const [weekData, competitionData] = await Promise.all([
       trainingRequest(`/week?week_start=${weekStart}`, weekSchema, { signal }),
       trainingRequest("/competitions", competitionsSchema, { signal }),
@@ -129,17 +133,18 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     if (guide !== "add-meet") setWeekStart(mondayISO())
   }, [guide])
 
-  /** `quiet`: the control that triggered the save shows its own progress, so skip the page banners on success. */
-  const perform = async (operation: () => Promise<void>, message: string, options: { quiet?: boolean } = {}): Promise<boolean> => {
+  const perform = async (operation: () => Promise<void>, message: string): Promise<boolean> => {
     if (inFlight.current) return false
-    inFlight.current = true; setBusy(true); setQuiet(!!options.quiet); setError(null); setNotice(null)
+    inFlight.current = true; setBusy(true); setError(null); setNotice(null)
     let saved = false
     try {
+      // Ticks still saving go first, so this change and the week reloaded after it include them.
+      await Promise.all(ticks.current.values())
       await operation()
       saved = true
       await load()
       await onChanged()
-      if (mounted.current && !options.quiet) setNotice(message)
+      if (mounted.current) setNotice(message)
     } catch (failure) {
       if (mounted.current) setError(`${saved ? "Saved, but refreshing failed. Reload to see the latest data. " : ""}${failure instanceof Error ? failure.message : "Unable to save training data."}`)
     } finally {
@@ -180,15 +185,53 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const weekEnd = new Date(Date.parse(`${weekStart}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10)
   const dayMeters = week?.days.map((day) => day.workouts.reduce((sum, item) => sum + item.distance_meters, 0)) ?? []
   const maxDayMeters = Math.max(1, ...dayMeters)
-  const toggleSwim = (item: Workout) => perform(async () => {
-    await trainingRequest(`/library/${encodeURIComponent(item.key)}/complete`, workoutSchema, { method: item.completed ? "DELETE" : "POST" })
-  }, item.completed ? `“${item.workout.title}” unticked.` : `Nice work! “${item.workout.title}” is completed.`, { quiet: true })
-  const toggleMobility = (iso: string, completed: boolean) => perform(async () => {
-    await trainingRequest(completed ? "/week/mobility/uncomplete" : "/week/mobility/complete", weekSchema, { body: { date: iso } })
-  }, completed ? "Mobility unticked." : "Nice work! Mobility completed.", { quiet: true })
-  const toggleLegacyStrength = (iso: string, completed: boolean) => perform(async () => {
-    await trainingRequest(completed ? "/week/strength/uncomplete" : "/week/strength/complete", weekSchema, { body: { date: iso } })
-  }, completed ? "Strength session unticked." : "Nice work! Strength session completed.", { quiet: true })
+  type Day = TrainingWeek["days"][number]
+  /**
+   * Tick a session off, or untick it. The tick shows it at once and the rest of the week follows straight after, while it
+   * saves in the background, so the next session can be ticked without waiting; a failed save puts it back and says why.
+   * `mark` sets the session's state on its day; `save` saves it and resolves the state that is saved.
+   */
+  const saveTick = (id: string, done: boolean, mark: (day: Day, done: boolean) => Day, save: () => Promise<boolean>): Promise<boolean> => {
+    if (inFlight.current || ticks.current.has(id)) return Promise.resolve(false)
+    const shownWeek = weekStart
+    const show = (value: boolean) => setWeek((current) => current && current.week_start === shownWeek
+      ? { ...current, days: current.days.map((day) => mark(day, value)) } : current)
+    const saving = save().then((saved) => {
+      if (mounted.current) show(saved)
+      return saved === done
+    }, (failure: unknown) => {
+      if (mounted.current) {
+        show(!done)
+        setError(failure instanceof Error ? failure.message : "Unable to save training data.")
+      }
+      return false
+    })
+    ticks.current.set(id, saving)
+    // Behind the tick itself, which has already changed: it stays instant however much of the week this re-renders.
+    startTransition(() => {
+      show(done)
+      setTicking(new Set(ticks.current.keys()))
+      setError(null); setNotice(null)
+    })
+    void saving.then(() => {
+      ticks.current.delete(id)
+      if (mounted.current) setTicking(new Set(ticks.current.keys()))
+      // The dashboard summary counts ticked sessions: it's refreshed once the last of the ticks saving is done.
+      if (!ticks.current.size) void onChanged().catch(() => { /* it catches up with the next change */ })
+    })
+    return saving
+  }
+  const toggleSwim = (item: Workout) => saveTick(`swim:${item.key}`, !item.completed,
+    (day, done) => day.workouts.some((entry) => entry.key === item.key)
+      ? { ...day, workouts: day.workouts.map((entry) => (entry.key === item.key ? { ...entry, completed: done } : entry)) } : day,
+    async () => (await trainingRequest(`/library/${encodeURIComponent(item.key)}/complete`, workoutSchema, { method: item.completed ? "DELETE" : "POST" })).completed)
+  /** A day's mobility, or the strength session of an older week. */
+  const togglePart = (part: "strength" | "mobility", iso: string, completed: boolean) => saveTick(`${part}:${iso}`, !completed,
+    (day, done) => (day.date !== iso ? day : part === "strength" ? { ...day, strength_completed: done } : { ...day, mobility_completed: done }),
+    async () => {
+      const saved = (await trainingRequest(`/week/${part}/${completed ? "uncomplete" : "complete"}`, weekSchema, { body: { date: iso } })).days.find((day) => day.date === iso)
+      return saved ? (part === "strength" ? saved.strength_completed : saved.mobility_completed) : !completed
+    })
 
   const exportWeek = async () => {
     setError(null); setNotice(null)
@@ -271,7 +314,6 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     </DropdownMenu>
   )
 
-  type Day = TrainingWeek["days"][number]
   /** Ticked-off progress for a day: each swim, the strength session and the day's mobility count once. */
   const dayProgress = (day: Day) => {
     const hasMobility = day.mobility.length > 0
@@ -284,7 +326,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   /** A swim, strength session or day of mobility: what its card, the day view and the workout view each show. */
   type Session = {
     id: string; date: string; label: string; title: string; completed: boolean; className?: string
-    header: ReactNode; body: ReactNode; menu: ReactNode; chips: ReactNode; onToggle: () => void
+    header: ReactNode; body: ReactNode; menu: ReactNode; chips: ReactNode; onToggle: () => Promise<boolean>
   }
   const chip = (content: ReactNode, tone = "border-white/10 bg-white/[0.04] text-slate-300") =>
     <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold tabular-nums", tone)}>{content}</span>
@@ -298,7 +340,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         id: `swim:${item.key}`, date: day.date, label, title: item.workout.title, completed: item.completed,
         className: cn(item.completed && "border-emerald-400/25"),
         menu: itemMenu({ kind: "swim", key: item.key, date: day.date, title: item.workout.title, completed: item.completed }),
-        onToggle: () => void toggleSwim(item),
+        onToggle: () => toggleSwim(item),
         chips: <>{chip(<><Waves className="h-3.5 w-3.5" />{item.distance_meters.toLocaleString()} m</>, "border-accent/25 bg-accent/10 text-cyan-100")}{doneChip(item.completed)}</>,
         header: <div className="flex items-center gap-3">
           <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent")}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Waves className="h-5 w-5" />}</span>
@@ -317,7 +359,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       sessions.push({
         id: `strength:${day.date}`, date: day.date, label: "Strength", title: strength.title, completed: day.strength_completed, className: "border-violet-400/15",
         menu: itemMenu({ kind: "strength", date: day.date, title: strength.title, completed: day.strength_completed }),
-        onToggle: () => void toggleLegacyStrength(day.date, day.strength_completed),
+        onToggle: () => togglePart("strength", day.date, day.strength_completed),
         chips: <>{chip(<><Clock className="h-3.5 w-3.5" />{strength.estimated_duration_minutes} min</>, "border-violet-300/25 bg-violet-400/10 text-violet-100")}{doneChip(day.strength_completed)}</>,
         header: <div className="flex items-center gap-3">
           <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300")}><Dumbbell className="h-5 w-5" /></span>
@@ -347,7 +389,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         id: `mobility:${day.date}`, date: day.date, label: "Mobility", title: `${day.day_name} mobility`, completed: day.mobility_completed,
         className: cn("border-emerald-400/15", day.mobility_completed && "border-emerald-400/30"),
         menu: itemMenu({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed }),
-        onToggle: () => void toggleMobility(day.date, day.mobility_completed),
+        onToggle: () => togglePart("mobility", day.date, day.mobility_completed),
         chips: <>{chip(<><Heart className="h-3.5 w-3.5" />{count}</>, "border-emerald-300/25 bg-emerald-400/10 text-emerald-100")}{chip(<><Clock className="h-3.5 w-3.5" />{minutes} min</>)}{doneChip(day.mobility_completed)}</>,
         header: <div className="flex items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300">{day.mobility_completed ? <CheckCircle2 className="h-5 w-5" /> : <Heart className="h-5 w-5" />}</span>
@@ -377,7 +419,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const tickHint = (date: string) => (date > today ? "You can tick this off on the day" : undefined)
   /** `expanded`: the full-screen day view, where every card is open; on the page each card opens full screen instead. */
   const sessionRow = (session: Session, expanded: boolean) => (
-    <CompletionRow key={session.id} checked={session.completed} locked={session.date > today} busy={busy} hint={tickHint(session.date)} label={session.title} onToggle={session.onToggle}>
+    <CompletionRow key={session.id} checked={session.completed} saving={ticking.has(session.id)} locked={session.date > today} busy={busy} hint={tickHint(session.date)} label={session.title} onToggle={session.onToggle}>
       <Expander className={session.className} actions={session.menu} header={session.header}
         {...(expanded ? { defaultOpen: true } : { onOpen: (event) => openSession(session.id, event.currentTarget) })}>
         {session.body}
@@ -408,10 +450,12 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const generateWeek = async () => {
     if (inFlight.current) return
     inFlight.current = true
-    setBusy(true); setGenerating(true); setQuiet(false); setError(null); setNotice(null)
+    setBusy(true); setGenerating(true); setError(null); setNotice(null)
     onGuideEvent?.("swim-started")
     let outcome: GuideEvent = "swim-failed"
     try {
+      // Ticks still saving go first, so the generated week shows them.
+      await Promise.all(ticks.current.values())
       const generated = await generation.run("/week/generate", weekSchema, { week_start: weekStart })
       if (mounted.current && activeWeek.current === generated.week_start) setWeek(generated)
       outcome = "swim-done"
@@ -431,7 +475,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     <div className="space-y-6">
       {error && <Banner tone="error" action={<Button size="sm" variant="outline" className="rounded-full border-rose-300/30 bg-transparent" disabled={busy} onClick={() => perform(async () => {}, "Training refreshed.")}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />Reload</Button>}>{error}</Banner>}
       {notice && <Banner tone="success" action={<button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="rounded-full p-1 text-emerald-200/70 transition-colors hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button>}>{notice}</Banner>}
-      {busy && !generating && !quiet && <Banner tone="busy">Saving your training data...</Banner>}
+      {busy && !generating && <Banner tone="busy">Saving your training data...</Banner>}
       <Tabs value={subTab} onValueChange={setSubTab}>
         <TabsList className="mb-6 grid h-auto w-full grid-cols-3 gap-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-1.5 backdrop-blur-xl">
           {subTabs.map((tab) => (
@@ -710,7 +754,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       <WorkoutFocus tone="swim" id={openWorkout ? focusSession : null} origin={focusOrigin}
         sessions={weekSessions.map((session) => ({ id: session.id, title: session.title, eyebrow: `${shortDate(session.date, { weekday: "short", day: "numeric", month: "short" })} · ${session.label}` }))}
         onSelect={setFocusSession} onClose={() => setFocusSession(null)} summary={openWorkout?.chips}>
-        {openWorkout && <CompletionRow checked={openWorkout.completed} locked={openWorkout.date > today} busy={busy} hint={tickHint(openWorkout.date)} label={openWorkout.title} onToggle={openWorkout.onToggle}>
+        {openWorkout && <CompletionRow checked={openWorkout.completed} saving={ticking.has(openWorkout.id)} locked={openWorkout.date > today} busy={busy} hint={tickHint(openWorkout.date)} label={openWorkout.title} onToggle={openWorkout.onToggle}>
           <div className={cn("rounded-2xl border border-white/10 bg-white/[0.03] p-5 sm:p-6", openWorkout.className)}>
             <div className="mb-5 flex items-center justify-between gap-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{openWorkout.completed ? "Ticked off" : openWorkout.date > today ? "Tick it off on the day" : "Tick it off when you finish"}</p>

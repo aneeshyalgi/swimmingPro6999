@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import Link from "next/link"
@@ -119,6 +119,9 @@ export default function DashboardPage() {
   const [switchReturn, setSwitchReturn] = useState<SwitchReturn | null>(null)
   // Counts Workout Builder clicks; each one replays its launch animation in the nav.
   const [builderBurst, setBuilderBurst] = useState(0)
+  // Summary refreshes can overlap (ticks save in the background): only the latest one is shown, so a slow older one
+  // can't bring back a summary from before a later change.
+  const overviewRequest = useRef(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -196,6 +199,7 @@ export default function DashboardPage() {
   }, [])
 
   const refreshOverview = async () => {
+    const request = ++overviewRequest.current
     const { data: { session }, error } = await supabase.auth.getSession()
     if (error) throw error
     if (!session) throw new Error("Your plan is saved, but your session expired. Sign in again to refresh the dashboard.")
@@ -205,13 +209,14 @@ export default function DashboardPage() {
     })
     if (!response.ok) throw new Error("Your changes are saved, but the dashboard summary could not refresh. Reload the dashboard.")
     const result = dashboardResponseSchema.parse(await response.json())
-    setOverview(result.overview)
+    if (request === overviewRequest.current) setOverview(result.overview)
   }
 
   // A new coach rebuilds the season plan, so the whole dashboard (plan, overview and coach) is reloaded.
   const refreshAfterCoachSwitch = async (newCoach: string) => {
     setCoach(newCoach)
     localStorage.setItem("swimgpt_coaches", JSON.stringify([newCoach]))
+    const request = ++overviewRequest.current
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
@@ -219,7 +224,7 @@ export default function DashboardPage() {
     if (!response.ok) throw new Error(`Dashboard refresh failed (${response.status}).`)
     const result = dashboardResponseSchema.parse(await response.json())
     setDashboardPlan(result.plan.plan)
-    setOverview(result.overview)
+    if (request === overviewRequest.current) setOverview(result.overview)
     setCoach(result.profile.recommended_coaches[0] ?? newCoach)
   }
 

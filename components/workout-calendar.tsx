@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { startTransition, useCallback, useEffect, useRef, useState } from "react"
 import {
   CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, Copy, Download, Dumbbell, ListChecks, Maximize2, MoreHorizontal, Plus, RotateCcw,
   Sparkles, Timer, Trash2, Trophy, X,
@@ -43,6 +43,13 @@ function Stat({ icon: Icon, label, value, unit, tone }: { icon: typeof Dumbbell;
 type Editing = { doc: BuilderDoc; key: string | null; isNew: boolean; token: number }
 type DateAction = { mode: "move" | "duplicate"; item: GymItem; date: string }
 
+/** The week with one workout ticked off or not, and its completed count to match. */
+function withCompleted(week: GymWeek, key: string, completed: boolean): GymWeek {
+  const days = week.days.map((day) => day.workouts.some((item) => item.key === key)
+    ? { ...day, workouts: day.workouts.map((item) => (item.key === key ? { ...item, completed } : item)) } : day)
+  return { ...week, days, summary: { ...week.summary, completed: days.reduce((sum, day) => sum + day.workouts.filter((item) => item.completed).length, 0) } }
+}
+
 /** The Workout Library: a strength & dryland calendar that is independent of swim training. */
 export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => Promise<void>; onGuideEvent?: (event: GuideEvent) => void }) {
   const [weekStart, setWeekStart] = useState(() => mondayISO())
@@ -62,12 +69,17 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
   const [focusOrigin, setFocusOrigin] = useState<{ x: number; y: number } | null>(null)
   // The workout open in the full-screen workout view.
   const [focusSession, setFocusSession] = useState<string | null>(null)
+  // Ticks save in the background, several at once: the workouts being saved, and their saves (resolving whether saved).
+  const [ticking, setTicking] = useState<ReadonlySet<string>>(() => new Set())
+  const ticks = useRef(new Map<string, Promise<boolean>>())
   const inFlight = useRef(false)
   const activeWeek = useRef(weekStart)
   activeWeek.current = weekStart
   const today = todayISO()
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    // Ticks still saving go first, so the week read includes them.
+    await Promise.all(ticks.current.values())
     const data = await trainingRequest(`/gym/week?week_start=${weekStart}`, gymWeekSchema, { signal })
     if (!signal?.aborted && activeWeek.current === weekStart) setWeek(data)
   }, [weekStart])
@@ -82,14 +94,15 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
   }, [load])
 
   const showWeek = useCallback((data: GymWeek) => { if (activeWeek.current === data.week_start) setWeek(data) }, [])
-  /** `quiet`: the control that triggered the save shows its own progress, so skip the success banner. */
-  const perform = async (operation: () => Promise<GymWeek | void>, message: string, options: { quiet?: boolean } = {}) => {
+  const perform = async (operation: () => Promise<GymWeek | void>, message: string) => {
     if (inFlight.current) return false
     inFlight.current = true; setBusy(true); setError(null); setNotice(null)
     try {
+      // Ticks still saving go first, so this change and the week it shows include them.
+      await Promise.all(ticks.current.values())
       const result = await operation()
       if (result) showWeek(result)
-      if (!options.quiet) setNotice(message)
+      setNotice(message)
       void onChanged()
       return true
     } catch (failure) {
@@ -130,8 +143,39 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
   const newWorkout = (date?: string) => openBuilder(blankDoc(date ?? (openDays[0]?.date ?? weekStart)), null, true)
-  const toggle = (item: GymItem) => perform(() => trainingRequest(`/gym/${encodeURIComponent(item.key)}/complete`, gymWeekSchema, { method: item.completed ? "DELETE" : "POST" }),
-    item.completed ? `“${item.workout.title}” unticked.` : `Nice work! “${item.workout.title}” is completed.`, { quiet: true })
+  /**
+   * Tick a workout off, or untick it. The tick shows it at once and the rest of the week follows straight after, while it
+   * saves in the background, so the next workout can be ticked without waiting; a failed save puts it back and says why.
+   */
+  const toggle = (item: GymItem): Promise<boolean> => {
+    if (inFlight.current || ticks.current.has(item.key)) return Promise.resolve(false)
+    const done = !item.completed
+    const shownWeek = weekStart
+    const show = (completed: boolean) => setWeek((current) => current && current.week_start === shownWeek ? withCompleted(current, item.key, completed) : current)
+    const saving = trainingRequest(`/gym/${encodeURIComponent(item.key)}/complete`, gymWeekSchema, { method: done ? "POST" : "DELETE" }).then((data) => {
+      const saved = data.days.flatMap((day) => day.workouts).find((workout) => workout.key === item.key)?.completed ?? done
+      show(saved)
+      return saved === done
+    }, (failure: unknown) => {
+      show(!done)
+      setError(failure instanceof Error ? failure.message : "That didn't work. Please try again.")
+      return false
+    })
+    ticks.current.set(item.key, saving)
+    // Behind the tick itself, which has already changed: it stays instant however much of the week this re-renders.
+    startTransition(() => {
+      show(done)
+      setTicking(new Set(ticks.current.keys()))
+      setError(null); setNotice(null)
+    })
+    void saving.then(() => {
+      ticks.current.delete(item.key)
+      setTicking(new Set(ticks.current.keys()))
+      // The dashboard summary counts ticked workouts: it's refreshed once the last of the ticks saving is done.
+      if (!ticks.current.size) void onChanged().catch(() => { /* it catches up with the next change */ })
+    })
+    return saving
+  }
   const exportPdf = (item: GymItem) => perform(() => downloadGymPdf(item.key, item.workout.title), "PDF downloaded.")
   const exportWeek = async () => {
     setError(null); setNotice(null)
@@ -198,8 +242,8 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
     const future = item.date > today
     return (
       <div className="space-y-3">
-        {item.workouts.map((workout) => <CompletionRow key={workout.key} checked={workout.completed} locked={future} busy={busy} hint={future ? "You can tick this off on the day" : undefined}
-          label={workout.workout.title} onToggle={() => void toggle(workout)}>
+        {item.workouts.map((workout) => <CompletionRow key={workout.key} checked={workout.completed} saving={ticking.has(workout.key)} locked={future} busy={busy} hint={future ? "You can tick this off on the day" : undefined}
+          label={workout.workout.title} onToggle={() => toggle(workout)}>
           <GymWorkoutCard item={workout} defaultOpen={expanded} onOpen={expanded ? undefined : (event) => openSession(workout.key, event.currentTarget)}
             onEdit={() => openBuilder(docFromItem(workout), workout.key, false)} actions={cardMenu(workout)} />
         </CompletionRow>)}
@@ -366,8 +410,8 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
             ? <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-3 py-1 text-xs font-semibold text-emerald-100"><CheckCircle2 className="h-3.5 w-3.5" />Completed</span>
             : <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-slate-300"><span className="h-1.5 w-1.5 rounded-full bg-slate-500" />Not completed</span>}
         </>}>
-        {openWorkout && <CompletionRow checked={openWorkout.workout.completed} locked={openWorkout.day.date > today} busy={busy}
-          hint={openWorkout.day.date > today ? "You can tick this off on the day" : undefined} label={openWorkout.workout.workout.title} onToggle={() => void toggle(openWorkout.workout)}>
+        {openWorkout && <CompletionRow checked={openWorkout.workout.completed} saving={ticking.has(openWorkout.workout.key)} locked={openWorkout.day.date > today} busy={busy}
+          hint={openWorkout.day.date > today ? "You can tick this off on the day" : undefined} label={openWorkout.workout.workout.title} onToggle={() => toggle(openWorkout.workout)}>
           <div className={cn("rounded-2xl border bg-white/[0.03] p-5 sm:p-6", openWorkout.workout.completed ? "border-emerald-400/25" : "border-violet-400/15")}>
             <GymWorkoutBody item={openWorkout.workout} onEdit={() => openBuilder(docFromItem(openWorkout.workout), openWorkout.workout.key, false)} actions={cardMenu(openWorkout.workout)} />
           </div>

@@ -178,8 +178,10 @@ def _completion_workout(workout: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- week view
-def gym_week(profile, week_start: date) -> dict[str, Any]:
-    rows = load_records(profile["id"], ["gym_workout", "strength"])
+def gym_week(profile, week_start: date, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """`rows`: the athlete's gym_workout and strength records, when they've just been read."""
+    if rows is None:
+        rows = load_records(profile["id"], ["gym_workout", "strength"])
     items = gym_items(profile["id"], rows, week_start, week_start + timedelta(days=7))
     days = []
     for index in range(7):
@@ -197,8 +199,9 @@ def gym_week(profile, week_start: date) -> dict[str, Any]:
     }
 
 
-def _owned(profile, key: str) -> tuple[dict[str, Any], bool]:
-    rows = load_records(profile["id"], ["gym_workout", "strength"])
+def _owned(profile, key: str, rows: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], bool]:
+    if rows is None:
+        rows = load_records(profile["id"], ["gym_workout", "strength"])
     row = next((item for item in rows if item["id"] == key and item["session_type"] == "gym_workout"), None)
     if row is None:
         raise HTTPException(status_code=404, detail="Workout not found.")
@@ -410,12 +413,13 @@ def export_gym_pdf(key: str, authorization: str | None = Header(default=None)):
 @router.post("/{key}/complete")
 def complete_gym(key: str, authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
-    row, _ = _owned(profile, key)
+    rows = load_records(profile["id"], ["gym_workout", "strength"])
+    row, _ = _owned(profile, key, rows)
     day = date.fromisoformat(row["session_date"][:10])
     if day > datetime.now(timezone.utc).date():
         raise HTTPException(status_code=409, detail="A future workout cannot be marked completed.")
     workout = row["details"]["workout"]
-    result = get_supabase_client().table("user_training_sessions").upsert({
+    completion = {
         "id": record_id(profile["id"], f"gym-completed:{key}"), "user_id": profile["id"], "session_type": "strength",
         "session_name": workout["title"], "session_date": f"{day}T00:00:00+00:00",
         "planned_duration_minutes": workout["estimated_duration_minutes"],
@@ -423,19 +427,23 @@ def complete_gym(key: str, authorization: str | None = Header(default=None)):
                     "workout": _completion_workout(workout), "phase": row["details"].get("dose"),
                     "confirmation": "Athlete confirmed the strength workout was completed.",
                     "completed_at": datetime.now(timezone.utc).isoformat()},
-    }, on_conflict="id").execute()
+    }
+    result = get_supabase_client().table("user_training_sessions").upsert(completion, on_conflict="id").execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Workout completion was not saved.")
-    return gym_week(profile, _monday(day))
+    # The records read above plus this completion are what's saved now, so they aren't read again.
+    return gym_week(profile, _monday(day), [item for item in rows if item["id"] != completion["id"]] + [completion])
 
 
 @router.delete("/{key}/complete")
 def uncomplete_gym(key: str, authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
-    row, _ = _owned(profile, key)
-    get_supabase_client().table("user_training_sessions").delete().eq("user_id", profile["id"]).eq(
-        "id", record_id(profile["id"], f"gym-completed:{key}")).execute()
-    return gym_week(profile, _monday(date.fromisoformat(row["session_date"][:10])))
+    rows = load_records(profile["id"], ["gym_workout", "strength"])
+    row, _ = _owned(profile, key, rows)
+    completion = record_id(profile["id"], f"gym-completed:{key}")
+    get_supabase_client().table("user_training_sessions").delete().eq("user_id", profile["id"]).eq("id", completion).execute()
+    # The records read above, less this completion, are what's saved now, so they aren't read again.
+    return gym_week(profile, _monday(date.fromisoformat(row["session_date"][:10])), [item for item in rows if item["id"] != completion])
 
 
 @router.delete("/{key}")

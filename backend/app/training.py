@@ -1187,7 +1187,8 @@ def complete_workout(key: str, authorization: str | None = Header(default=None))
     }, on_conflict="id").execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Workout completion was not saved.")
-    return owned_workout(profile, key)
+    # Saving it only ticks this workout off, so it's returned as read above rather than reading the whole library again.
+    return {**source, "completed": True}
 
 
 def week_pdf_response(content: bytes, label: str, week_start: date) -> Response:
@@ -1279,7 +1280,7 @@ def uncomplete_strength(request: WorkoutSchedule, authorization: str | None = He
     """Untick a weekly-plan strength session (older weeks that still include strength)."""
     profile = get_authenticated_profile(authorization)
     _delete_completion(profile["id"], f"strength-completed:{request.date}")
-    return get_week(request.date - timedelta(days=request.date.weekday()), authorization)
+    return week_view(profile, request.date - timedelta(days=request.date.weekday()))
 
 
 @router.post("/week/mobility/complete")
@@ -1289,7 +1290,7 @@ def complete_mobility(request: WorkoutSchedule, authorization: str | None = Head
     if request.date > datetime.now(timezone.utc).date():
         raise HTTPException(status_code=409, detail="Future mobility work cannot be completed yet.")
     week_start = request.date - timedelta(days=request.date.weekday())
-    week = get_week(week_start, authorization)
+    week = week_view(profile, week_start)
     day = next(item for item in week["days"] if item["date"] == request.date.isoformat())
     if not day["mobility"]:
         raise HTTPException(status_code=409, detail="No mobility work is planned on this date.")
@@ -1304,14 +1305,16 @@ def complete_mobility(request: WorkoutSchedule, authorization: str | None = Head
     }, on_conflict="id").execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Mobility completion was not saved.")
-    return get_week(week_start, authorization)
+    # Ticking it off changes nothing else in the week, so the week read above is returned with the day ticked off.
+    day["mobility_completed"] = True
+    return week
 
 
 @router.post("/week/mobility/uncomplete")
 def uncomplete_mobility(request: WorkoutSchedule, authorization: str | None = Header(default=None)):
     profile = get_authenticated_profile(authorization)
     _delete_completion(profile["id"], f"mobility-completed:{request.date}")
-    return get_week(request.date - timedelta(days=request.date.weekday()), authorization)
+    return week_view(profile, request.date - timedelta(days=request.date.weekday()))
 
 
 @router.post("/week/strength/complete")
@@ -1320,7 +1323,7 @@ def complete_strength(request: WorkoutSchedule, authorization: str | None = Head
     if request.date > datetime.now(timezone.utc).date():
         raise HTTPException(status_code=409, detail="A future strength session cannot be completed.")
     week_start = request.date - timedelta(days=request.date.weekday())
-    week = get_week(week_start, authorization)
+    week = week_view(profile, week_start)
     day = next(item for item in week["days"] if item["date"] == request.date.isoformat())
     if not day["strength"]:
         raise HTTPException(status_code=409, detail="No saved strength session is prescribed on this date.")
@@ -1337,7 +1340,9 @@ def complete_strength(request: WorkoutSchedule, authorization: str | None = Head
     }, on_conflict="id").execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Strength completion was not persisted.")
-    return get_week(week_start, authorization)
+    # Ticking it off changes nothing else in the week, so the week read above is returned with the session ticked off.
+    day["strength_completed"] = True
+    return week
 
 
 # ---------------------------------------------------------------- Training Week item actions
