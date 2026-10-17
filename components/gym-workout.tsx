@@ -2,7 +2,7 @@
 
 import type { MouseEvent, ReactNode } from "react"
 import { CheckCircle2, Clock, Dumbbell, Flame, Lightbulb, Pencil, Snowflake, Sparkles, UserRound, Waves } from "lucide-react"
-import { Expander } from "@/components/training-ui"
+import { Expander, phoneTitle } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import type { GymItem } from "@/lib/training"
 
@@ -130,7 +130,7 @@ export function GymWorkoutCard({ item, onEdit, actions, className, defaultOpen =
   return (
     <Expander defaultOpen={defaultOpen} onOpen={onOpen} className={cn(item.completed ? "border-emerald-400/25" : "border-violet-400/15", className)} header={
       <div className="flex items-center gap-3">
-        <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", item.completed ? "bg-emerald-400/15 text-emerald-300" : tone.icon)}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Dumbbell className="h-5 w-5" />}</span>
+        <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", item.completed ? "bg-emerald-400/15 text-emerald-300" : tone.icon)}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Dumbbell className="h-5 w-5" />}</span>
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
             <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-px normal-case tracking-normal", manual ? "bg-sky-400/15 text-sky-200" : "bg-violet-400/15 text-violet-200")}>
@@ -140,7 +140,7 @@ export function GymWorkoutCard({ item, onEdit, actions, className, defaultOpen =
             {item.completed && <span>Completed</span>}
             {item.edited && !manual && <span className="inline-flex items-center gap-1 normal-case tracking-normal"><Pencil className="h-2.5 w-2.5" />edited</span>}
           </p>
-          <p className="truncate font-semibold text-white">{item.workout.title}</p>
+          <p className={cn("truncate font-semibold text-white", phoneTitle)}>{item.workout.title}</p>
         </div>
         <span className="flex shrink-0 flex-col items-end gap-1"><DoseChip dose={item.dose} /><span className="flex items-center gap-1 text-[11px] text-slate-400"><Clock className="h-3 w-3" />{item.workout.estimated_duration_minutes} min</span></span>
       </div>}>

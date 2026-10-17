@@ -5,6 +5,9 @@ import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileDown, FileText, Lo
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
+/** A workout card's title: one line with an ellipsis, but up to two lines on a phone, where one line leaves too little. */
+export const phoneTitle = "max-sm:line-clamp-2 max-sm:whitespace-normal max-sm:break-words"
+
 /** Shared input styling for the training screens. */
 export const inputClass = "h-10 rounded-xl border-white/10 bg-white/[0.03] transition-colors hover:border-white/20 focus-visible:border-accent/50 focus-visible:ring-accent/20"
 export const textareaClass = "rounded-xl border-white/10 bg-white/[0.03] transition-colors hover:border-white/20 focus-visible:border-accent/50 focus-visible:ring-accent/20"

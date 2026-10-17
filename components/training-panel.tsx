@@ -23,7 +23,7 @@ import { CompetitionForm, RaceResultForm } from "@/components/training-forms"
 import { GrowBar, Reveal, Tile, TileHeader, useCountUp } from "@/components/dashboard-ui"
 import {
   Banner, CompetitionSkeleton, CompletionRow, DayTileSkeleton, EmptyState, ExportWeekButton, Expander, LoadingLane, TwoColumnFlow, WeekSkeleton, ZoneChip, ZoneStack, daysUntil, inputClass, labelClass, shortDate,
-  todayISO, useRemovals, zoneTone,
+  phoneTitle, todayISO, useRemovals, zoneTone,
 } from "@/components/training-ui"
 import { WorkoutCalendar } from "@/components/workout-calendar"
 import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
@@ -377,13 +377,15 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         onToggle: () => toggleSwim(item),
         chips: <>{chip(<><Waves className="h-3.5 w-3.5" />{item.distance_meters.toLocaleString()} m</>, "border-accent/25 bg-accent/10 text-cyan-100")}{doneChip(item.completed)}</>,
         header: <div className="flex items-center gap-3">
-          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent")}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Waves className="h-5 w-5" />}</span>
+          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent")}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Waves className="h-5 w-5" />}</span>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}{item.completed && " · Completed"}</p>
-            <p className="truncate font-semibold text-white">{item.workout.title}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}{item.completed && " · Completed"}
+              {/* On a phone the distance goes up here, so the title has the card's width. */}
+              <span className="normal-case tracking-normal text-cyan-100 sm:hidden"> · {item.distance_meters.toLocaleString()} m</span></p>
+            <p className={cn("truncate font-semibold text-white", phoneTitle)}>{item.workout.title}</p>
             <ZoneStack className="mt-2 h-1.5" entries={zoneEntries(item.zones)} />
           </div>
-          <span className="shrink-0 text-right"><span className="block text-sm font-bold tabular-nums text-cyan-100">{item.distance_meters.toLocaleString()}</span><span className="text-[10px] text-slate-500">metres</span></span>
+          <span className="shrink-0 text-right max-sm:hidden"><span className="block text-sm font-bold tabular-nums text-cyan-100">{item.distance_meters.toLocaleString()}</span><span className="text-[10px] text-slate-500">metres</span></span>
         </div>,
         body: <><ZoneStack className="mb-5 h-2" entries={zoneEntries(item.zones)} /><SwimWorkoutDetails workout={item.workout} />{workoutActions(item)}</>,
       }
@@ -396,8 +398,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         onToggle: () => togglePart("strength", day.date, day.strength_completed),
         chips: <>{chip(<><Clock className="h-3.5 w-3.5" />{strength.estimated_duration_minutes} min</>, "border-violet-300/25 bg-violet-400/10 text-violet-100")}{doneChip(day.strength_completed)}</>,
         header: <div className="flex items-center gap-3">
-          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300")}><Dumbbell className="h-5 w-5" /></span>
-          <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Strength</p><p className="truncate font-semibold text-white">{strength.title}</p></div>
+          <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300")}><Dumbbell className="h-5 w-5" /></span>
+          <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Strength</p><p className={cn("truncate font-semibold text-white", phoneTitle)}>{strength.title}</p></div>
           <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400"><Clock className="h-3.5 w-3.5" />{strength.estimated_duration_minutes} min</span>
         </div>,
         body: <>
@@ -426,7 +428,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         onToggle: () => togglePart("mobility", day.date, day.mobility_completed),
         chips: <>{chip(<><Heart className="h-3.5 w-3.5" />{count}</>, "border-emerald-300/25 bg-emerald-400/10 text-emerald-100")}{chip(<><Clock className="h-3.5 w-3.5" />{minutes} min</>)}{doneChip(day.mobility_completed)}</>,
         header: <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300">{day.mobility_completed ? <CheckCircle2 className="h-5 w-5" /> : <Heart className="h-5 w-5" />}</span>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300 max-sm:hidden">{day.mobility_completed ? <CheckCircle2 className="h-5 w-5" /> : <Heart className="h-5 w-5" />}</span>
           <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mobility{day.mobility_completed && " · Completed"}</p><p className="font-semibold text-white">{count}</p></div>
           <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400"><Clock className="h-3.5 w-3.5" />{minutes} min</span>
         </div>,
@@ -670,25 +672,24 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                 return <Reveal key={day.date} index={9 + dayIndex}>
                   <div id={`day-${day.date}`} className="scroll-mt-32">
                     <Tile glow={isToday} className={cn(total > 0 && done === total && "border-emerald-400/30")}>
-                      <div className="mb-4 flex items-start gap-4">
-                        <div className={cn("flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl border", isToday ? "border-accent/40 bg-accent/15" : "border-white/10 bg-white/[0.04]")}>
+                      {/* The day's plan sits beside the date, but on a phone it runs the card's full width under the day's name. */}
+                      <div className={cn("mb-4 grid items-start gap-x-4", roomForSwim(day) ? "grid-cols-[auto_minmax(0,1fr)_auto]" : "grid-cols-[auto_minmax(0,1fr)]")}>
+                        <div className={cn("flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl border sm:row-span-2", isToday ? "border-accent/40 bg-accent/15" : "border-white/10 bg-white/[0.04]")}>
                           <span className={cn("text-[10px] font-semibold uppercase tracking-wider", isToday ? "text-accent" : "text-slate-500")}>{shortDate(day.date, { month: "short" })}</span>
                           <span className="text-xl font-bold leading-none text-white">{Number(day.date.slice(8))}</span>
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-lg font-semibold tracking-tight text-white">{day.day_name}</h3>
-                            {isToday && <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-foreground">Today</span>}
-                            {dayMeters[dayIndex] > 0 && <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-slate-300">{dayMeters[dayIndex].toLocaleString()} m</span>}
-                            {total > 0 && <span key={`${done}/${total}`} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums transition-colors duration-500", done > 0 && "chip-pop",
-                              done === total ? "border-emerald-300/50 bg-gradient-to-r from-emerald-400/25 to-teal-400/15 text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.3)]" : "border-white/10 bg-white/[0.04] text-slate-300")}>
-                              {done === total ? <><Trophy className="h-3 w-3 text-amber-200" />Day complete</> : <><CheckCircle2 className="h-3 w-3" />{done}/{total} done</>}
-                            </span>}
-                          </div>
-                          <p className="mt-1 text-sm leading-6 text-slate-400">{day.objective}</p>
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold tracking-tight text-white">{day.day_name}</h3>
+                          {isToday && <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-foreground">Today</span>}
+                          {dayMeters[dayIndex] > 0 && <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-slate-300">{dayMeters[dayIndex].toLocaleString()} m</span>}
+                          {total > 0 && <span key={`${done}/${total}`} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums transition-colors duration-500", done > 0 && "chip-pop",
+                            done === total ? "border-emerald-300/50 bg-gradient-to-r from-emerald-400/25 to-teal-400/15 text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.3)]" : "border-white/10 bg-white/[0.04] text-slate-300")}>
+                            {done === total ? <><Trophy className="h-3 w-3 text-amber-200" />Day complete</> : <><CheckCircle2 className="h-3 w-3" />{done}/{total} done</>}
+                          </span>}
                         </div>
                         {roomForSwim(day) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => openNewSwim(day.date)} aria-label={`Add a swim on ${day.day_name}`} title="Add your own swim to this day"
                           className="shrink-0 rounded-full text-slate-400 hover:bg-accent/10 hover:text-cyan-100"><Plus className="mr-1 h-4 w-4" /><span className="sm:hidden">Swim</span><span className="hidden sm:inline">Add swim</span></Button>}
+                        <p className="col-span-full mt-3 text-sm leading-6 text-slate-400 sm:col-span-1 sm:col-start-2 sm:mt-1">{day.objective}</p>
                       </div>
                       {daySessions(day)}
                     </Tile>
