@@ -4,7 +4,7 @@ import { startTransition, useCallback, useEffect, useRef, useState, type ReactNo
 import { z } from "zod"
 import {
   Activity, BookMarked, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock, Copy, Download, Dumbbell, MoreHorizontal, Pencil, Trash2,
-  Flag, Heart, Layers, LibraryBig, MapPin, Maximize2, Moon, RotateCcw, Sparkles, Star,
+  Flag, Heart, Layers, LibraryBig, MapPin, Maximize2, Moon, Plus, RotateCcw, Sparkles, Star,
   Target, Timer, Trophy, Waves, X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -29,7 +29,7 @@ import { WorkoutCalendar } from "@/components/workout-calendar"
 import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
 import { CalendarDay, compactMeters } from "@/components/calendar-day"
 import { GUIDE_SUBTAB, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
-import { TrainingItemEditor, type EditTarget } from "@/components/training-item-editor"
+import { NewSwimEditor, TrainingItemEditor, type EditTarget } from "@/components/training-item-editor"
 import { cn } from "@/lib/utils"
 import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
 import {
@@ -89,6 +89,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const [deleting, setDeleting] = useState<WeekItem | null>(null)
   const [deletingMeet, setDeletingMeet] = useState<Competition | null>(null)
   const [editing, setEditing] = useState<EditTarget | null>(null)
+  // The day a swim of the athlete's own is being written for (in the full-page swim editor).
+  const [adding, setAdding] = useState<string | null>(null)
   const [resultKey, setResultKey] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const generation = useWeekGeneration()
@@ -130,6 +132,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     if (!guide) return
     setSubTab(GUIDE_SUBTAB[guide])
     setEditing(null)
+    setAdding(null)
     if (guide !== "add-meet") setWeekStart(mondayISO())
   }, [guide])
 
@@ -295,6 +298,15 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     else if (item.kind === "mobility" && day.mobility.length) setEditing({ kind: "mobility", date: day.date, dayName: day.day_name, mobility: day.mobility })
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
+  /** Write a swim of the athlete's own for a day, in the full-page swim editor. */
+  const openNewSwim = (date: string) => {
+    setFocusDate(null)
+    setFocusSession(null)
+    setAdding(date)
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+  /** A day takes at most two swims: the same rule as moving or copying a swim there. */
+  const roomForSwim = (day: Day) => day.workouts.length < 2
   const editedItem = (target: EditTarget): WeekItem => target.kind === "swim"
     ? { kind: "swim", key: target.key, date: target.date, title: target.workout.title, completed: false }
     : { kind: target.kind, date: target.date, title: target.kind === "strength" ? target.strength.title : `${target.dayName} mobility`, completed: false }
@@ -335,7 +347,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     : chip(<><span className="h-1.5 w-1.5 rounded-full bg-slate-500" />Not completed</>)
   const daySessionList = (day: Day): Session[] => {
     const sessions: Session[] = day.workouts.map((item, index) => {
-      const label = index === 0 ? "First swim" : index === 1 ? "Second swim" : `Additional swim ${index + 1}`
+      const label = item.origin === "My workout" ? "Your swim" : index === 0 ? "First swim" : index === 1 ? "Second swim" : `Additional swim ${index + 1}`
       return {
         id: `swim:${item.key}`, date: day.date, label, title: item.workout.title, completed: item.completed,
         className: cn(item.completed && "border-emerald-400/25"),
@@ -497,7 +509,12 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
             }}
             onExport={() => exportItem(editedItem(editing))}
             onDuplicate={() => { const item = editedItem(editing); setEditing(null); setDateAction({ mode: "duplicate", item, date: item.date }) }}
-            onDelete={() => { const item = editedItem(editing); setEditing(null); setDeleting(item) }} /> : <>
+            onDelete={() => { const item = editedItem(editing); setEditing(null); setDeleting(item) }} /> : adding ? <NewSwimEditor key={adding} date={adding}
+            onClose={() => setAdding(null)}
+            onSaved={() => {
+              setAdding(null)
+              void perform(async () => {}, `Swim added to ${dayLabel(adding)}.`)
+            }} /> : <>
           <Reveal index={0}>
             <section data-guide="swim-week" aria-busy={loading} className="relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(87,229,234,0.14),rgba(12,20,28,0.95)_45%,rgba(56,120,220,0.12))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-6">
               {loading && <span aria-hidden className="tl-topbar" />}
@@ -634,6 +651,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                           </div>
                           <p className="mt-1 text-sm leading-6 text-slate-400">{day.objective}</p>
                         </div>
+                        {roomForSwim(day) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => openNewSwim(day.date)} aria-label={`Add a swim on ${day.day_name}`} title="Add your own swim to this day"
+                          className="shrink-0 rounded-full text-slate-400 hover:bg-accent/10 hover:text-cyan-100"><Plus className="mr-1 h-4 w-4" /><span className="sm:hidden">Swim</span><span className="hidden sm:inline">Add swim</span></Button>}
                       </div>
                       {daySessions(day)}
                     </Tile>
@@ -748,6 +767,10 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
           {daySessions(focusDay, true)}
           {!focusDay.competitions.length && !focusDay.workouts.length && !focusDay.strength && !focusDay.mobility.length && !focusDay.rest && !focusDay.recovery.length &&
             <EmptyState icon={CalendarDays} title="Nothing planned for this day" body={week?.generated ? "This day has no sessions in your swim week." : "Generate your swim week to fill this day with sessions."} />}
+          {roomForSwim(focusDay) && <button type="button" disabled={busy} onClick={() => openNewSwim(focusDay.date)}
+            className="group mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-500 transition-all hover:border-accent/40 hover:text-cyan-100 disabled:opacity-50">
+            <Plus className="h-4 w-4 transition-transform duration-300 group-hover:rotate-90" />Add a swim on {focusDay.day_name}
+          </button>}
         </>}
       </DayFocus>
 

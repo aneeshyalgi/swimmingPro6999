@@ -1512,6 +1512,43 @@ def edit_workout(key: str, request: SwimEdit, authorization: str | None = Header
     return week_view(profile, _monday(origin))
 
 
+class SwimAdd(BaseModel):
+    date: date
+    workout: SwimSession
+    # The editor's id for the new swim: sent again (a retry after a lost reply), it saves the same swim, not a second one.
+    id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+
+
+def _week_phase(profile, week_start: date) -> str:
+    """The training phase of a week: the generated week's, else the season plan's (what generating it would use)."""
+    saved = find_record(profile["id"], f"week:{week_start}")
+    if saved:
+        return saved["details"]["plan"]["phase"]
+    plan = get_supabase_client().table("user_ai_plans").select("plan").eq("user_id", profile["id"]).limit(1).execute().data
+    return (plan[0]["plan"].get("phase") if plan else None) or "Not recorded"
+
+
+@router.post("/week/swim")
+def add_week_swim(request: SwimAdd, authorization: str | None = Header(default=None)):
+    """Add the athlete's own swim, written in the swim editor, to a day of their swim week.
+
+    It's saved like a swim duplicated to another day (a dated `workout` record, here the athlete's own), so it's ticked,
+    edited, moved, copied, exported and deleted like one, and generating its week plans around it (build_week counts it
+    toward the week's swims and never duplicates it)."""
+    profile = get_authenticated_profile(authorization)
+    workout = request.workout
+    if workout.total_distance_meters > 12000:
+        raise HTTPException(status_code=422, detail="A swim can be at most 12,000 m.")
+    key = f"own-swim:{request.id}"
+    _fits_swim_day(profile, request.date, workout.total_distance_meters, ignore=record_id(profile["id"], key))
+    week_start = _monday(request.date)
+    save_record(profile["id"], key, "workout", workout.title, request.date, {
+        "workout": workout.model_dump(mode="json"), "date": request.date.isoformat(), "phase": _week_phase(profile, week_start),
+        "pool_length": default_pool(profile), "event": workout.event, "template": False, "source": "manual", "source_files": [],
+    })
+    return week_view(profile, week_start)
+
+
 def _edit_part(profile, part: str, day: date, value: Any):
     current = _view_day(profile, day)
     if not current[part]:

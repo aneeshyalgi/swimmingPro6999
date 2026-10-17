@@ -147,8 +147,8 @@ export async function trainingRequest<T>(
   return schema.parse(await response.json())
 }
 
-/** A random id for a generation run (crypto.randomUUID needs a secure context, which a phone on the LAN isn't). */
-function runId(): string {
+/** A random UUID, e.g. for a generation run (crypto.randomUUID needs a secure context, which a phone on the LAN isn't). */
+export function randomId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
   bytes[6] = (bytes[6] & 0x0f) | 0x40
   bytes[8] = (bytes[8] & 0x3f) | 0x80
@@ -163,7 +163,7 @@ export const GENERATION_CANCELLED = "Generation stopped because you left the pag
  * request and tells the server to drop the run, so nothing from it is ever saved and the week can be generated afresh.
  */
 export function startGeneration<T>(path: string, schema: z.ZodType<T>, body: Record<string, unknown>) {
-  const id = runId()
+  const id = randomId()
   const controller = new AbortController()
   let settled = false
   const promise = trainingRequest(path, schema, { body: { ...body, job_id: id }, signal: controller.signal })

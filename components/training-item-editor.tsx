@@ -18,7 +18,7 @@ import { useCountUp } from "@/components/dashboard-ui"
 import { AutoTextarea, IconButton } from "@/components/workout-builder"
 import { ZoneStack, inputClass, shortDate, zoneTone } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
-import { trainingRequest, weekSchema, type SwimWorkout, type TrainingWeek } from "@/lib/training"
+import { randomId, trainingRequest, weekSchema, type SwimWorkout, type TrainingWeek } from "@/lib/training"
 
 type Strength = NonNullable<TrainingWeek["days"][number]["strength"]>
 type Mobility = TrainingWeek["days"][number]["mobility"][number]
@@ -32,9 +32,10 @@ export type EditTarget =
 type Handlers = {
   onClose: () => void
   onSaved: () => void
-  onExport: () => Promise<void>
-  onDuplicate: () => void
-  onDelete: () => void
+  /** Export, duplicate and delete: for an item that is already saved (a new swim has none until it's added). */
+  onExport?: () => Promise<void>
+  onDuplicate?: () => void
+  onDelete?: () => void
 }
 
 const fieldLabel = "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500"
@@ -62,9 +63,11 @@ function Stat({ label, value, unit, big }: { label: string; value: number; unit?
 }
 
 /** Toolbar, document frame, validation and the unsaved-changes guard shared by the three editors. */
-function EditorShell({ icon: Icon, label, tone, date, dirty, issues, save, handlers, title, stats, children }: {
+function EditorShell({ icon: Icon, label, tone, date, dirty, issues, save, handlers, title, stats, children, creating = false }: {
   icon: LucideIcon; label: string; tone: string; date: string; dirty: boolean; issues: string[]
   save: () => Promise<unknown>; handlers: Handlers; title: ReactNode; stats: ReactNode; children: ReactNode
+  /** A new item: saving adds it, so it's always checked and saved (not only once something has changed). */
+  creating?: boolean
 }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -73,10 +76,14 @@ function EditorShell({ icon: Icon, label, tone, date, dirty, issues, save, handl
   const [discard, setDiscard] = useState<null | (() => void)>(null)
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
+  const inFlight = useRef(false)
+  const { onExport, onDuplicate, onDelete } = handlers
 
   const run = async (): Promise<boolean> => {
     if (issues.length) { setShowIssues(true); window.scrollTo({ top: 0, behavior: "smooth" }); return false }
-    setSaving(true); setError(null)
+    // One save at a time: a second Save or Ctrl+S while one is on its way would send it twice.
+    if (inFlight.current) return false
+    inFlight.current = true; setSaving(true); setError(null)
     try {
       await save()
       dirtyRef.current = false
@@ -84,16 +91,17 @@ function EditorShell({ icon: Icon, label, tone, date, dirty, issues, save, handl
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Your changes could not be saved.")
       return false
-    } finally { setSaving(false) }
+    } finally { inFlight.current = false; setSaving(false) }
   }
-  const saveAndClose = async () => { if (!dirty) return handlers.onClose(); if (await run()) handlers.onSaved() }
+  const saveAndClose = async () => { if (!dirty && !creating) return handlers.onClose(); if (await run()) handlers.onSaved() }
   /** Leave the editor; unsaved changes are only dropped after the athlete confirms. */
   const leave = (action: () => void) => (dirtyRef.current ? setDiscard(() => action) : action())
   const exportPdf = async () => {
+    if (!onExport) return
     setExporting(true)
     try {
       if (dirty && !(await run())) return
-      await handlers.onExport()
+      await onExport()
     } finally { setExporting(false) }
   }
   const saveRef = useRef(saveAndClose)
@@ -119,22 +127,22 @@ function EditorShell({ icon: Icon, label, tone, date, dirty, issues, save, handl
           <p className="flex items-center gap-2 text-sm font-semibold text-white"><Icon className={cn("h-4 w-4", tone)} /><span className="hidden sm:inline">{label}</span></p>
           <span role="status" aria-live="polite" className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-slate-300">
             {saving ? <Loader2 className="h-3 w-3 animate-spin text-cyan-300" /> : <span className={cn("h-1.5 w-1.5 rounded-full", dirty ? "animate-pulse bg-amber-300" : "bg-emerald-400")} />}
-            {saving ? "Saving…" : dirty ? "Unsaved changes" : "No changes"}
+            {saving ? "Saving…" : dirty ? "Unsaved changes" : creating ? "Not added yet" : "No changes"}
           </span>
           <span className="hidden text-[11px] text-slate-500 md:inline">{shortDate(date, { weekday: "long", day: "numeric", month: "short" })}</span>
           <span className="flex-1" />
-          <Button onClick={() => void saveAndClose()} disabled={saving} title="Save and return to the swim week (Ctrl+S)" className="h-9 rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 px-4 font-semibold text-slate-950">
+          <Button onClick={() => void saveAndClose()} disabled={saving} title={creating ? "Add it to the swim week (Ctrl+S)" : "Save and return to the swim week (Ctrl+S)"} className="h-9 rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 px-4 font-semibold text-slate-950">
             {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : dirty ? <Save className="mr-1.5 h-4 w-4" /> : <Check className="mr-1.5 h-4 w-4" />}Save
           </Button>
-          <DropdownMenu>
+          {onExport && onDuplicate && onDelete && <DropdownMenu>
             <DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label="More actions" className="h-9 w-9 rounded-full"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52 border-white/10 bg-[#0d151c]">
               <DropdownMenuItem disabled={exporting} onSelect={() => void exportPdf()}><Download className="mr-2 h-4 w-4" />Export PDF</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => leave(handlers.onDuplicate)}><Copy className="mr-2 h-4 w-4" />Duplicate to…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => leave(onDuplicate)}><Copy className="mr-2 h-4 w-4" />Duplicate to…</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-rose-300 focus:text-rose-200" onSelect={() => leave(handlers.onDelete)}><Trash2 className="mr-2 h-4 w-4" />Delete</DropdownMenuItem>
+              <DropdownMenuItem className="text-rose-300 focus:text-rose-200" onSelect={() => leave(onDelete)}><Trash2 className="mr-2 h-4 w-4" />Delete</DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
+          </DropdownMenu>}
         </div>
         {error && <p role="alert" className="mt-2 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{error}</p>}
         {showIssues && issues.length > 0 && <div role="alert" className="mt-2 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm text-amber-50">
@@ -154,7 +162,7 @@ function EditorShell({ icon: Icon, label, tone, date, dirty, issues, save, handl
           <div className="flex flex-wrap items-center justify-end gap-2 border-t border-white/[0.08] pt-6">
             <Button variant="ghost" className="rounded-full" onClick={() => leave(handlers.onClose)}>Cancel</Button>
             <Button onClick={() => void saveAndClose()} disabled={saving} className="rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950">
-              {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Check className="mr-1.5 h-4 w-4" />}Save changes
+              {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Check className="mr-1.5 h-4 w-4" />}{creating ? "Add to swim week" : "Save changes"}
             </Button>
           </div>
         </div>
@@ -249,13 +257,22 @@ const prescription = (item: SetDraft) => {
   return item.rounds > 1 ? `${item.rounds} × (${reps})` : reps
 }
 
-function SwimEditor({ target, handlers }: { target: Extract<EditTarget, { kind: "swim" }>; handlers: Handlers }) {
-  const source = target.workout
-  const [draft, setDraft] = useState(() => ({
-    title: source.title, objective: source.objective, event: source.event ?? "", notes: source.notes ?? "",
-    estimated_duration_minutes: source.estimated_duration_minutes, equipment: source.equipment.join(", "),
-    sets: source.sets.map((item) => ({ ...item, id: uid(), target_time: item.target_time ?? "", equipment: item.equipment.join(", "), technical_focus: item.technical_focus.join(", ") })),
-  }))
+type SwimDraft = { title: string; objective: string; event: string; notes: string; estimated_duration_minutes: number; equipment: string; sets: SetDraft[] }
+/** A new swim starts as a warm-up, main set and cool-down to adjust; its title and goal are the athlete's to write. */
+const newSwimDraft = (): SwimDraft => ({
+  title: "", objective: "", event: "", notes: "", estimated_duration_minutes: 60, equipment: "",
+  sets: ["Warm-up", "Main set", "Cool-down"].map((name) => blankSet(SET_PRESETS[name])),
+})
+
+/** `workout`: the swim being edited, or null for a new one; `send` saves the swim as written. */
+function SwimEditor({ date, workout, handlers, send, creating = false }: {
+  date: string; workout: SwimWorkout | null; handlers: Handlers; send: (workout: SwimWorkout) => Promise<unknown>; creating?: boolean
+}) {
+  const [draft, setDraft] = useState((): SwimDraft => workout ? {
+    title: workout.title, objective: workout.objective, event: workout.event ?? "", notes: workout.notes ?? "",
+    estimated_duration_minutes: workout.estimated_duration_minutes, equipment: workout.equipment.join(", "),
+    sets: workout.sets.map((item) => ({ ...item, id: uid(), target_time: item.target_time ?? "", equipment: item.equipment.join(", "), technical_focus: item.technical_focus.join(", ") })),
+  } : newSwimDraft())
   const [dirty, setDirty] = useState(false)
   const update = (patch: Partial<typeof draft>) => { setDraft((current) => ({ ...current, ...patch })); setDirty(true) }
   const updateSet = (id: string, patch: Partial<SetDraft>) => update({ sets: draft.sets.map((item) => (item.id === id ? { ...item, ...patch } : item)) })
@@ -284,23 +301,20 @@ function SwimEditor({ target, handlers }: { target: Extract<EditTarget, { kind: 
     }),
   ].filter((issue): issue is string => Boolean(issue))
 
-  const save = () => trainingRequest(`/library/${encodeURIComponent(target.key)}`, weekSchema, {
-    method: "PUT",
-    body: { workout: {
-      title: draft.title.trim(), objective: draft.objective.trim(), event: draft.event.trim() || null, notes: draft.notes.trim(),
-      estimated_duration_minutes: draft.estimated_duration_minutes, equipment: commaList(draft.equipment),
-      main_training_zones: [...new Set(draft.sets.map((item) => item.training_zone.trim()).filter(Boolean))],
-      sets: draft.sets.map(({ id: _id, ...item }) => ({
-        ...item, name: item.name.trim(), stroke: item.stroke.trim(), interval: item.interval.trim(), training_zone: item.training_zone.trim() || "Aerobic",
-        description: item.description.trim(), target_time: item.target_time.trim() || null, equipment: commaList(item.equipment), technical_focus: commaList(item.technical_focus),
-      })),
-    } },
+  const save = () => send({
+    title: draft.title.trim(), objective: draft.objective.trim(), event: draft.event.trim() || null, notes: draft.notes.trim(),
+    estimated_duration_minutes: draft.estimated_duration_minutes, equipment: commaList(draft.equipment),
+    main_training_zones: [...new Set(draft.sets.map((item) => item.training_zone.trim()).filter(Boolean))],
+    sets: draft.sets.map(({ id: _id, ...item }) => ({
+      ...item, name: item.name.trim(), stroke: item.stroke.trim(), interval: item.interval.trim(), training_zone: item.training_zone.trim() || "Aerobic",
+      description: item.description.trim(), target_time: item.target_time.trim() || null, equipment: commaList(item.equipment), technical_focus: commaList(item.technical_focus),
+    })),
   })
 
   return (
-    <EditorShell icon={Waves} label="Swim editor" tone="text-accent" date={target.date} dirty={dirty} issues={issues} save={save} handlers={handlers}
+    <EditorShell icon={Waves} label={creating ? "New swim" : "Swim editor"} tone="text-accent" date={date} dirty={dirty} issues={issues} save={save} handlers={handlers} creating={creating}
       title={<>
-        <label htmlFor="swim-title" className={fieldLabel}>Workout title</label>
+        <label htmlFor="swim-title" className={fieldLabel}>{creating ? `New swim · ${shortDate(date, { weekday: "long", day: "numeric", month: "short" })}` : "Workout title"}</label>
         <input id="swim-title" value={draft.title} maxLength={150} onChange={(event) => update({ title: event.target.value })} placeholder="Name your swim…"
           className="w-full border-0 bg-transparent p-0 text-3xl font-bold tracking-tight text-white outline-none placeholder:text-slate-600 sm:text-4xl" />
       </>}
@@ -565,7 +579,16 @@ function MobilityEditor({ target, handlers }: { target: Extract<EditTarget, { ki
 
 /** Full-page editor for a Training Week swim, strength session or day of mobility work. */
 export function TrainingItemEditor({ target, ...handlers }: { target: EditTarget } & Handlers) {
-  if (target.kind === "swim") return <SwimEditor target={target} handlers={handlers} />
+  if (target.kind === "swim") return <SwimEditor date={target.date} workout={target.workout} handlers={handlers}
+    send={(workout) => trainingRequest(`/library/${encodeURIComponent(target.key)}`, weekSchema, { method: "PUT", body: { workout } })} />
   if (target.kind === "strength") return <StrengthEditor target={target} handlers={handlers} />
   return <MobilityEditor target={target} handlers={handlers} />
+}
+
+/** Full-page editor for a swim of the athlete's own: saving adds it to `date` in the swim week. */
+export function NewSwimEditor({ date, onClose, onSaved }: { date: string; onClose: () => void; onSaved: () => void }) {
+  // The new swim's id for as long as it's being written: a save sent again after a lost reply adds it once, not twice.
+  const [id] = useState(randomId)
+  return <SwimEditor date={date} workout={null} creating handlers={{ onClose, onSaved }}
+    send={(workout) => trainingRequest("/week/swim", weekSchema, { body: { date, workout, id } })} />
 }
