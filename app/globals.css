@@ -2398,3 +2398,293 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
   .lg-page, .lg-page h1, .lg-page h2, .lg-page p, .lg-page li, .lg-page td, .lg-page th, .lg-prose, .lg-prose strong, .lg-prose a { color: #000 !important; }
   .lg-boxed { border-color: #999 !important; }
 }
+
+/* ---------------------------------------------------------------- the survey (app/survey, components/survey, sv-*) */
+/* On smaller screens its link is a row on the Dashboard tab that grows into place, so the page below glides down. */
+.sv-grow { grid-template-rows: 1fr; animation: sv-grow 520ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+.sv-grow > * { min-height: 0; overflow: hidden; }
+@keyframes sv-grow { from { grid-template-rows: 0fr; opacity: 0; } }
+
+/* The page takes on each question's colour; registered, so it glides from one colour to the next. */
+@property --sv-tone { syntax: "<color>"; inherits: true; initial-value: #57e5ea; }
+.sv-page { background: #03070b; transition: --sv-tone 900ms cubic-bezier(0.22, 1, 0.36, 1); }
+.sv-page :is(button, a):focus-visible { outline: 2px solid color-mix(in srgb, var(--sv-tone) 75%, #fff); outline-offset: 3px; }
+
+/* Underwater scene: deep water, a slow aurora in the page's colour, light rays, bubbles, and light following the mouse. */
+.sv-deep {
+  background:
+    radial-gradient(120% 75% at 50% -18%, color-mix(in srgb, var(--sv-tone) 26%, transparent), transparent 62%),
+    radial-gradient(90% 60% at 50% 115%, rgba(14, 116, 144, 0.22), transparent 70%),
+    linear-gradient(180deg, #06111a 0%, #040a10 48%, #02060a 100%);
+}
+.sv-aurora i {
+  position: absolute; border-radius: 9999px; will-change: transform;
+  background: radial-gradient(circle, color-mix(in srgb, var(--sv-tone) 30%, transparent), transparent 68%);
+  animation: sv-drift 19s ease-in-out infinite alternate;
+}
+.sv-aurora i:nth-child(1) { width: 75vmax; height: 75vmax; left: -30vmax; top: -38vmax; }
+.sv-aurora i:nth-child(2) { width: 60vmax; height: 60vmax; right: -26vmax; bottom: -32vmax; opacity: 0.75; animation-duration: 24s; animation-delay: -8s; }
+.sv-aurora i:nth-child(3) { width: 42vmax; height: 42vmax; left: 32%; top: 30%; opacity: 0.6; animation-duration: 31s; background: radial-gradient(circle, rgba(56, 120, 220, 0.2), transparent 68%); }
+@keyframes sv-drift { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(7vmax, 5vmax, 0) scale(1.14); } }
+.sv-vignette { background: radial-gradient(130% 95% at 50% 35%, transparent 55%, rgba(0, 0, 0, 0.6)); }
+.sv-light {
+  position: absolute; left: -280px; top: -280px; width: 560px; height: 560px; border-radius: 9999px; opacity: 0; will-change: transform;
+  background: radial-gradient(circle, color-mix(in srgb, var(--sv-tone) 14%, transparent), transparent 62%);
+  transition: opacity 800ms ease;
+}
+@media (hover: hover) and (pointer: fine) { .sv-page:hover .sv-light { opacity: 1; } }
+
+/* Glass bars with a hairline of the page's colour. */
+.sv-glass { background: linear-gradient(180deg, rgba(3, 8, 12, 0.82), rgba(3, 8, 12, 0.62)); backdrop-filter: blur(18px) saturate(1.5); -webkit-backdrop-filter: blur(18px) saturate(1.5); }
+.sv-header::after, .sv-footer::before {
+  content: ""; position: absolute; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--sv-tone) 50%, transparent), transparent);
+}
+.sv-header::after { bottom: 0; }
+.sv-footer::before { top: 0; }
+.sv-icon-button { border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.04); color: rgb(203 213 225); transition: background-color 0.25s, color 0.25s, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.sv-icon-button:hover { background: rgba(255, 255, 255, 0.1); color: #fff; transform: rotate(90deg); }
+.sv-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.24em; text-transform: uppercase; color: color-mix(in srgb, var(--sv-tone) 65%, #fde68a); }
+.sv-count { animation: sv-count 520ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes sv-count { from { opacity: 0; transform: translateY(80%); filter: blur(3px); } }
+
+/* Progress: a swimmer travelling down the lane rope, past a float for each question. */
+.sv-rope { position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 9999px; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.2) 0 5px, transparent 5px 10px); }
+.sv-lane-fill {
+  position: absolute; left: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 9999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sv-tone) 25%, transparent), var(--sv-tone));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--sv-tone) 70%, transparent);
+  transition: width 900ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.sv-mark {
+  position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px; border-radius: 9999px; background: #071019;
+  border: 1.5px solid rgba(255, 255, 255, 0.28);
+  transition: background-color 0.5s ease 0.35s, border-color 0.5s ease 0.35s, transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.35s;
+}
+.sv-mark.is-done { background: var(--sv-tone); border-color: transparent; }
+.sv-mark.is-now { border-color: var(--sv-tone); transform: scale(1.35); }
+.sv-swimmer {
+  position: absolute; top: 50%; width: 15px; height: 15px; margin: -7.5px; border-radius: 9999px; z-index: 1;
+  background: radial-gradient(circle at 35% 35%, #fff, var(--sv-tone) 62%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--sv-tone) 22%, transparent), 0 0 22px var(--sv-tone);
+  transition: left 900ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.sv-swimmer::before {
+  content: ""; position: absolute; right: 60%; top: 50%; width: 42px; height: 5px; margin-top: -2.5px; border-radius: 9999px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--sv-tone) 65%, transparent));
+}
+.sv-swimmer::after { content: ""; position: absolute; inset: -6px; border-radius: 9999px; border: 1.5px solid var(--sv-tone); animation: sv-ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.sv-swimmer.is-done::after { animation-iteration-count: 3; }
+@keyframes sv-ping { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(1.9); opacity: 0; } }
+
+/* A question arrives: light washes across, the giant number slides in, the words rise out of a blur, answers follow. */
+.sv-wash {
+  position: absolute; inset: -5% -30%; opacity: 0;
+  background: linear-gradient(100deg, transparent 32%, color-mix(in srgb, var(--sv-tone) 16%, transparent) 45%, rgba(255, 255, 255, 0.08) 50%, color-mix(in srgb, var(--sv-tone) 16%, transparent) 55%, transparent 68%);
+  animation: sv-wash 1150ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.sv-wash[data-direction="-1"] { animation-name: sv-wash-back; }
+@keyframes sv-wash { 0% { transform: translateX(-55%); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateX(55%); opacity: 0; } }
+@keyframes sv-wash-back { 0% { transform: translateX(55%); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateX(-55%); opacity: 0; } }
+.sv-bignum {
+  position: absolute; right: 0.75rem; top: 0; pointer-events: none; user-select: none;
+  font-size: clamp(6rem, 22vw, 13rem); font-weight: 800; line-height: 1; letter-spacing: -0.06em; color: transparent;
+  -webkit-text-stroke: 1.5px color-mix(in srgb, var(--sv-tone) 34%, transparent);
+  opacity: 0.6; animation: sv-bignum 1000ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes sv-bignum { from { opacity: 0; transform: scale(0.82); filter: blur(10px); } }
+.sv-kicker { animation: sv-slide 640ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+[data-direction="-1"] .sv-kicker { animation-name: sv-slide-back; }
+@keyframes sv-slide { from { opacity: 0; transform: translate3d(28px, 0, 0); } }
+@keyframes sv-slide-back { from { opacity: 0; transform: translate3d(-28px, 0, 0); } }
+.sv-kicker-icon {
+  color: #04121a; background: linear-gradient(135deg, #fff, var(--sv-tone) 55%);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--sv-tone) 55%, transparent);
+  animation: sv-pop 620ms cubic-bezier(0.34, 1.56, 0.64, 1) 120ms backwards;
+}
+.sv-word { display: inline-block; animation: sv-word 760ms cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(90ms + var(--w, 0) * 55ms); }
+@keyframes sv-word { from { opacity: 0; transform: translate3d(0, 0.5em, 0) rotate(3deg); filter: blur(10px); } }
+.sv-rise { animation: sv-rise 680ms cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(140ms + var(--i, 0) * 60ms); }
+@keyframes sv-rise { from { opacity: 0; transform: translate3d(0, 18px, 0); filter: blur(6px); } }
+.sv-in { animation: sv-in 620ms cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(260ms + var(--i, 0) * 50ms); }
+@keyframes sv-in { from { opacity: 0; transform: translate3d(0, 16px, 0) scale(0.97); } }
+.sv-flip { animation: sv-flip 560ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+@keyframes sv-flip { from { opacity: 0; transform: perspective(400px) translateY(14px) rotateX(-70deg); } }
+.sv-nudge { animation: sv-nudge 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
+@keyframes sv-nudge { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+@keyframes sv-pop { from { opacity: 0; transform: scale(0.4) rotate(-20deg); } }
+@keyframes sv-rotate { to { transform: rotate(360deg); } }
+@keyframes sv-float { 0%, 100% { translate: 0 0; } 50% { translate: 0 -8px; } }
+
+/* Answer cards: glass, a light that follows the mouse, and a ripple from where they're pressed. */
+.sv-option {
+  position: relative; overflow: hidden; isolation: isolate; border-radius: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.09); background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)), rgba(5, 11, 17, 0.62);
+  transition: border-color 0.35s, background-color 0.35s, box-shadow 0.35s, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sv-option:hover { border-color: rgba(255, 255, 255, 0.22); transform: translateY(-2px); }
+.sv-option:active { transform: translateY(0) scale(0.985); }
+.sv-option.is-on {
+  border-color: color-mix(in srgb, var(--sv-tone) 70%, transparent);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--sv-tone) 18%, transparent), color-mix(in srgb, var(--sv-tone) 5%, transparent)), rgba(5, 11, 17, 0.62);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sv-tone) 30%, transparent), 0 16px 40px -14px color-mix(in srgb, var(--sv-tone) 60%, transparent);
+}
+.sv-spot { position: absolute; inset: 0; z-index: -1; opacity: 0; transition: opacity 0.3s; background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.1), transparent 65%); }
+.sv-option:hover .sv-spot, .sv-chip:hover .sv-spot { opacity: 1; }
+.sv-ripple {
+  position: absolute; z-index: -1; width: 24px; height: 24px; margin: -12px; border-radius: 9999px; pointer-events: none;
+  background: color-mix(in srgb, var(--sv-tone) 45%, transparent); animation: sv-ripple 700ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes sv-ripple { from { transform: scale(0); opacity: 0.75; } to { transform: scale(20); opacity: 0; } }
+.sv-option-icon { color: rgb(203 213 225); background: rgba(255, 255, 255, 0.06); transition: background-color 0.35s, color 0.35s, box-shadow 0.35s; }
+.sv-option:hover .sv-option-icon { color: #fff; }
+.sv-option.is-on .sv-option-icon {
+  color: #04121a; background: linear-gradient(135deg, #fff, var(--sv-tone) 60%); box-shadow: 0 0 20px color-mix(in srgb, var(--sv-tone) 50%, transparent);
+  animation: sv-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.sv-tick-badge { border: 1.5px solid rgba(255, 255, 255, 0.22); color: transparent; transition: background-color 0.3s, border-color 0.3s, color 0.3s; }
+.sv-tick-badge svg { transform: scale(0); transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.is-on > .sv-tick-badge { background: var(--sv-tone); border-color: transparent; color: #04121a; }
+.is-on > .sv-tick-badge svg { transform: scale(1); }
+
+/* Picks: glass chips that light up in the page's colour. */
+.sv-chip {
+  position: relative; overflow: hidden; isolation: isolate; border: 1px solid rgba(255, 255, 255, 0.1); background: linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04)), rgba(5, 11, 17, 0.62); color: rgb(203 213 225);
+  transition: border-color 0.3s, background-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s;
+}
+.sv-chip:hover { border-color: rgba(255, 255, 255, 0.25); color: #fff; transform: translateY(-2px); }
+.sv-chip.is-on {
+  color: #fff; border-color: color-mix(in srgb, var(--sv-tone) 65%, transparent); background: linear-gradient(color-mix(in srgb, var(--sv-tone) 18%, transparent), color-mix(in srgb, var(--sv-tone) 18%, transparent)), rgba(5, 11, 17, 0.62);
+  box-shadow: 0 10px 26px -10px color-mix(in srgb, var(--sv-tone) 70%, transparent);
+}
+.sv-chip.is-blocked { color: rgb(71 85 105); border-color: rgba(255, 255, 255, 0.05); transform: none; }
+.sv-chip.is-blocked .sv-chip-icon, .sv-chip.is-blocked .sv-tick-badge { opacity: 0.45; }
+.sv-chip-icon { background: rgba(255, 255, 255, 0.07); transition: background-color 0.3s, color 0.3s; }
+.sv-chip.is-on .sv-chip-icon { background: var(--sv-tone); color: #04121a; animation: sv-pop 460ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+.sv-chip .sv-tick-badge { border-width: 1.5px; }
+.sv-pip { width: 7px; height: 7px; border-radius: 9999px; background: rgba(255, 255, 255, 0.14); transition: background-color 0.3s, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.sv-pip.is-on { background: var(--sv-tone); transform: scale(1.3); box-shadow: 0 0 10px var(--sv-tone); }
+
+/* Stars: they fill like liquid, one after another, and the chosen one throws sparks. */
+.sv-star { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.sv-star:hover { transform: scale(1.12) rotate(-6deg); }
+.sv-star:active { transform: scale(0.92); }
+/* The glow is on a wrapper, so it follows the star's shape rather than the rectangle the fill is clipped to. */
+.sv-star-glow { display: block; filter: drop-shadow(0 0 12px rgba(252, 211, 77, 0.55)); }
+.sv-star-on { display: block; animation: sv-star-fill 560ms cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(var(--i, 0) * 70ms); }
+@keyframes sv-star-fill {
+  0% { clip-path: inset(100% 0 0 0); transform: scale(0.7) rotate(-16deg); }
+  60% { clip-path: inset(0 0 0 0); transform: scale(1.18) rotate(5deg); }
+  100% { clip-path: inset(0 0 0 0); transform: none; }
+}
+.sv-sparks { position: absolute; inset: 0; pointer-events: none; }
+.sv-sparks i {
+  position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 9999px;
+  background: radial-gradient(circle, #fff, #fcd34d 60%); box-shadow: 0 0 8px #fcd34d;
+  animation: sv-spark 760ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--i, 0) * 70ms + 160ms) both;
+}
+@keyframes sv-spark { from { transform: rotate(var(--a)) translateY(0) scale(1.2); opacity: 1; } to { transform: rotate(var(--a)) translateY(-54px) scale(0); opacity: 0; } }
+.sv-rating-word { text-shadow: 0 0 34px currentColor; }
+
+/* 0-10: numbers on a band from rose to emerald; the one chosen lifts and glows in its colour. */
+.sv-score {
+  position: relative; border: 1px solid rgba(255, 255, 255, 0.09); background: linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04)), rgba(5, 11, 17, 0.62); color: rgb(203 213 225);
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.3s, color 0.3s, box-shadow 0.3s, border-color 0.3s;
+}
+.sv-score:hover { color: #fff; border-color: color-mix(in srgb, var(--band) 60%, transparent); transform: translateY(-2px); }
+.sv-score.is-on {
+  color: #04121a; background: var(--band); border-color: transparent; transform: translateY(-6px) scale(1.08);
+  box-shadow: 0 14px 30px -8px color-mix(in srgb, var(--band) 85%, transparent);
+}
+.sv-score-ring { position: absolute; inset: -4px; border-radius: 15px; border: 2px solid var(--band); pointer-events: none; animation: sv-score-ring 760ms ease-out forwards; }
+@keyframes sv-score-ring { from { transform: scale(0.85); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+.sv-band { background: linear-gradient(90deg, #fb7185 0 60%, #fbbf24 66% 79%, #34d399 85%); }
+
+/* Fields and the contact row. */
+.sv-field {
+  border-radius: 1rem; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(6, 12, 18, 0.72); color: #fff;
+  transition: border-color 0.3s, box-shadow 0.3s, background-color 0.3s;
+}
+.sv-field:hover { border-color: rgba(255, 255, 255, 0.2); }
+.sv-field:focus-visible { outline: none; border-color: color-mix(in srgb, var(--sv-tone) 70%, transparent); background: rgba(8, 15, 22, 0.82); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sv-tone) 18%, transparent); }
+.sv-toggle-row { border: 1px solid rgba(255, 255, 255, 0.09); background: linear-gradient(rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.035)), rgba(5, 11, 17, 0.62); transition: border-color 0.3s; }
+.sv-toggle-row:hover { border-color: rgba(255, 255, 255, 0.2); }
+
+/* Buttons: the main one glows in the page's colour, with light sweeping across it. */
+.sv-cta {
+  position: relative; overflow: hidden; isolation: isolate; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  border-radius: 9999px; font-weight: 700; color: #04121a;
+  background: linear-gradient(120deg, var(--sv-tone), color-mix(in srgb, var(--sv-tone) 62%, #fff));
+  box-shadow: 0 14px 34px -12px color-mix(in srgb, var(--sv-tone) 75%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s, background 0.3s, color 0.3s;
+}
+.sv-cta:hover { transform: translateY(-2px); box-shadow: 0 20px 44px -12px color-mix(in srgb, var(--sv-tone) 85%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.55); }
+.sv-cta:active { transform: translateY(0) scale(0.97); }
+.sv-cta::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.55) 50%, transparent 65%);
+  transform: translateX(-120%); animation: sv-shine 3.6s ease-in-out infinite;
+}
+@keyframes sv-shine { 0%, 60% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
+.sv-cta[aria-disabled="true"] { color: rgb(148 163 184); background: rgba(255, 255, 255, 0.07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); transform: none; }
+.sv-cta[aria-disabled="true"]::after { display: none; }
+.sv-cta-ghost { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; border-radius: 9999px; font-weight: 600; color: #fff; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.04); transition: background-color 0.3s, border-color 0.3s; }
+.sv-cta-ghost:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 255, 255, 0.28); }
+.sv-kbd { border: 1px solid rgba(255, 255, 255, 0.16); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: rgb(203 213 225); background: rgba(255, 255, 255, 0.05); }
+.sv-arrow { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.group:hover .sv-arrow { transform: translateX(4px); }
+.sv-fly { animation: sv-fly 900ms cubic-bezier(0.55, 0, 0.45, 1) infinite; }
+@keyframes sv-fly { 0% { transform: translate(0, 0); opacity: 1; } 45% { transform: translate(14px, -12px) scale(0.7); opacity: 0; } 46% { transform: translate(-12px, 10px) scale(0.7); opacity: 0; } 100% { transform: translate(0, 0); opacity: 1; } }
+
+/* Intro and thank-you: sonar rings, a halo, orbiting stars and a glowing core. */
+.sv-hero-title { font-size: clamp(2.1rem, 6.6vw, 3.9rem); line-height: 1.06; font-weight: 800; letter-spacing: -0.035em; text-wrap: balance; }
+.sv-hero-title .sv-word {
+  padding-bottom: 0.08em; color: transparent; -webkit-background-clip: text; background-clip: text;
+  background-image: linear-gradient(180deg, #fff 30%, color-mix(in srgb, var(--sv-tone) 70%, #fff));
+}
+.sv-sonar { position: absolute; inset: 22%; border-radius: 9999px; border: 1.5px solid color-mix(in srgb, var(--sv-tone) 60%, transparent); opacity: 0; animation: sv-sonar 3.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite; }
+@keyframes sv-sonar { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(2); opacity: 0; } }
+.sv-halo {
+  border-radius: 9999px;
+  background: conic-gradient(from 0deg, transparent, color-mix(in srgb, var(--sv-tone) 80%, transparent), transparent 45%, transparent 55%, color-mix(in srgb, var(--sv-tone) 50%, transparent), transparent);
+  -webkit-mask: radial-gradient(circle, transparent 63%, #000 64%, #000 68%, transparent 69%); mask: radial-gradient(circle, transparent 63%, #000 64%, #000 68%, transparent 69%);
+  animation: sv-rotate 7s linear infinite;
+}
+.sv-orbit { --r: 78px; animation: sv-rotate 26s linear infinite; }
+@media (min-width: 640px) { .sv-orbit { --r: 94px; } }
+.sv-orbit > i { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px; display: grid; place-items: center; transform: rotate(var(--a)) translateY(calc(var(--r) * -1)); }
+.sv-orbit > i > svg { animation: sv-rotate 26s linear infinite reverse; filter: drop-shadow(0 0 6px rgba(253, 230, 138, 0.8)); }
+.sv-core {
+  background: radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.9), color-mix(in srgb, var(--sv-tone) 85%, #fff) 28%, color-mix(in srgb, var(--sv-tone) 70%, #02060a) 100%);
+  box-shadow: 0 0 70px color-mix(in srgb, var(--sv-tone) 55%, transparent), inset 0 -10px 24px rgba(0, 0, 0, 0.3), inset 0 4px 12px rgba(255, 255, 255, 0.5);
+  animation: sv-float 5s ease-in-out infinite, sv-pop 900ms cubic-bezier(0.34, 1.56, 0.64, 1) 100ms backwards;
+}
+.sv-notice-icon { border: 1px solid rgba(255, 255, 255, 0.1); background: linear-gradient(160deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)); box-shadow: 0 0 50px -10px color-mix(in srgb, var(--sv-tone) 60%, transparent); animation: sv-pop 700ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+.sv-notice-icon .sv-sonar { inset: 0; border-radius: 1.75rem; }
+.sv-tick-circle { fill: rgba(52, 211, 153, 0.14); stroke: #34d399; stroke-width: 2.5; stroke-dasharray: 151; stroke-dashoffset: 151; animation: sv-draw 750ms cubic-bezier(0.65, 0, 0.35, 1) 200ms forwards; }
+.sv-tick-path { fill: none; stroke: #ecfdf5; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 36; stroke-dashoffset: 36; animation: sv-draw 480ms cubic-bezier(0.65, 0, 0.35, 1) 850ms forwards; }
+@keyframes sv-draw { to { stroke-dashoffset: 0; } }
+.sv-medal-core { background: radial-gradient(circle at 35% 28%, rgba(52, 211, 153, 0.35), rgba(6, 30, 26, 0.9) 70%); box-shadow: 0 0 80px rgba(52, 211, 153, 0.45), inset 0 0 0 1px rgba(110, 231, 183, 0.35); animation: sv-pop 800ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+.sv-burst i {
+  position: absolute; left: 50%; top: 50%; width: var(--s, 8px); height: var(--s, 8px); margin: calc(var(--s, 8px) / -2); border-radius: 9999px;
+  background: var(--c); box-shadow: 0 0 10px var(--c); animation: sv-burst 1300ms cubic-bezier(0.15, 0.85, 0.25, 1) 700ms both;
+}
+@keyframes sv-burst { from { transform: rotate(var(--a)) translateY(0) scale(0.3); opacity: 1; } to { transform: rotate(var(--a)) translateY(calc(var(--d, 110px) * -1)) scale(1); opacity: 0; } }
+.sv-confetti i {
+  position: absolute; top: -6%; left: var(--x); width: var(--w); height: var(--h); border-radius: var(--r); background: var(--c); opacity: 0;
+  animation: sv-confetti var(--t) cubic-bezier(0.25, 0.6, 0.35, 1) var(--d) forwards;
+}
+@keyframes sv-confetti {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translate3d(var(--dx), 112vh, 0) rotate(var(--rot)); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sv-grow, .sv-page, .sv-aurora i, .sv-count, .sv-swimmer::after, .sv-bignum, .sv-kicker, .sv-kicker-icon, .sv-word, .sv-rise, .sv-in, .sv-flip, .sv-nudge,
+  .sv-option.is-on .sv-option-icon, .sv-chip.is-on .sv-chip-icon, .sv-star-on, .sv-score-ring, .sv-cta::after, .sv-fly, .sv-sonar, .sv-halo, .sv-orbit,
+  .sv-orbit > i > svg, .sv-core, .sv-notice-icon, .sv-medal-core { animation: none; }
+  .sv-page, .sv-lane-fill, .sv-mark, .sv-swimmer, .sv-option, .sv-chip, .sv-star, .sv-score, .sv-cta, .sv-icon-button { transition: none; }
+  .sv-tick-circle, .sv-tick-path { animation: none; stroke-dashoffset: 0; }
+  .sv-wash, .sv-ripple, .sv-sparks, .sv-burst, .sv-confetti, .sv-light { display: none; }
+}

@@ -20,6 +20,7 @@ const FALLBACK_MS = 6000
 const LABELS: [RegExp, string][] = [
   [/^\/$/, "Home"], [/^\/training-plans/, "Training Plans"], [/^\/video-analysis/, "Video Analysis"], [/^\/dashboard/, "Your dashboard"],
   [/^\/auth/, "Welcome"], [/^\/onboarding/, "Plan setup"], [/^\/coach-chat/, "Coach chat"], [/^\/payment/, "Payment"],
+  [/^\/survey/, "Rate SwimGPT"],
 ]
 const labelFor = (path: string) => LABELS.find(([pattern]) => pattern.test(path))?.[1] ?? "SwimGPT"
 // One tile of wave crest; both ends sit at y = 60 with matching slopes, so tiles repeat seamlessly.

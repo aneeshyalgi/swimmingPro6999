@@ -46,6 +46,7 @@ import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
 import { SubscriptionDialog } from "@/components/subscription-dialog"
 import { ChangePasswordDialog } from "@/components/change-password-dialog"
 import { WorkoutBuilderSection } from "@/components/workout-builder-section"
+import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
 import { Banner } from "@/components/training-ui"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
 
@@ -122,6 +123,7 @@ export default function DashboardPage() {
   // Summary refreshes can overlap (ticks save in the background): only the latest one is shown, so a slow older one
   // can't bring back a summary from before a later change.
   const overviewRequest = useRef(0)
+  const survey = useSurvey(userKey !== null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -493,6 +495,8 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Below lg the survey's link is on the Dashboard tab instead, where there's room for it. */}
+                  <SurveyLink invite={survey} className="hidden lg:flex" />
                   {coach && (
                     <div className="flex h-9 items-center rounded-full border border-white/10 bg-white/[0.03] transition-colors hover:border-white/20">
                       <Link href="/coach-chat" aria-label={`Chat with ${coach}`}
@@ -607,6 +611,7 @@ export default function DashboardPage() {
                     setSetupStep(target === "gym-generate" ? "gym" : target === "add-meet" ? "meet" : "swim")
                   }}
                 />
+                <SurveyLink invite={survey} variant="dashboard" className="lg:hidden" />
                 <DashboardOverview data={overview} onViewToday={() => setActiveTab("swim")} />
               </TabsContent>
               <TabsContent value="swim" className="mt-0 space-y-6">
