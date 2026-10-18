@@ -40,6 +40,7 @@ const sections: LegalSection[] = [
               <tr><td>Mind and Nutrition answers, check-ins</td><td>Tailor mental and nutrition guidance</td><td>Art. 9(2)(a), 6(1)(a): your consent</td></tr>
               <tr><td>A parent or guardian&apos;s consent (under 16)</td><td>Prove that they agreed</td><td>Art. 6(1)(c), 7(1), 8</td></tr>
               <tr><td>Chats, voice and video frames</td><td>AI coaching answers</td><td>Art. 6(1)(b)</td></tr>
+              <tr><td>Survey answers, if you take part</td><td>Improve SwimGPT</td><td>Art. 6(1)(f); being contacted about them: 6(1)(a)</td></tr>
               <tr><td>Payment data</td><td>Subscriptions and purchases, bookkeeping</td><td>Art. 6(1)(b) and (c)</td></tr>
             </tbody>
           </table>
@@ -78,6 +79,7 @@ const sections: LegalSection[] = [
         <ul>
           <li>your sign-in session, so you stay signed in;</li>
           <li>your unfinished onboarding answers, so you can continue later;</li>
+          <li>your unfinished survey answers, so you can continue later (see <a href="#survey">Feedback survey</a>);</li>
           <li>your coach chat history (your conversations are saved on your device, not on our servers);</li>
           <li>your chosen coach and a few app settings, and a note of checkouts in progress;</li>
           <li>a random visitor ID and whether you&apos;ve used the free video analysis (see <a href="#video-limit">Free video analysis</a>).</li>
@@ -189,6 +191,17 @@ const sections: LegalSection[] = [
     ),
   },
   {
+    id: "survey",
+    title: "Feedback survey",
+    body: (
+      <>
+        <p>In your dashboard we may ask you to rate SwimGPT and answer a few questions about it. If you take part, we keep your answers with your account: your rating, how often you use SwimGPT and how your training has changed, the features you use and your rating of each, what you like, what we should improve and build next, how likely you are to recommend SwimGPT, anything you write in your own words, and whether we may contact you about your answers.</p>
+        <p>We use them only to improve SwimGPT. The legal basis is our legitimate interest in learning what works for our athletes and improving SwimGPT (Art. 6(1)(f) GDPR). Taking part is voluntary: you can skip the survey, and nothing in SwimGPT depends on it. Please don&apos;t include health information in what you write. If you allow us to contact you about your answers, we may email you about them (Art. 6(1)(a) GDPR); you can withdraw this at any time by email.</p>
+        <p>Until you send them, unfinished answers stay in your browser (see <a href="#device">Cookies and storage on your device</a>). We keep your answers until you delete your account, and delete them sooner if you ask us to.</p>
+      </>
+    ),
+  },
+  {
     id: "other-providers",
     title: "Content from other providers",
     body: (
@@ -239,6 +252,7 @@ const sections: LegalSection[] = [
           <tbody>
             <tr><td>Account, swimming profile and training data</td><td>Until you delete your account; deleted within 30 days of your request</td></tr>
             <tr><td>Mind and Nutrition answers and check-ins</td><td>Until you withdraw consent or delete your account; mood check-ins only the last 14, water log the last 7 days</td></tr>
+            <tr><td>Feedback survey answers</td><td>Until you delete your account, or sooner if you ask us</td></tr>
             <tr><td>A parent or guardian&apos;s consent</td><td>While the account exists and 3 years after, to be able to prove it (§ 195 BGB)</td></tr>
             <tr><td>Server logs</td><td>At most 30 days</td></tr>
             <tr><td>Free video analysis: network code / visitor ID and account notes</td><td>30 days / as long as we offer the free analysis</td></tr>
