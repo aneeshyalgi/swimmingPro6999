@@ -36,6 +36,7 @@ from app.coach_audio import router as coach_audio_router
 from app.stroke_detection import router as stroke_detection_router
 from app.gym import gym_week, router as gym_router
 from app.consents import PARENTAL_CONSENT_AGE, Guardian, record_new_athlete, router as consents_router
+from app.survey import router as survey_router
 from app.payments import PAYMENT_PLANS, adopt_subscription, billing_account, is_paid, record_payment, subscription_summary
 from app.video_access import checked_access, identify, release, start_analysis
 from app.swim_times import with_display_times
@@ -103,6 +104,7 @@ app.include_router(plan_store_router)
 app.include_router(coach_audio_router)
 app.include_router(stroke_detection_router)
 app.include_router(consents_router)
+app.include_router(survey_router)
 
 
 @app.get("/health")

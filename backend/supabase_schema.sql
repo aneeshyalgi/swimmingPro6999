@@ -386,5 +386,38 @@ create index if not exists idx_user_plan_purchases_auth_user_id
 
 alter table public.user_plan_purchases enable row level security;
 
+-- Platform survey (backend/app/survey.py): from the dashboard, athletes rate SwimGPT from 1 to 5 and answer a few
+-- questions about it. One row per athlete per survey round (survey_version); sending it again updates that row. What
+-- each column holds is in migrations/2026-10-18_add_platform_surveys.sql. Only the backend (secret key) reads or writes
+-- it: row level security is on with no policies, and the public API roles have no access.
+create table if not exists public.user_platform_surveys (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.user_profiles(id) on delete cascade,
+  survey_version text not null,
+  rating smallint not null check (rating between 1 and 5),
+  usage_frequency text,
+  training_impact text,
+  features_used text[] not null default '{}',
+  feature_ratings jsonb not null default '{}'::jsonb check (jsonb_typeof(feature_ratings) = 'object'),
+  liked text[] not null default '{}',
+  liked_note text,
+  improve text[] not null default '{}',
+  improve_note text,
+  wishlist text[] not null default '{}',
+  wishlist_note text,
+  recommend smallint check (recommend between 0 and 10),
+  comments text,
+  contact_ok boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists idx_user_platform_surveys_user_version
+  on public.user_platform_surveys (user_id, survey_version);
+
+alter table public.user_platform_surveys enable row level security;
+revoke all on table public.user_platform_surveys from anon, authenticated;
+grant select, insert, update, delete on table public.user_platform_surveys to service_role;
+
 -- Make the Supabase API see new columns straight away (otherwise it can report them missing until its cache refreshes).
 notify pgrst, 'reload schema';
