@@ -708,7 +708,6 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
                 About {coachName}
               </p>
               <p className="mt-3 text-sm leading-6 text-slate-300">{info.summary}</p>
-              {info.inspired_by && <p className="mt-2 text-xs text-slate-500">Inspired by {info.inspired_by}</p>}
               <p className="mt-4 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 <Target className="h-3.5 w-3.5" />
                 Main events

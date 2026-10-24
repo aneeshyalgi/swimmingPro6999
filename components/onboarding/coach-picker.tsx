@@ -146,7 +146,6 @@ export function CoachPicker({ answers, value, onChange, invalid }: {
                 <div className="min-w-0">
                   <h3 className="text-lg font-bold leading-tight text-white">{coach.name}</h3>
                   <p className="text-sm text-slate-300">{coach.title}</p>
-                  {coach.inspired_by && <p className="text-xs text-slate-500">Inspired by {coach.inspired_by}</p>}
                 </div>
               </div>
 

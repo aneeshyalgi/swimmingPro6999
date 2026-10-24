@@ -460,7 +460,6 @@ function Details({ coach, current, direction }: { coach: CoachProfile; current: 
       </p>
       <h3 className="csw-name mt-1 text-4xl font-bold leading-[1.05] tracking-tight sm:text-5xl">{coach.name}</h3>
       <p className="mt-2 text-base font-medium text-slate-200 sm:text-lg">{coach.title}</p>
-      {coach.inspired_by && <p className="mt-0.5 text-xs text-slate-500">Program inspired by {coach.inspired_by}</p>}
       <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400">{coach.summary}</p>
 
       <div className="csw-stagger mt-5 space-y-2">

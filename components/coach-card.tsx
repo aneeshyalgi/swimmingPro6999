@@ -86,7 +86,6 @@ export function CoachCard({ coach, index, label, alwaysOpen = false }: { coach: 
             <h3 className="mt-1 text-2xl font-bold text-white">{coach.name}</h3>
             <p className="text-sm text-slate-300">
               {coach.title}
-              {coach.inspired_by && <span className="text-slate-500"> · inspired by {coach.inspired_by}</span>}
             </p>
 
             {(coach.covered_events.length > 0 || coach.supported_events.length > 0) && (
