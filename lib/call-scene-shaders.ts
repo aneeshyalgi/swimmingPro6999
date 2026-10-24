@@ -6,6 +6,11 @@
  * and uA / uB are the coach's own colours. MAIN reveals a scene inside (or outside) a growing circle, with a liquid
  * wavefront, when the athlete switches scenes. Scenes may use dFdx / dFdy (OES_standard_derivatives, which nearly every
  * browser has; where it's missing, a scene that uses them fails to compile and can't be picked).
+ *
+ * The scenes are illustrations, not attempts to look real: flat shapes, clean edges and a few colours (TOON draws them).
+ * Some GPU drivers (Direct3D's, under ANGLE on Windows) take many seconds to prepare a shader whose loops hold branches
+ * or calls with loops of their own, so the scenes draw every repeated thing either written out or with branch-free
+ * loops, and pick the nearest of a few things rather than drawing them all.
  */
 
 export const COMMON = /* glsl */ `#extension GL_OES_standard_derivatives : enable
@@ -36,7 +41,8 @@ float hash11(float x) { return hash12(vec2(x, x * 0.37 + 4.1)); }
 
 float noise(vec2 p) {
   vec2 i = floor(p);
-  vec2 f = fract(p);
+  // (Not fract: some GPUs round it apart from floor right on a cell's edge, leaving a line of wrong pixels there.)
+  vec2 f = p - i;
   vec2 u = f * f * (3.0 - 2.0 * f);
   float a = hash12(i);
   float b = hash12(i + vec2(1.0, 0.0));
@@ -46,12 +52,6 @@ float noise(vec2 p) {
 }
 
 const mat2 OCTAVE = mat2(0.8, 0.6, -0.6, 0.8);
-float fbm(vec2 p) {
-  float v = 0.0;
-  float a = 0.5;
-  for (int i = 0; i < 5; i++) { v += a * noise(p); p = OCTAVE * p * 2.02 + 3.17; a *= 0.5; }
-  return v / 0.97;
-}
 float fbm3(vec2 p) {
   float v = 0.0;
   float a = 0.5;
@@ -85,24 +85,6 @@ vec3 stars(vec2 p, float t, float density) {
   }
   return acc;
 }
-
-// A few brighter stars with soft diffraction spikes.
-vec3 brightStars(vec2 p, float t, float density) {
-  vec2 q = p * 6.0;
-  vec2 id = floor(q);
-  float h = hash12(id + 71.0);
-  if (h > density) return vec3(0.0);
-  vec2 o = (hash22(id + 5.0) - 0.5) * 0.6;
-  vec2 d = (fract(q) - 0.5 - o) / 6.0 * uRes.y;
-  float r2 = dot(d, d);
-  float s = uScale;
-  float pulse = 0.65 + 0.35 * sin(t * (0.6 + h * 2.0) + h * 30.0);
-  float core = exp(-r2 / (2.5 * s * s + 0.6));
-  float spikes = exp(-abs(d.x) / (0.55 * s + 0.25)) * exp(-abs(d.y) / (16.0 * s)) + exp(-abs(d.y) / (0.55 * s + 0.25)) * exp(-abs(d.x) / (16.0 * s));
-  float halo = exp(-sqrt(r2) / (9.0 * s)) * 0.12;
-  vec3 tint = mix(vec3(0.72, 0.85, 1.0), vec3(1.0, 0.86, 0.7), fract(h * 9.0));
-  return tint * (core * 1.4 + spikes * 0.45 + halo) * pulse;
-}
 `
 
 export const MAIN = /* glsl */ `
@@ -129,29 +111,92 @@ void main() {
 }
 `
 
-/** A swimmer seen from above or below, head toward +x, swimming freestyle (body lengths are about 0.46). */
-export const SWIMMER = /* glsl */ `
-// An arm: pulled back under the body, then swung wide and forward through the air.
-float arm(vec2 p, float side, float phase) {
-  float pull = step(phase, 0.5);
-  float u = fract(phase * 2.0);
-  vec2 hand = mix(vec2(mix(-0.05, 0.26, u), side * (0.03 + 0.11 * sin(u * PI))),
-                  vec2(mix(0.26, -0.05, u), side * (0.035 - 0.022 * sin(u * PI))), pull);
-  vec2 shoulder = vec2(0.06, side * 0.036);
-  vec2 elbow = (shoulder + hand) * 0.5 + vec2(0.0, side * 0.025 * (1.0 - abs(hand.x - 0.1) / 0.16));
-  return min(segment(p, shoulder, elbow) - 0.014, segment(p, elbow, hand) - 0.011);
+/**
+ * Flat, illustrated drawing for the scenes: shapes filled and outlined from their signed distances with edges a pixel
+ * soft, cartoon clouds, bubbles and twinkles, and cel-shaded caustics. PX is a pixel in the scene's units: a scene
+ * that uses these sets it before drawing.
+ */
+export const TOON = /* glsl */ `
+float PX;
+float fill(float d) { return 1.0 - smoothstep(-PX, PX, d); }
+float outline(float d, float w) { return 1.0 - smoothstep(w - PX, w + PX, abs(d)); }
+float sdBox(vec2 p, vec2 b) {
+  vec2 d = abs(p) - b;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
 }
-// How far p is outside the swimmer.
-float swimmer(vec2 p, float t) {
-  // The torso, broad at the shoulders and narrower at the hips, and the head.
-  float d = segment(p, vec2(-0.05, 0.0), vec2(0.06, 0.0)) - mix(0.03, 0.044, smoothstep(-0.05, 0.05, p.x));
-  d = min(d, length((p - vec2(0.112, 0.0)) * vec2(1.0, 1.15)) - 0.02);
-  // The legs, kicking: the feet flick in and out a little.
-  float taper = mix(0.019, 0.008, clamp((-p.x - 0.05) / 0.15, 0.0, 1.0));
-  d = min(d, segment(p, vec2(-0.05, 0.014), vec2(-0.2, 0.013 + 0.006 * sin(t * 9.0 + 1.6))) - taper);
-  d = min(d, segment(p, vec2(-0.05, -0.014), vec2(-0.2, -0.013 - 0.006 * sin(t * 9.0 - 1.6))) - taper);
-  float stroke = fract(t * 0.42);
-  return min(d, min(arm(p, 1.0, stroke), arm(p, -1.0, fract(stroke + 0.5))));
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+// A puffy cartoon cloud about s across, flat along the bottom.
+float cloud(vec2 p, float s) {
+  float d = length(p - vec2(-0.32, -0.02) * s) - 0.2 * s;
+  d = smin(d, length(p - vec2(-0.05, 0.08) * s) - 0.27 * s, 0.06 * s);
+  d = smin(d, length(p - vec2(0.27, 0.0) * s) - 0.19 * s, 0.06 * s);
+  return max(d, -(p.y + 0.12 * s));
+}
+// A palm's crown seen from the side, about 0.34 across: a star of leaves drooping under their weight, the lower ones
+// most, turned a little by sway. How far q is outside it.
+float palmCrown(vec2 q, float sway) {
+  q.y += 2.6 * q.x * q.x + 1.6 * max(-q.y, 0.0) * abs(q.x);
+  float a = atan(q.y, q.x + 1e-5) + sway;
+  float reach = 0.17 * (0.18 + 0.82 * pow(abs(cos(a * 4.0 + 0.4)), 2.5)) * (0.85 + 0.15 * step(q.y, 0.0));
+  return (length(q) - reach) * 0.6;
+}
+// A cartoon bubble of radius r: x is its ring, y its glint.
+vec2 bubble(vec2 p, float r) {
+  float d = length(p) - r;
+  return vec2(outline(d, max(r * 0.12, PX * 0.8)) + fill(d) * 0.12, fill(length(p - vec2(-0.35, 0.38) * r) - r * 0.22));
+}
+// A four-pointed twinkle, s across.
+float twinkle(vec2 p, float s) {
+  vec2 a = abs(p) / s;
+  return fill((pow(pow(a.x, 0.6) + pow(a.y, 0.6), 1.667) - 0.5) * s);
+}
+// Cel-shaded caustics: the bright wiggly lines sunlight draws through ripples, like Wind Waker's water, in cells of
+// about 1. w is the lines' width and aa a pixel, both in cells.
+float toonCaustic(vec2 p, float t, float w, float aa) {
+  p += 0.16 * vec2(sin(p.y * 2.3 + t * 0.7), sin(p.x * 2.1 - t * 0.6));
+  vec2 n = floor(p);
+  vec2 f = p - n;
+  float f1 = 8.0;
+  float f2 = 8.0;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 h = hash22(n + g);
+      float d = length(g + 0.5 + 0.38 * sin(t * (0.5 + 0.5 * h.yx) + TAU * h) - f);
+      if (d < f1) { f2 = f1; f1 = d; }
+      else if (d < f2) { f2 = d; }
+    }
+  }
+  return 1.0 - smoothstep(w - aa, w + aa, f2 - f1);
+}
+`
+
+/** A bird in flight seen from in front, for the scenes with birds crossing their skies. */
+export const BIRD = /* glsl */ `
+float bone(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h) - mix(ra, rb, h);
+}
+// A bird about 2 wide: wings in two joints that flap in bursts with glides between, the outer half trailing the inner,
+// its body bobbing against each beat. How far q is outside it (in its own units).
+float flyingBird(vec2 q, float t, float seed) {
+  float flap = smoothstep(-0.3, 0.3, sin(t * 0.5 + seed * 2.3));
+  float phase = t * 6.5 + seed * 4.0;
+  q.y += 0.08 * sin(phase) * flap;
+  q.x = abs(q.x);
+  float a1 = 0.2 + 0.65 * sin(phase) * flap;
+  float a2 = a1 - 0.35 - 0.6 * sin(phase - 1.2) * flap;
+  vec2 shoulder = vec2(0.06, 0.0);
+  vec2 wrist = shoulder + 0.45 * vec2(cos(a1), sin(a1));
+  vec2 tip = wrist + 0.5 * vec2(cos(a2), sin(a2));
+  float wings = min(bone(q, shoulder, wrist, 0.1, 0.075), bone(q, wrist, tip, 0.075, 0.015));
+  float body = (length(q / vec2(0.1, 0.15)) - 1.0) * 0.1;
+  return min(wings, min(body, length(q - vec2(0.0, 0.13)) - 0.07));
 }
 `
 
@@ -175,703 +220,630 @@ vec3 scene(vec2 fc) {
 }
 `
 
-/** Underwater in the pool: sunlight caustics on the tiles, the lane line running away, rays, rising bubbles and specks
- *  drifting, and now and then a swimmer gliding past off a turn, dolphin-kicking, their shadow sweeping the floor. */
-const DEEP_END = /* glsl */ `${SWIMMER}
-// A swimmer from the side, head toward +x, arms stretched out in front, legs together beating a dolphin kick: how far
-// p is outside them (body lengths about 0.47).
-float sideSwimmer(vec2 p, float t) {
-  float kick = t * 7.0;
-  // The kick runs down the body as a wave, growing toward the feet.
-  float wave = 0.022 * sin(kick - p.x * 9.0) * smoothstep(0.04, -0.2, p.x);
-  vec2 q = vec2(p.x, p.y - wave);
-  float d = segment(q, vec2(0.06, 0.012), vec2(0.27, 0.004)) - 0.011;
-  d = min(d, length((q - vec2(0.11, 0.016)) * vec2(1.0, 1.1)) - 0.021);
-  d = min(d, segment(q, vec2(-0.05, 0.0), vec2(0.07, 0.006)) - mix(0.026, 0.032, smoothstep(-0.05, 0.05, q.x)));
-  d = min(d, segment(q, vec2(-0.05, 0.0), vec2(-0.2, 0.0)) - mix(0.019, 0.008, clamp((-q.x - 0.05) / 0.15, 0.0, 1.0)));
-  // The feet, pointed, flicking at the end of the kick.
-  float flick = 0.012 * sin(kick - 2.2);
-  return min(d, segment(q, vec2(-0.2, 0.0), vec2(-0.235, flick)) - 0.006);
-}
-float causticCell(vec2 p, float t) {
-  vec2 n = floor(p);
-  vec2 f = fract(p);
-  float f1 = 8.0;
-  float f2 = 8.0;
-  for (int j = -1; j <= 1; j++) {
-    for (int i = -1; i <= 1; i++) {
-      vec2 g = vec2(float(i), float(j));
-      vec2 h = hash22(n + g);
-      vec2 o = 0.5 + 0.42 * sin(t * (0.55 + 0.6 * h.yx) + TAU * h);
-      float d = length(g + o - f);
-      if (d < f1) { f2 = f1; f1 = d; }
-      else if (d < f2) { f2 = d; }
-    }
-  }
-  float e = f2 - f1;
-  return pow(clamp(1.0 - e * 1.8, 0.0, 1.0), 7.0) + 0.16 * pow(clamp(1.0 - e, 0.0, 1.0), 3.0);
-}
-float caustics(vec2 p, float t) {
-  p += (vec2(noise(p * 0.7 + vec2(t * 0.11, 0.0)), noise(p * 0.7 + vec2(5.3, -t * 0.09))) - 0.5) * 1.1;
-  float a = causticCell(p, t);
-  float b = causticCell(p * 1.31 + vec2(4.7, 1.9), t * 1.17 + 2.0);
-  return a * 0.7 + b * 0.5 + a * b * 2.2;
-}
-float bubbles(vec2 p, float t, float sc, float speed, float seed) {
-  vec2 q = p * sc;
-  q.y -= t * speed;
-  vec2 id = floor(q);
-  float h = hash12(id + seed);
-  if (h > 0.15) return 0.0;
-  vec2 c = (hash22(id + seed + 7.0) - 0.5) * 0.3;
-  c.x += 0.1 * sin(t * 1.9 + h * 90.0);
-  float r = 0.08 + 0.12 * fract(h * 37.0);
-  vec2 f = fract(q) - 0.5 - c;
-  float d = length(f);
-  float rim = smoothstep(r, r * 0.8, d) * smoothstep(r * 0.5, r * 0.88, d);
-  float spec = smoothstep(r * 0.34, r * 0.04, length(f - vec2(-0.3, 0.32) * r));
-  return rim * 0.75 + smoothstep(r, r * 0.6, d) * 0.1 + spec;
-}
+/** Underwater in the pool, drawn like a cartoon: the bright wobbling surface overhead, flat beams of light swaying
+ *  down, cel-shaded caustics wriggling on the floor, and bubbles rising. */
+const DEEP_END = /* glsl */ `${TOON}
 vec3 scene(vec2 fc) {
   vec2 p = (fc - 0.5 * uRes) / uRes.y;
-  float t = uTime;
-  float v = voice();
-  float hor = 0.05;
-  // A swimmer glides past every nineteen seconds, about three metres away: on screen a body a third of the height long.
+  PX = 1.0 / uRes.y;
   float aspect = uRes.x / uRes.y;
-  float lap = mod(t, 19.0);
-  float glide = 0.5 * aspect + 0.25;
-  vec2 swimAt = vec2(mix(-glide, glide, lap / 9.0), 0.14 + 0.012 * sin(lap * 0.9));
-  float swimOn = step(lap, 9.0);
-  float swimScale = 0.75;
-  vec3 haze = mix(vec3(0.01, 0.12, 0.19), vec3(0.03, 0.26, 0.36), smoothstep(-0.25, 0.45, p.y));
-  vec3 col;
-  if (p.y < hor) {
-    float z = 0.34 / (hor - p.y);
-    vec2 f = vec2(p.x * z, z + 3.0);
-    float fp = z * z / 0.34 / uRes.y;
-    // Tiles, and the lane lines on the floor
-    vec3 floorCol = vec3(0.17, 0.56, 0.66);
-    vec2 g = abs(fract(f * 2.4) - 0.5);
-    float grout = smoothstep(0.462 - fp * 2.4, 0.475, max(g.x, g.y)) * (1.0 - smoothstep(0.04, 0.18, fp * 2.4));
-    floorCol *= 1.0 - grout * 0.32;
-    float aa = fp * 1.4 + 0.004;
-    float lane = 1.0 - smoothstep(0.15, 0.15 + aa, abs(f.x));
-    lane = max(lane, 1.0 - smoothstep(0.13, 0.13 + aa, abs(abs(f.x) - 2.5)));
-    floorCol = mix(floorCol, vec3(0.015, 0.05, 0.13), lane * 0.88);
-    // Sunlight through the surface, blocked where the swimmer's shadow falls
-    float c = caustics(f * 1.3, t * 0.8);
-    vec2 sh = vec2(f.x - swimAt.x * 3.0, z - 3.0) / 4.4;
-    float shadow = 0.0;
-    if (swimOn > 0.5 && abs(sh.x) < 0.4 && abs(sh.y) < 0.3) shadow = 1.0 - smoothstep(-0.03, 0.07, swimmer(sh, t));
-    c *= 1.0 - shadow * 0.85;
-    floorCol *= (0.3 + c * (1.0 + v * 1.1)) * (1.0 - shadow * 0.25);
-    floorCol += vec3(0.5, 0.95, 1.0) * c * 0.16 * (1.0 + v);
-    col = mix(floorCol, haze, 1.0 - exp(-z * 0.2));
-  } else {
-    // The surface overhead, seen from below, and the swimmer on it in silhouette
-    float z = 0.28 / (p.y - hor);
-    vec2 s = vec2(p.x * z, z);
-    float ripple = noise(s * 1.4 + vec2(t * 0.25, t * 0.1)) * 0.65 + noise(s * 3.1 - vec2(t * 0.3, -t * 0.2)) * 0.35;
-    vec3 surf = mix(vec3(0.06, 0.36, 0.46), vec3(0.62, 0.94, 1.0), smoothstep(0.4, 0.9, ripple));
-    surf += vec3(0.8, 1.0, 1.0) * caustics(s * 0.9, t * 0.9) * 0.3;
-    col = mix(surf, haze, 1.0 - exp(-z * 0.32));
+  float t = uTime;
+  float v = voice();
+  // The water: bright just under the surface, deepening to blue at the floor.
+  vec3 col = mix(vec3(0.03, 0.30, 0.52), vec3(0.08, 0.62, 0.74), smoothstep(-0.3, 0.32, p.y));
+  col = mix(col, vec3(0.32, 0.86, 0.86), smoothstep(0.18, 0.34, p.y) * 0.6);
+
+  // The floor running away from us: flat tiles of light, the lane line, and caustics wriggling across it.
+  float far = -0.1;
+  if (p.y < far) {
+    float z = 0.2 / (far - p.y);
+    vec2 g = vec2(p.x * z, z);
+    vec3 floorCol = mix(vec3(0.16, 0.66, 0.76), vec3(0.06, 0.42, 0.62), smoothstep(1.0, 5.0, z));
+    float lane = fill(abs(g.x) - 0.07 - z * PX * 1.5);
+    floorCol = mix(floorCol, vec3(0.05, 0.27, 0.5), lane * (1.0 - smoothstep(4.0, 9.0, z) * 0.7));
+    float aa = (z * z / 0.2 + z) * PX * 3.2;
+    float c = toonCaustic(g * 3.2, t * 0.9, (0.035 + v * 0.02) * clamp(z * 0.8, 0.5, 1.6), aa);
+    floorCol += vec3(0.75, 1.0, 1.0) * c * (0.55 - smoothstep(2.0, 8.0, z) * 0.4);
+    col = mix(floorCol, col, smoothstep(2.5, 9.0, z));
   }
-  // Light shafts slanting down from the surface, swaying
-  float s = p.x + p.y * 0.42 + 0.03 * sin(t * 0.17);
-  float rays = pow(noise(vec2(s * 6.0, t * 0.12)), 3.0) * 0.7 + pow(noise(vec2(s * 15.0 + 7.0, t * 0.2)), 4.0) * 0.5;
-  col += vec3(0.42, 0.85, 0.95) * rays * smoothstep(-0.55, 0.45, p.y) * (0.24 + v * 0.3);
-  // The swimmer gliding past, softened and blued by three metres of water, a trail of bubbles rising behind them.
-  vec2 body = (p - swimAt) / swimScale;
-  if (swimOn > 0.5 && abs(body.x) < 0.4 && abs(body.y) < 0.15) {
-    float sw = sideSwimmer(body, t);
-    float shape = 1.0 - smoothstep(-0.006, 0.01, sw);
-    col = mix(col, mix(vec3(0.0, 0.05, 0.09), haze, 0.35), shape * 0.92);
-    col += vec3(0.5, 0.9, 1.0) * exp(-abs(sw) / 0.006) * step(0.0, body.y) * 0.18;
-  }
-  for (int i = 0; i < 6; i++) {
+
+  // The surface overhead: a bright band with its edge wobbling, caustics dancing in it.
+  float wave = 0.335 + 0.011 * sin(p.x * 9.0 + t * 1.4) + 0.006 * sin(p.x * 17.0 - t * 2.1) + 0.004 * v * sin(p.x * 31.0 + t * 6.0);
+  float above = fill(wave - p.y);
+  vec3 surface = mix(vec3(0.55, 0.94, 0.92), vec3(0.86, 1.0, 0.98), smoothstep(wave, wave + 0.15, p.y));
+  surface += vec3(1.0) * toonCaustic(vec2(p.x * 7.0, (p.y - wave) * 16.0 + t * 0.2), t * 0.8, 0.06, PX * 16.0) * 0.45;
+  col = mix(col, surface, above);
+  col = mix(col, vec3(1.0), outline(p.y - wave + 0.004, 0.0025) * 0.9);
+
+  // Beams of light from up to the left: flat, see-through, swaying.
+  vec2 source = vec2(-0.25 * aspect, 0.9);
+  vec2 ray = p - source;
+  float ang = atan(ray.x, -ray.y);
+  float beams = 0.0;
+  for (int i = 0; i < 5; i++) {
     float fi = float(i);
-    float age = fract(lap * 0.9 - fi / 6.0);
-    vec2 at = swimAt + vec2(0.07 * swimScale - age * 0.15, 0.02 + age * 0.22) + vec2(0.01 * sin(t * 5.0 + fi * 2.0), 0.0);
-    float br = (0.004 + 0.003 * hash11(fi)) * (1.0 + age);
-    float bd = length(p - at);
-    float bub = (1.0 - smoothstep(br * 0.6, br, bd)) * smoothstep(br * 0.3, br * 0.9, bd) + exp(-dot(p - at + br * 0.3, p - at + br * 0.3) / (br * br * 0.05)) * 0.8;
-    col += vec3(0.7, 0.95, 1.0) * bub * 0.6 * swimOn * step(lap, 9.0 + age * 2.0) * smoothstep(0.0, 0.1, age);
+    float centre = -0.08 + fi * 0.13 * min(aspect, 1.6) + 0.025 * sin(t * (0.3 + fi * 0.07) + fi * 2.0);
+    float width = 0.018 + 0.012 * hash11(fi + 3.0);
+    beams += (1.0 - smoothstep(width - PX * 3.0, width + PX * 3.0, abs(ang - centre))) * (0.5 + 0.5 * hash11(fi + 9.0));
   }
-  // Specks drifting in the water, near ones bigger and quicker
-  for (int i = 0; i < 2; i++) {
-    float fi = float(i);
-    float sc = 22.0 - fi * 10.0;
-    vec2 q = (p + vec2(t * (0.004 + fi * 0.004), t * (0.006 + fi * 0.006))) * sc;
+  col += vec3(0.85, 1.0, 1.0) * beams * (0.07 + v * 0.06) * smoothstep(-0.45, 0.3, p.y) * (1.0 - above);
+
+  // Bubbles rising all through the water.
+  for (int l = 0; l < 2; l++) {
+    float fl = float(l);
+    float sc = 6.0 + fl * 5.0;
+    vec2 q = p * sc;
+    q.y -= t * (0.6 - fl * 0.2);
     vec2 id = floor(q);
-    float h = hash12(id + fi * 17.0);
-    if (h < 0.25) {
-      vec2 o = hash22(id * 1.3 + fi) - 0.5;
-      float d = length(fract(q) - 0.5 - o * 0.6) / sc * uRes.y;
-      float r = (0.7 + h * 3.0 + fi) * uScale;
-      col += vec3(0.6, 0.9, 1.0) * exp(-d * d / (r * r)) * (0.12 + 0.1 * fi) * (0.6 + 0.4 * sin(t * 1.3 + h * 70.0));
+    float h = hash12(id + fl * 13.0);
+    if (h < 0.18) {
+      vec2 c = (hash22(id + 7.0) - 0.5) * 0.4 + vec2(0.12 * sin(t * 1.7 + h * 60.0), 0.0);
+      vec2 b = bubble((fract(q) - 0.5 - c) / sc, (0.06 + 0.1 * fract(h * 37.0)) / sc) * (1.0 - above);
+      col = mix(col, vec3(0.85, 1.0, 1.0), clamp(b.x * (0.7 - fl * 0.25) + b.y * (1.0 - fl * 0.4), 0.0, 1.0));
     }
   }
-  // Bubbles rising
-  float b = bubbles(p, t, 4.5, 0.85, 1.0) + bubbles(p, t, 8.0, 0.62, 9.0) * 0.7 + bubbles(p, t, 13.0, 0.42, 23.0) * 0.45;
-  col += vec3(0.72, 0.96, 1.0) * b * 0.5;
   return col;
 }
 `
 
-/** The 50 m pool on finals night: a 100 m race in white water, off our end, to the far wall and home again, under
- *  floodlights, beams sweeping the haze and the crowd's flashes building as the swimmers come home. */
-const FINALS_NIGHT = /* glsl */ `
-vec3 flood(vec2 p, vec2 c, float s) {
-  vec2 d = p - c;
-  float r = length(d);
-  vec3 col = vec3(0.9, 0.95, 1.0) * exp(-r * r / (s * s * 0.025)) * 1.7;
-  col += vec3(0.5, 0.66, 1.0) * exp(-r / (s * 1.2)) * 0.3;
-  col += vec3(0.3, 0.5, 1.0) * exp(-r / (s * 5.0)) * 0.07;
-  col += vec3(0.35, 0.58, 1.0) * exp(-abs(d.y) / (s * 0.06)) * exp(-abs(d.x) / (s * 12.0)) * 0.42;
-  col += vec3(0.8, 0.9, 1.0) * exp(-abs(d.x) / (s * 0.05)) * exp(-abs(d.y) / (s * 1.7)) * 0.2;
-  // A beam down through the haze
-  float below = max(c.y - p.y, 0.0);
-  col += vec3(0.3, 0.45, 0.85) * exp(-abs(d.x) / (s * 0.6 + below * 0.22)) * exp(-below * 3.2) * step(0.0, c.y - p.y) * 0.08;
-  return col;
+/** A bright day at sea, drawn like a cartoon: puffy clouds drifting, the sun, a little island, wave marks glinting, a
+ *  buoy bobbing, gulls wheeling overhead, and a pod of dolphins: fins cutting the water as they cruise, then leaping
+ *  clear in turn, arching over and splashing back in. */
+const OPEN_WATER = /* glsl */ `${TOON}
+float taper(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h) - mix(ra, rb, h);
 }
-float lightX(float i) { return (i - 3.0) * 0.34 + 0.05 * sin(i * 2.7); }
-vec3 scene(vec2 fc) {
-  vec2 p = (fc - 0.5 * uRes) / uRes.y;
-  float t = uTime;
-  float v = voice();
-  float hor = 0.07;
-  // The race: off the blocks at our end every 54 seconds, a length out and a length back, the crowd louder (more
-  // flashes) as they come home.
-  float race = mod(t, 54.0);
-  float finish = smoothstep(38.0, 46.0, race) * (1.0 - smoothstep(49.0, 53.0, race));
-  vec3 col;
-  if (p.y >= hor) {
-    float h = p.y - hor;
-    col = mix(vec3(0.022, 0.04, 0.085), vec3(0.006, 0.01, 0.028), smoothstep(0.0, 0.45, h));
-    // Beams from the roof sweeping slowly across the haze.
-    for (int j = 0; j < 2; j++) {
-      float fj = float(j);
-      vec2 from = vec2((fj - 0.5) * 1.1, 0.55);
-      vec2 d = p - from;
-      float ang = atan(d.x, -d.y);
-      float aim = 0.55 * sin(t * (0.21 + fj * 0.05) + fj * 2.6) - (fj - 0.5) * 0.5;
-      col += mix(vec3(0.35, 0.55, 1.0), mix(uA, uB, fj), 0.35) * exp(-pow((ang - aim) / 0.05, 2.0)) * exp(-length(d) * 1.8) * (0.16 + v * 0.1);
-    }
-    col += vec3(0.1, 0.2, 0.4) * exp(-h * 9.0) * 0.6;
-    // The stands in tiers, and the crowd's phones and camera flashes
-    float stands = smoothstep(0.012, 0.022, h) * (1.0 - smoothstep(0.2, 0.29, h));
-    float tiers = 0.7 + 0.3 * smoothstep(0.15, 0.6, abs(fract(h * 30.0) - 0.5) * 2.0);
-    col += vec3(0.03, 0.05, 0.09) * stands * tiers;
-    vec2 q = vec2(p.x, h) * 150.0;
-    vec2 id = floor(q);
-    vec2 f = fract(q) - 0.5;
-    float hh = hash12(id);
-    float glow = smoothstep(0.9, 1.0, hh) * (0.45 + 0.55 * sin(t * (1.0 + 4.0 * fract(hh * 9.0)) + hh * 40.0)) * 0.45;
-    float flash = step(0.988 - finish * 0.03, hh) * exp(-fract(t * (0.21 + finish * 0.5) + hh * 17.0) * 24.0) * 3.5;
-    vec3 tint = mix(vec3(1.0, 0.88, 0.72), vec3(0.75, 0.85, 1.0), fract(hh * 23.0));
-    col += tint * exp(-dot(f, f) * 14.0) * (glow + flash) * stands;
-    // The far end: the deck lit along the wall
-    col += vec3(0.55, 0.75, 1.0) * exp(-h / 0.004) * 0.8;
-    // Floodlights in the roof, a nearer row and a farther one
-    for (int i = 0; i < 7; i++) {
-      float fi = float(i);
-      col += flood(p, vec2(lightX(fi), 0.42 + 0.02 * cos(fi * 1.7)), 0.036 + 0.008 * hash11(fi + 4.0));
-      col += flood(p, vec2(lightX(fi) * 0.62 + 0.1, 0.3), 0.018) * 0.55;
-    }
-    return col;
-  }
-  float camH = 0.5;
-  float z = camH / (hor - p.y);
-  float x = p.x * z;
-  float down = hor - p.y;
-  // Ripples on the surface: long swells and a finer chop
-  float e = 0.04;
-  float n1 = noise(vec2(x * 1.6, z * 0.9 - t * 0.6));
-  float n1x = noise(vec2((x + e) * 1.6, z * 0.9 - t * 0.6));
-  float n2 = noise(vec2(x * 4.1 + t * 0.3, z * 2.3 - t * 0.9));
-  float n2x = noise(vec2((x + e) * 4.1 + t * 0.3, z * 2.3 - t * 0.9));
-  float swell = (n1x - n1) / e;
-  float slope = swell * 0.6 + (n2x - n2) / e * 0.4;
-  // The lit pool below the surface, its black lane lines wavering
-  float bx = x + swell * 0.035;
-  vec3 pool = vec3(0.0, 0.43, 0.6) * (1.0 + 0.3 * v);
-  float shimmer = noise(vec2(bx * 2.2, z * 1.6 - t * 0.5)) * noise(vec2(bx * 3.7 + 3.0, z * 2.9 + t * 0.4));
-  pool *= 0.7 + 0.75 * pow(shimmer * 2.2, 2.0);
-  float ld = abs(fract(bx / 2.5 + 0.5) - 0.5) * 2.5;
-  float lane = 1.0 - smoothstep(0.12, 0.12 + z / uRes.y * 2.0 + 0.015, ld);
-  pool = mix(pool, vec3(0.0, 0.04, 0.1), lane * 0.85 * (1.0 - smoothstep(8.0, 30.0, z)));
-  pool *= exp(-z * 0.03);
-  // The roof lights in the water, stretched and broken by the ripples
-  float cosT = camH / sqrt(z * z + camH * camH);
-  float fres = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
-  vec3 env = vec3(0.01, 0.022, 0.045) + vec3(0.06, 0.12, 0.22) * exp(-down * 8.0);
-  vec3 streaks = vec3(0.0);
-  for (int i = 0; i < 7; i++) {
+// A dolphin from the side, nose toward +x, about a unit long, arched by flex, its tail beating by beat: how far q is
+// outside it. parts: x its pale belly, y its flipper, z the shine along its back (each below 0 inside).
+float dolphin(vec2 q, float flex, float beat, out vec3 parts) {
+  q.y += flex * q.x * q.x;
+  float tail = max(-q.x - 0.1, 0.0);
+  q.y -= beat * tail * tail * 1.8;
+  float d = (length((q - vec2(0.02, 0.0)) / vec2(0.36, 0.105)) - 1.0) * 0.1;
+  d = smin(d, length(q - vec2(0.29, 0.022)) - 0.074, 0.05);
+  d = smin(d, taper(q, vec2(0.33, -0.012), vec2(0.5, -0.03), 0.04, 0.019), 0.03);
+  d = smin(d, taper(q, vec2(-0.14, 0.0), vec2(-0.5, 0.004), 0.085, 0.021), 0.05);
+  // The flukes, swept back, and the fin on its back, curving back too.
+  float flukes = min(taper(q, vec2(-0.49, 0.004), vec2(-0.63, 0.085), 0.027, 0.007), taper(q, vec2(-0.49, 0.004), vec2(-0.63, -0.075), 0.027, 0.007));
+  d = smin(d, flukes, 0.02);
+  float fin = min(taper(q, vec2(0.05, 0.08), vec2(-0.06, 0.17), 0.045, 0.02), taper(q, vec2(-0.06, 0.17), vec2(-0.135, 0.205), 0.02, 0.005));
+  d = smin(d, fin, 0.025);
+  parts.x = q.y - (-0.024 - 0.055 * clamp(0.42 - q.x, 0.0, 0.85));
+  parts.y = taper(q, vec2(0.17, -0.06), vec2(0.06, -0.165), 0.032, 0.009);
+  parts.z = taper(q, vec2(0.24, 0.072), vec2(-0.12, 0.074), 0.012, 0.004);
+  return d;
+}
+// Water thrown up where something broke the surface at "at", age seconds ago: a crown of sheets rising and falling, and
+// drops flying out on arcs and dropping back.
+float splash(vec2 p, vec2 at, float age, float size, float seed) {
+  float s = 0.0;
+  for (int i = 0; i < 8; i++) {
     float fi = float(i);
-    float dx = p.x - lightX(fi) + slope * 0.01 * (1.0 + down * 3.0);
-    float w = 0.005 + down * 0.05;
-    float glint = smoothstep(0.5, 0.95, noise(vec2(x * 3.0 + fi * 7.0, z * 4.0 - t * (1.6 + v))));
-    streaks += vec3(0.62, 0.78, 1.0) * exp(-dx * dx / (w * w)) * (0.22 + glint * 1.8) * exp(-down * 2.4);
+    float h1 = hash11(fi * 3.7 + seed);
+    float h2 = hash11(fi * 1.9 + seed + 4.0);
+    vec2 vel = vec2((h1 - 0.5) * 1.5, 1.1 + h2 * 1.1) * size * 2.3;
+    vec2 pos = at + vel * age - vec2(0.0, 6.5 * size * age * age);
+    float r = size * (0.02 + 0.02 * h2) * (1.0 - age);
+    s = max(s, fill(length(p - pos) - r) * step(at.y, pos.y));
   }
-  vec3 col2 = pool * (1.0 - fres) + env * fres + streaks * max(fres, 0.4);
-  // The swimmers in the middle three lanes: white water fizzing round each, a burst with every stroke, and the wake
-  // opening behind them in a V that catches the lights.
-  float foam = 0.0;
-  for (int i = 0; i < 3; i++) {
-    float fi = float(i);
-    float pace = 1.95 + 0.14 * hash11(fi + floor(t / 54.0) * 3.0);
-    float swum = max(race - 0.6, 0.0) * pace;
-    float heading = swum < 47.0 ? 1.0 : -1.0;
-    float zs = 2.5 + (swum < 47.0 ? swum : max(94.0 - swum, 0.0));
-    vec2 d = vec2(x - (fi - 1.0) * 2.5, z - zs);
-    float back = -d.y * heading;
-    float fizz = smoothstep(0.45, 0.8, noise(vec2(x * 9.0 + fi * 7.0, z * 4.0 - heading * t * 6.0)));
-    float patch = exp(-d.x * d.x / 0.05) * smoothstep(-0.6, -0.1, back) * exp(-max(back, 0.0) * 0.9);
-    float burst = exp(-pow(back + 0.35, 2.0) / 0.08 - d.x * d.x / 0.12) * pow(0.5 + 0.5 * sin(t * 5.5 + fi * 2.1), 4.0);
-    float arm = abs(abs(d.x) - back * 0.36);
-    // (The lane ropes calm the wake before it reaches the next lane.)
-    float vee = exp(-arm * arm / (0.003 + back * 0.002)) * step(0.0, back) * exp(-back * 0.22) * (1.0 - smoothstep(0.85, 1.2, abs(d.x)))
-      * (0.5 + 0.5 * noise(vec2(z * 3.0, t)));
-    foam += (patch * fizz * 1.3 + burst * fizz + vee * 0.55) * step(swum, 94.0) * smoothstep(0.0, 0.6, race);
-  }
-  col2 = mix(col2, vec3(0.88, 0.95, 1.0), clamp(foam, 0.0, 0.95));
-  // Lane ropes: floats in blue and white, ours in yellow, red for the last five metres
-  float lw = 2.5;
-  float u = x / lw - 0.5;
-  float ropeIdx = floor(u + 0.5);
-  float d = abs(u - ropeIdx) * lw;
-  float px = z / uRes.y;
-  float rad = 0.06;
-  float rope = 1.0 - smoothstep(rad - px, rad + px, d);
-  float pz = z / 0.11;
-  float along = z * z / camH / uRes.y / 0.11;
-  float bead = mix(smoothstep(0.5, 0.25, abs(fract(pz) - 0.5)), 0.75, smoothstep(0.2, 0.6, along));
-  float ours = step(abs(ropeIdx + 0.5), 0.6);
-  vec3 floatCol = mod(floor(pz), 6.0) < 3.0 ? mix(vec3(0.06, 0.3, 1.0), vec3(1.0, 0.76, 0.1), ours) : vec3(0.9, 0.94, 1.0);
-  floatCol = (z < 5.0 || z > 45.0) ? vec3(1.0, 0.14, 0.16) : floatCol;
-  floatCol *= (0.3 + 0.75 * bead) * (0.55 + 0.45 * exp(-z * 0.04));
-  col2 = mix(col2, floatCol + streaks * 0.3, rope * (0.45 + 0.55 * bead));
-  // Haze toward the far wall
-  col2 = mix(col2, vec3(0.06, 0.14, 0.26), smoothstep(15.0, 50.0, z) * 0.55);
-  return col2;
+  float rise = sin(PI * clamp(age / 0.6, 0.0, 1.0));
+  vec2 q = (p - at) / size;
+  float crown = min(min(taper(q, vec2(-0.07, 0.0), vec2(-0.16, 0.3 * rise), 0.06, 0.012), taper(q, vec2(0.07, 0.0), vec2(0.17, 0.26 * rise), 0.06, 0.012)),
+    taper(q, vec2(0.0, 0.0), vec2(0.01, 0.4 * rise), 0.07, 0.014));
+  s = max(s, fill(crown * size) * step(at.y - 0.002, p.y) * step(0.02, rise));
+  return s * step(0.0, age) * step(age, 0.95);
 }
-`
-
-/** Open water at golden hour: the sun on the horizon throwing shafts up through the cloud, a glittering path with
- *  dolphins leaping through it now and then, swells, marker buoys and gulls. */
-const OPEN_WATER = /* glsl */ `
-vec3 sky(vec2 p, float hor) {
-  float k = clamp(max(p.y - hor, 0.0) / 0.55, 0.0, 1.0);
-  vec3 col = mix(vec3(1.0, 0.58, 0.26), vec3(0.95, 0.38, 0.36), smoothstep(0.0, 0.2, k));
-  col = mix(col, vec3(0.45, 0.17, 0.4), smoothstep(0.14, 0.55, k));
-  return mix(col, vec3(0.07, 0.05, 0.17), smoothstep(0.5, 1.0, k));
-}
-vec2 sunAt(float hor) { return vec2(min(0.42, 0.35 * uRes.x / uRes.y), hor + 0.032); }
-float gull(vec2 p, vec2 c, float s, float flap) {
-  vec2 l = (p - c) / s;
-  l.x = abs(l.x);
-  vec2 a = vec2(0.5, 0.22 * flap);
-  vec2 b = vec2(1.0, -0.05 + 0.3 * flap);
-  return smoothstep(0.1, 0.03, min(segment(l, vec2(0.0), a), segment(l, a, b)));
-}
-// A dolphin from the side, head toward +x, about a unit long: how far q is outside it.
-float dolphin(vec2 q) {
-  vec2 b = vec2(q.x, q.y + 0.25 * q.x * q.x);
-  float d = (length(b / vec2(0.34, 0.085)) - 1.0) * 0.085;
-  d = min(d, segment(q, vec2(0.28, 0.0), vec2(0.5, -0.035)) - 0.022);
-  d = min(d, segment(q, vec2(-0.18, -0.01), vec2(-0.46, -0.05)) - mix(0.05, 0.012, clamp((-q.x - 0.18) / 0.28, 0.0, 1.0)));
-  d = min(d, segment(q, vec2(-0.46, -0.05), vec2(-0.57, 0.0)) - 0.012);
-  d = min(d, segment(q, vec2(-0.46, -0.05), vec2(-0.55, -0.11)) - 0.012);
-  return min(d, segment(q, vec2(0.02, 0.07), vec2(-0.1, 0.17)) - mix(0.03, 0.006, clamp((q.y - 0.07) / 0.1, 0.0, 1.0)));
-}
-vec3 buoy(vec3 col, vec2 p, vec2 b, float size, float sunSide) {
-  vec2 l = (p - b) / size;
-  float body = smoothstep(1.0, 0.92, length(l * vec2(2.3, 1.45))) * step(-0.18, l.y);
-  float shade = 0.4 + 0.6 * smoothstep(-0.45, 0.45, l.x * sunSide) + 0.3 * smoothstep(0.2, 0.8, l.y);
-  col = mix(col, vec3(1.0, 0.36, 0.06) * shade, body);
-  // Its reflection, shaken by the swell
-  vec2 m = vec2(l.x + 0.12 * sin(l.y * 18.0 + uTime * 3.0), -l.y - 0.36);
-  float refl = smoothstep(1.0, 0.7, length(m * vec2(2.3, 1.0))) * step(l.y, -0.18);
-  return mix(col, vec3(0.9, 0.3, 0.08), refl * 0.35);
-}
-vec3 scene(vec2 fc) {
-  vec2 p = (fc - 0.5 * uRes) / uRes.y;
-  float t = uTime;
-  float v = voice();
-  float aspect = uRes.x / uRes.y;
-  float hor = -0.02;
-  vec2 sun = sunAt(hor);
-  vec3 col;
-  if (p.y > hor) {
-    col = sky(p, hor);
-    float d = length(p - sun);
-    col += vec3(1.0, 0.55, 0.25) * exp(-d * 4.0) * 0.45 * (1.0 + v * 0.5);
-    col += vec3(1.0, 0.75, 0.45) * exp(-d * 16.0) * 0.6;
-    // Shafts of light fanning up from the sun through the gaps in the cloud, turning slowly.
-    vec2 ds = p - sun;
-    float ang = atan(ds.x, ds.y);
-    float shafts = pow(noise(vec2(ang * 9.0, t * 0.05)), 3.0) * 0.8 + pow(noise(vec2(ang * 23.0 + 4.0, t * 0.08)), 4.0) * 0.4;
-    col += vec3(1.0, 0.62, 0.35) * shafts * exp(-d * 3.6) * smoothstep(0.0, 0.08, p.y - hor) * 0.16 * (1.0 + v * 0.8);
-    vec3 disc = mix(vec3(1.0, 0.97, 0.86), vec3(1.0, 0.72, 0.42), smoothstep(sun.y + 0.03, sun.y - 0.045, p.y));
-    col = mix(col, disc, smoothstep(0.047, 0.043, d));
-    // Clouds lit from below: soft banks higher up, thin streaks near the horizon
-    float band = smoothstep(0.05, 0.13, p.y - hor) * (1.0 - smoothstep(0.32, 0.5, p.y - hor));
-    float cl = smoothstep(0.46, 0.72, fbm(vec2(p.x * 1.3 + t * 0.008, (p.y - hor) * 9.0 + 3.0))) * band;
-    float streak = smoothstep(0.55, 0.75, fbm3(vec2(p.x * 0.8 - t * 0.005, (p.y - hor) * 40.0))) * smoothstep(0.012, 0.03, p.y - hor) * (1.0 - smoothstep(0.05, 0.09, p.y - hor));
-    vec3 cloud = mix(vec3(0.3, 0.1, 0.27), vec3(1.0, 0.58, 0.4), exp(-d * 2.2) * 0.9 + 0.1);
-    col = mix(col, cloud, cl * 0.9);
-    col = mix(col, mix(vec3(0.55, 0.2, 0.3), vec3(1.0, 0.7, 0.45), exp(-d * 3.0)), streak * 0.6);
-    col += stars(p, t, 0.08) * smoothstep(0.26, 0.5, p.y - hor) * 0.6;
-    // Gulls crossing
-    for (int i = 0; i < 3; i++) {
-      float fi = float(i);
-      float x = mod(t * (0.018 + fi * 0.004) + fi * 0.9, 2.6) - 1.3;
-      vec2 c = vec2(x * max(aspect, 1.0), hor + 0.24 + fi * 0.05 + 0.02 * sin(t * 0.3 + fi * 2.0));
-      col = mix(col, vec3(0.1, 0.04, 0.12), gull(p, c, 0.012 + fi * 0.003, sin(t * (5.5 + fi) + fi)) * 0.85);
-    }
-    return col;
-  }
-  float camH = 2.0;
-  float down = hor - p.y;
-  float z = camH / down;
-  float x = p.x * z;
-  vec2 q = vec2(x * 0.25, z * 0.5);
-  vec2 drift = vec2(t * 0.03, -t * 0.18);
-  float e = 0.02;
-  float h0 = fbm3(q + drift);
-  float h1 = fbm3(q + vec2(e, 0.0) + drift);
-  float h2 = fbm3(q + vec2(0.0, e) + drift);
-  vec2 slope = vec2(h1 - h0, h2 - h0) / e;
-  vec3 refl = sky(vec2(p.x + slope.x * 0.02, hor + down + slope.y * 0.02), hor);
-  float fres = 0.15 + 0.85 * pow(1.0 - clamp(down * 1.8, 0.0, 1.0), 4.0);
-  col = mix(vec3(0.05, 0.035, 0.11), refl * 0.8, fres);
-  // The sun's glitter path
-  float dx = p.x - sun.x - slope.x * 0.012;
-  float w = 0.015 + down * 0.5;
-  float path = exp(-dx * dx / (w * w));
-  float sparkle = pow(noise(vec2(x * 3.0, z * 5.0 - t * 1.3)) * noise(vec2(x * 7.0 + 3.1, z * 11.0 + t * 1.7)), 3.0) * 16.0;
-  col += vec3(1.0, 0.68, 0.38) * path * (0.16 + sparkle * (0.8 + v * 1.2)) * (1.0 - down * 0.6);
-  col += vec3(1.0, 0.6, 0.4) * smoothstep(0.62, 0.8, h0) * 0.12 * (1.0 - smoothstep(0.0, 0.4, down));
-  col += refl * 0.12 * smoothstep(0.5, 0.75, h0) * smoothstep(0.05, 0.4, down);
-  // Two marker buoys bobbing far out, lit from the sun's side
-  float edgeX = 0.5 * aspect;
-  vec2 b1 = vec2(-0.78 * edgeX, hor - camH / 42.0 + 0.0022 * sin(t * 1.4));
-  vec2 b2 = vec2(0.6 * edgeX + 0.1, hor - camH / 70.0 + 0.0015 * sin(t * 1.2 + 2.0));
-  col = buoy(col, p, b1, 1.6 / 42.0, sign(sun.x - b1.x));
-  col = buoy(col, p, b2, 1.6 / 70.0, sign(sun.x - b2.x));
-  // A pod of dolphins leaping through the sun's path every thirteen seconds, dark against the glitter, rimmed with
-  // light. Each pixel draws the dolphin nearest it.
-  float base = hor - 0.06;
-  if (abs(p.x - sun.x + 0.07) < 0.22 && p.y > base - 0.02 && p.y < base + 0.1) {
-    float best = 1e3;
-    float tau = -1.0;
-    vec2 from = vec2(0.0);
-    float size = 0.08;
-    for (int i = 0; i < 3; i++) {
-      float fi = float(i);
-      float ti = (mod(t + fi * 0.45, 13.0) - fi * 0.15) / 1.6;
-      vec2 fromI = vec2(sun.x - 0.17 + fi * 0.06, base - fi * 0.008);
-      float sizeI = 0.08 - fi * 0.009;
-      float k = clamp(ti, 0.0, 1.0);
-      float near = length(p - fromI - vec2(k * 0.2, 0.06 * sin(PI * k)) * (sizeI / 0.08));
-      if (ti > -0.2 && ti < 1.3 && near < best) { best = near; tau = ti; from = fromI; size = sizeI; }
-    }
-    if (tau > -0.2) {
-      float k = clamp(tau, 0.0, 1.0);
-      float scale = size / 0.08;
-      vec2 c = from + vec2(k * 0.2, 0.06 * sin(PI * k)) * scale;
-      float angle = atan(0.06 * PI * cos(PI * k), 0.2);
-      float dd = dolphin(rot(-angle) * (p - c) / size) * size;
-      float above = smoothstep(from.y - 0.001, from.y + 0.002, p.y);
-      float leaping = step(0.0, tau) * step(tau, 1.0) * above;
-      float shape = (1.0 - smoothstep(-0.0008, 0.0008, dd)) * leaping;
-      col = mix(col, vec3(0.06, 0.03, 0.08), shape * 0.95);
-      col += vec3(1.0, 0.65, 0.35) * exp(-abs(dd) / 0.0012) * (1.0 - shape) * leaping * 0.5;
-      // Spray where it breaks the surface and where it goes back in.
-      vec2 out_ = (p - from - vec2(0.0, 0.004)) / vec2(0.016, 0.011);
-      vec2 in_ = (p - from - vec2(0.2 * scale, 0.004)) / vec2(0.016, 0.012);
-      float spray = exp(-dot(out_, out_)) * exp(-max(tau, 0.0) * 4.0) * step(-0.05, tau)
-        + exp(-dot(in_, in_)) * smoothstep(0.85, 1.0, tau) * exp(-max(tau - 1.0, 0.0) * 6.0);
-      col += vec3(1.0, 0.85, 0.65) * spray * (0.4 + smoothstep(0.55, 0.85, noise(p * 900.0 + t * 3.0)) * 1.2) * above;
-    }
-  }
-  return col;
-}
-`
-
-/** A bioluminescent shore at night: the Milky Way overhead with meteors falling, waves that glow blue as they break
- *  and peel along, and now and then a swimmer cutting a glowing trail through the water. */
-const GLOW_TIDE = /* glsl */ `
-vec3 night(vec2 p, float t) {
-  vec3 col = mix(vec3(0.01, 0.022, 0.06), vec3(0.002, 0.004, 0.016), smoothstep(0.0, 0.5, p.y));
-  vec2 r = rot(-0.45) * p;
-  float band = exp(-pow((r.y - 0.16) / 0.13, 2.0));
-  float dust = fbm(r * vec2(3.5, 9.0) + 2.0);
-  float rift = smoothstep(0.45, 0.65, fbm(r * vec2(5.0, 14.0) + 9.0)) * exp(-pow((r.y - 0.15) / 0.045, 2.0));
-  col += vec3(0.3, 0.32, 0.52) * band * dust * 0.55 * (1.0 - rift * 0.85);
-  col += vec3(0.6, 0.42, 0.5) * band * pow(dust, 3.0) * 0.42;
-  col += stars(p, t, 0.1 + band * 0.25);
-  return col;
-}
-vec3 scene(vec2 fc) {
-  vec2 p = (fc - 0.5 * uRes) / uRes.y;
-  float t = uTime;
-  float v = voice();
-  float hor = 0.08;
-  if (p.y > hor) {
-    vec3 col = night(p, t) + brightStars(p, t, 0.12) * 0.7;
-    // Meteors: a few each minute, falling from the same corner of the sky.
-    for (int i = 0; i < 2; i++) {
-      float fi = float(i);
-      float cycle = floor((t + fi * 4.3) / 9.0);
-      float m = mod(t + fi * 4.3, 9.0);
-      if (m < 0.7 && hash11(cycle + fi * 7.0) < 0.75) {
-        vec2 a = vec2((hash11(cycle * 1.3 + fi) - 0.2) * uRes.x / uRes.y * 0.6, 0.22 + 0.2 * hash11(cycle + 5.0 + fi));
-        vec2 dir = normalize(vec2(-0.6 - 0.3 * hash11(cycle + 2.0), -0.5));
-        vec2 head = a + dir * m * 0.55;
-        float along = dot(p - head, -dir);
-        float trail = exp(-pow(segment(p, head, head - dir * 0.14) / (0.0013 + 0.0006 * uScale), 2.0)) * smoothstep(0.14, 0.0, along);
-        col += vec3(0.75, 0.92, 1.0) * trail * sin(m / 0.7 * PI) * 1.2;
-      }
-    }
-    float ridge = hor + 0.055 * smoothstep(0.05, 0.6, p.x) * (0.55 + 0.45 * fbm3(vec2(p.x * 4.0, 2.0)));
-    col = mix(col, vec3(0.004, 0.007, 0.018), smoothstep(ridge + 0.002, ridge - 0.002, p.y));
-    col += vec3(0.04, 0.3, 0.45) * exp(-(p.y - hor) * 45.0) * 0.35;
-    return col;
-  }
-  float camH = 0.35;
-  float down = hor - p.y;
-  float z = camH / down;
-  float x = p.x * z;
-  vec3 col = vec3(0.003, 0.01, 0.028) + night(vec2(p.x, hor + down), t) * 0.28;
-  col += vec3(0.015, 0.04, 0.09) * noise(vec2(x * 1.2, z * 2.5 - t * 0.3)) * smoothstep(0.0, 0.3, down);
-  // Waves rolling in, their crests bending, glowing where they break into foam
-  float bend = 0.6 * fbm3(vec2(x * 0.22, t * 0.03)) + 0.22 * noise(vec2(x * 1.4, t * 0.1));
-  float phase = z * 1.05 + t * 0.32 + bend;
-  float n = floor(phase);
-  float fr = fract(phase);
-  float crest = exp(-fr * 16.0) + exp(-(1.0 - fr) * 70.0) * 0.5;
-  float band = exp(-fr * 6.0);
-  float foam = fbm3(vec2(x * 3.2 + n * 7.1, fr * 4.0 + n * 3.3 + t * 0.2));
-  float lace = smoothstep(0.5, 0.78, foam) * band;
-  float broken = smoothstep(0.32, 0.62, noise(vec2(x * 2.2 + n * 13.1, n * 3.7 + t * 0.1)));
-  broken *= 0.35 + 0.65 * smoothstep(0.3, 0.7, noise(vec2(x * 7.0 + n * 5.0, t * 0.2)));
-  // Each wave breaks first at one end and peels along its length.
-  float peel = fract(x * 0.06 - t * 0.09 + n * 0.37);
-  broken *= 0.45 + 0.9 * exp(-peel * 5.0) + 0.3 * smoothstep(0.9, 1.0, peel);
-  float near = smoothstep(24.0, 1.0, z);
-  float glow = (crest * (0.35 + foam) + lace * 0.9 + band * foam * 0.25) * broken * near;
-  col += vec3(0.1, 0.85, 1.0) * glow * (1.2 + v * 0.9) + vec3(0.05, 0.35, 1.0) * glow * glow * 0.4;
-  col += vec3(0.0, 0.32, 0.85) * band * broken * near * 0.28;
-  // A swimmer crossing beyond the break every so often: the plankton lights up round them and in their wake.
-  float swimCycle = mod(t, 21.0);
-  vec2 swimmer = vec2(mix(-6.0, 6.0, swimCycle / 16.0), 3.4);
-  if (swimCycle < 16.0) {
-    vec2 sd = vec2(x - swimmer.x, z - swimmer.y);
-    float behind = -sd.x;
-    float body = exp(-sd.x * sd.x / 0.4 - sd.y * sd.y / 0.12);
-    float wake = exp(-sd.y * sd.y / (0.06 + max(behind, 0.0) * 0.03)) * exp(-max(behind, 0.0) * 0.3) * step(0.0, behind);
-    float stroke = pow(0.5 + 0.5 * sin(t * 5.0), 6.0) * exp(-pow(sd.x - 0.8, 2.0) / 0.2 - sd.y * sd.y / 0.15);
-    float twinkle = 0.55 + 0.45 * noise(vec2(x * 6.0 - t * 2.0, z * 8.0));
-    col += vec3(0.15, 0.9, 1.0) * (body * 1.2 + wake * 0.9 + stroke * 2.0) * twinkle * (1.0 + v * 0.8);
-  }
-  // Plankton sparking in the water, more as the coach speaks
-  vec2 q = p * 95.0;
-  vec2 id = floor(q);
-  float hh = hash12(id + n * 7.0);
-  float spark = smoothstep(0.93 - v * 0.14, 1.0, hh) * exp(-dot(fract(q) - 0.5, fract(q) - 0.5) * 22.0);
-  spark *= (0.5 + 0.5 * sin(t * 5.0 + hh * 80.0)) * near * (0.25 + crest * 2.2 + v * 1.6);
-  col += vec3(0.55, 1.0, 1.0) * spark;
-  // The wash sliding up the beach, its edge glowing, and the wet sand mirroring it
-  float reach = 1.55 + 0.3 * sin(t * 0.42) + 0.3 * fbm3(vec2(x * 1.3, t * 0.08));
-  float edgeGlow = exp(-abs(z - reach) * 18.0) * (0.5 + 0.5 * noise(vec2(x * 5.0, t * 0.3)));
-  float sheet = smoothstep(reach, reach + 0.25, z) * smoothstep(reach + 2.2, reach + 0.6, z);
-  float lacework = smoothstep(0.5, 0.8, fbm(vec2(x * 5.0, z * 7.0 - t * 0.25)));
-  col += vec3(0.12, 0.85, 1.0) * (edgeGlow * 0.95 + sheet * lacework * 0.55) * (1.0 + v * 0.8);
-  float sand = smoothstep(reach, reach - 0.15, z);
-  vec3 wet = vec3(0.01, 0.014, 0.028) + vec3(0.0, 0.2, 0.36) * exp(-(reach - z) * 2.2) * 0.45;
-  col = mix(col, wet + col * 0.2, sand);
-  return col;
-}
-`
-
-/** The northern lights over mountains, folding and pulsing as they ripple along, mirrored in a still lake lined with
- *  pines. */
-const NORTHERN_LIGHTS = /* glsl */ `
-vec3 auroraSky(vec2 p, float t, float v) {
-  vec3 col = mix(vec3(0.008, 0.02, 0.05), vec3(0.002, 0.004, 0.015), smoothstep(-0.1, 0.5, p.y));
-  col += stars(p, t, 0.14) * 0.8 + brightStars(p, t, 0.08) * 0.5;
-  vec3 acc = vec3(0.0);
-  for (int i = 0; i < 4; i++) {
-    float fi = float(i);
-    float x = p.x * (0.8 + fi * 0.18) + fi * 2.3 + t * 0.008 * (1.0 + fi);
-    float edge = 0.04 + fi * 0.055 + 0.14 * (fbm3(vec2(x * 1.1, fi * 3.1 + t * 0.03)) - 0.5) + 0.05 * sin(x * 2.2 + t * 0.15 + fi);
-    // Folds running along the curtain, and bright pulses chasing after them.
-    edge += 0.022 * sin(x * 7.0 - t * 0.9 + fi * 1.3) * (0.5 + 0.5 * sin(x * 1.3 + t * 0.2 + fi));
-    float pulse = 0.7 + 0.8 * pow(0.5 + 0.5 * sin(x * 2.6 - t * (1.1 + v * 0.8) + fi * 2.0), 6.0);
-    float y = p.y - edge;
-    float curtain = smoothstep(-0.01, 0.006, y) * exp(-max(y, 0.0) * (4.0 + fi * 1.5));
-    float rim = exp(-abs(y) / 0.012) * smoothstep(-0.012, 0.0, y);
-    float rays = 0.25 + 0.8 * pow(noise(vec2(x * 64.0, t * (0.25 + v * 0.8) + fi * 5.0)), 1.6);
-    rays *= 0.45 + 0.55 * noise(vec2(x * 9.0 - t * 0.12, fi * 2.0));
-    vec3 c = mix(vec3(0.15, 1.0, 0.52), vec3(0.55, 0.3, 1.0), smoothstep(0.03, 0.25, y));
-    c = mix(c, vec3(1.0, 0.3, 0.62), smoothstep(0.2, 0.4, y) * 0.5);
-    acc += c * (curtain + rim * 0.9) * rays * (0.68 - fi * 0.11) * pulse;
-  }
-  col += acc * (0.85 + v * 0.7);
-  // Now and then, a shooting star
-  float cycle = floor(t / 11.0);
-  float m = fract(t / 11.0) * 11.0;
-  if (m < 0.9) {
-    vec2 a = vec2((hash11(cycle) - 0.5) * uRes.x / uRes.y, 0.28 + 0.15 * hash11(cycle + 3.0));
-    vec2 dir = normalize(vec2(-0.85, -0.38));
-    vec2 head = a + dir * m * 0.5;
-    float along = dot(p - head, -dir);
-    float trail = exp(-pow(segment(p, head, head - dir * 0.12) / (0.0015 + 0.0006 * uScale), 2.0)) * smoothstep(0.12, 0.0, along);
-    col += vec3(0.85, 0.95, 1.0) * trail * sin(m / 0.9 * PI);
-  }
-  return col;
-}
-float peaks(float x) {
+// Rings spreading on the water from "at" after a splash, seen low across the sea: ellipses 3.6 times wider than deep,
+// their lines measured on the screen so they're as fine at the ends as at the sides, fading as they spread.
+float rings(vec2 p, vec2 at, float age, float size) {
+  vec2 e = p - at;
+  float across = length(e * vec2(1.0, 3.6));
+  float grad = max(length(e * vec2(1.0, 12.96)) / max(across, 1e-5), 1.0);
   float r = 0.0;
-  float a = 0.5;
-  for (int i = 0; i < 4; i++) {
-    r += a * (1.0 - abs(noise(vec2(x, 0.5 + float(i) * 3.0)) * 2.0 - 1.0));
-    x *= 2.1;
-    a *= 0.5;
+  for (int j = 0; j < 3; j++) {
+    float a = age - float(j) * 0.3;
+    float rad = size * (0.14 + max(a, 0.0) * 0.42);
+    r = max(r, outline((across - rad) / grad, max(size * 0.01, PX * 0.7)) * step(0.0, a) * (1.0 - smoothstep(0.3, 2.0, a)));
   }
   return r;
 }
-vec3 land(vec2 p, float t, float v, float hor) {
-  vec3 col = auroraSky(p, t, v);
-  // A snowy range catching the aurora on its slopes, a darker one in front
-  float x = p.x * 1.5 + 3.0;
-  float r = peaks(x);
-  float ridge = hor + 0.02 + 0.42 * r * r * r;
-  float lean = (peaks(x + 0.02) - r) / 0.02;
-  float snow = smoothstep(ridge - 0.08, ridge - 0.004, p.y) * smoothstep(0.06, 0.12, ridge - hor);
-  float face = clamp(0.5 - lean * 0.3, 0.0, 1.0);
-  vec3 rock = vec3(0.014, 0.026, 0.055) + vec3(0.08, 0.22, 0.17) * snow * face * (0.55 + 0.45 * noise(vec2(p.x * 70.0, p.y * 25.0)));
-  col = mix(col, rock, smoothstep(ridge + 0.0015, ridge - 0.0015, p.y));
-  float front = hor + 0.012 + 0.04 * peaks(p.x * 2.6 + 11.0);
-  col = mix(col, vec3(0.006, 0.012, 0.026), smoothstep(front + 0.0015, front - 0.0015, p.y));
-  // Pines along the shore
-  float cell = 0.018;
-  float cx = floor(p.x / cell);
-  float top = hor + 0.012 + 0.045 * hash11(cx) * (0.5 + 0.5 * noise(vec2(cx * 0.15, 3.0)));
-  float lx = (fract(p.x / cell) - 0.5) * cell;
-  float tree = step(p.y, top) * smoothstep(0.0015, 0.0, abs(lx) - (top - p.y) * 0.3);
-  return mix(col, vec3(0.002, 0.005, 0.01), tree);
+// Where one of the pod is at time t. It crosses the sea from left to right (W across, starting "offset" seconds into
+// the clock), cruising at "cruise" a second just under the surface, its fin cutting through every few seconds, and
+// leaping clear twice, either side of the middle about "spread" from it (a little different each crossing): diving to
+// build speed, then flying "reach" in the air. A crossing takes as long as that needs, then it waits off to the right
+// for "rest" seconds and starts again. shift moves its whole path along. pose: where it is (xy), how it is turned (z)
+// and how arched (w); motion: x its tail beat, y how far through a leap (0-1, or -1 cruising); events: where it last
+// left the water and how long ago, then where it last went back in and how long ago.
+void podState(float t, float size, float rest, float offset, float cruise, float reach, float spread, float W,
+              float shift, float waterY, out vec4 pose, out vec2 motion, out vec4 events) {
+  float air = 1.5;
+  float period = (W - 2.0 * reach) / cruise + 2.0 * air + rest;
+  float height = size * 1.05;
+  float crossing = floor((t - offset) / period);
+  float tau = t - offset - crossing * period;
+  // Far enough apart that the second leap starts after the first has landed.
+  float apart = max(spread * (0.85 + 0.3 * hash11(crossing * 7.31 + 2.0)), reach * 0.55);
+  float a1 = -apart - reach * 0.5;
+  float a2 = apart - reach * 0.5;
+  float t1 = (a1 + W * 0.5) / cruise;
+  float t2 = t1 + air + (a2 - a1 - reach) / cruise;
+  float k1 = clamp((tau - t1) / air, 0.0, 1.0);
+  float k2 = clamp((tau - t2) / air, 0.0, 1.0);
+  float x = -W * 0.5 + cruise * (tau - air * (k1 + k2)) + reach * (k1 + k2);
+  float in1 = step(t1, tau) * step(tau, t1 + air);
+  float in2 = step(t2, tau) * step(tau, t2 + air);
+  float inAir = max(in1, in2);
+  float k = mix(k1, k2, in2);
+  float swim = tau / 2.6 * TAU;
+  float dive = max(smoothstep(t1 - 1.6, t1 - 0.2, tau) * (1.0 - step(t1, tau)), smoothstep(t2 - 1.6, t2 - 0.2, tau) * (1.0 - step(t2, tau)));
+  // Under the water it never jumps from one pose to the next: in the last moments before a leap it rises from its dive
+  // to the surface at the angle it leaves at, and after one it carries on down the way it went in, slowing, then levels
+  // out (since: how long since it last went back in).
+  float launch = max(smoothstep(t1 - 0.45, t1, tau) * (1.0 - step(t1, tau)), smoothstep(t2 - 0.45, t2, tau) * (1.0 - step(t2, tau)));
+  float since = mix(mix(9.0, tau - t1 - air, step(t1 + air, tau)), tau - t2 - air, step(t2 + air, tau));
+  float level = smoothstep(0.0, 0.8, since);
+  float steep = atan(height * 4.0, reach);
+  float plunge = waterY - size * (0.03 + 0.55 * (1.0 - exp(-since * 5.1)));
+  float under = mix(plunge, waterY - size * (0.21 + 0.07 * cos(swim) + 0.22 * dive), smoothstep(0.15, 1.0, since));
+  under = mix(under, waterY - size * 0.03, launch);
+  float turned = mix(mix(-steep, 0.12 * sin(swim) + 0.55 * dive, level), steep, launch);
+  float beat = mix(0.08 * sin(t * 4.5 + offset * 2.0) * (1.0 + dive * 2.0) * level, 0.35 * sin(t * 11.0), launch);
+  float arc = waterY + height * 4.0 * k * (1.0 - k) - size * 0.03;
+  pose.xy = vec2(x + shift, mix(under, arc, inAir));
+  pose.z = mix(turned, atan(height * 4.0 * (1.0 - 2.0 * k), reach), inAir);
+  pose.w = mix(mix(mix(0.34, 0.04, level), 0.34, launch), 0.34, inAir);
+  motion.x = mix(beat, 0.35 * sin(t * 11.0) * (1.0 - smoothstep(0.0, 0.3, k)), inAir);
+  motion.y = mix(-1.0, k, inAir);
+  // The latest leap: where it left the water and how long ago, and where it went back in and how long ago.
+  float second = step(t2, tau);
+  float outAt = mix(a1, a2, second);
+  float outAge = mix(tau - t1 + period * (1.0 - step(t1, tau)), tau - t2, second);
+  events = vec4(outAt + shift, outAge, outAt + reach + shift, outAge - air);
+}
+// One dolphin of the pod (size big, its waterline at waterY): the dark shape it makes under the water, the drips it
+// sheds in the air and the wake its fin leaves cutting the surface. shape: where p is in its own frame (xy), how far
+// outside it p is (z) and its belly, flipper and shine (as dolphin() gives them).
+vec3 dolphinWater(vec3 col, vec2 p, vec4 pose, vec2 motion, float size, float reach, float waterY, out vec3 shape, out vec3 parts) {
+  vec2 q = rot(-pose.z) * (p - pose.xy) / size;
+  // Its shape is only worked out close to it; further off, a circle round it stands in.
+  float d = (length(q) - 0.72) * size;
+  parts = vec3(1.0);
+  if (d < size * 0.05) d = dolphin(q, pose.w, motion.x, parts) * size;
+  shape = vec3(q, d);
+  float dry = smoothstep(waterY - PX, waterY + PX, p.y);
+  col = mix(col, mix(col, vec3(0.04, 0.24, 0.5), 0.5), fill(d) * (1.0 - dry));
+  // Drips shed from its tail in the air, trailing behind and falling.
+  float k = motion.y;
+  float trail = (1.0 - fract(k * 5.0)) * 0.3;
+  vec2 drop = pose.xy + rot(pose.z) * vec2(-0.56, 0.0) * size + vec2(-reach * 0.25 * trail, -6.0 * size * trail * trail);
+  float drip = fill(length((p - drop) * vec2(1.0, 0.75)) - size * 0.017) + fill(length(p - drop - vec2(-0.02, -0.04) * size) - size * 0.011);
+  col = mix(col, vec3(0.92, 0.98, 1.0), clamp(drip, 0.0, 1.0) * step(0.12, k) * step(waterY, drop.y));
+  // Where its fin cuts the surface while cruising: foam at the fin and a wake of white trailing behind.
+  vec2 finTip = pose.xy + rot(pose.z) * vec2(-0.1, 0.19) * size;
+  float cut = smoothstep(waterY - size * 0.04, waterY + size * 0.06, finTip.y) * step(k, -0.5);
+  float back = finTip.x - p.x;
+  float wake = outline(abs(p.y - waterY) - back * 0.05 - size * 0.012, max(size * 0.007, PX * 0.6)) * step(0.0, back) * (1.0 - smoothstep(0.0, size * 1.4, back));
+  col = mix(col, vec3(0.93, 0.98, 1.0), wake * cut * 0.85);
+  return mix(col, vec3(0.95, 0.99, 1.0), fill(length((p - vec2(finTip.x + size * 0.04, waterY)) * vec2(1.0, 2.6)) - size * 0.05) * cut);
+}
+// A dolphin above the water, drawn in full: outlined, with a pale belly, a flipper, a shine along its back and a
+// bright eye. Only where it's out of the water (above waterY).
+vec3 dolphinSkin(vec3 col, vec2 p, vec3 shape, vec3 parts, float size, float waterY) {
+  vec2 q = shape.xy;
+  float d = shape.z;
+  float dry = smoothstep(waterY - PX, waterY + PX, p.y);
+  float edge = max(size * 0.014, PX * 1.3);
+  vec3 skin = mix(vec3(0.3, 0.53, 0.8), vec3(0.45, 0.68, 0.93), smoothstep(-0.05, 0.09, q.y));
+  skin = mix(skin, vec3(0.88, 0.95, 1.0), fill(parts.x * size));
+  skin = mix(skin, vec3(0.86, 0.95, 1.0), fill(parts.z * size) * 0.75);
+  skin = mix(skin, vec3(0.06, 0.16, 0.3), fill(parts.y * size - edge * 0.7));
+  skin = mix(skin, vec3(0.24, 0.44, 0.72), fill(parts.y * size));
+  skin = mix(skin, vec3(0.04, 0.08, 0.16), fill(length(q - vec2(0.335, 0.014)) * size - size * 0.014));
+  skin = mix(skin, vec3(1.0), fill(length(q - vec2(0.341, 0.02)) * size - size * 0.0045));
+  skin = mix(skin, vec3(0.1, 0.22, 0.38), fill(taper(q, vec2(0.38, -0.024), vec2(0.485, -0.035), 0.0035, 0.0025) * size));
+  col = mix(col, vec3(0.06, 0.16, 0.3), fill(d - edge) * dry);
+  return mix(col, skin, fill(d) * dry);
+}
+// The splash (where, how long ago, how big) nearer p of two, counting only ones under a second old.
+vec4 nearer(vec4 best, inout float bestD, vec4 other, vec2 p) {
+  float d = length(p - other.xy) + step(0.48, abs(other.z - 0.475)) * 9.0;
+  float take = step(d, bestD);
+  bestD = mix(bestD, d, take);
+  return mix(best, other, take);
+}
+// A gull seen from in front as it flies across, s across: wings in two joints that flap (with glides between bursts),
+// the outer half trailing the inner, dark tips, a yellow beak; it bobs against its wingbeat.
+vec3 gull(vec3 col, vec2 p, vec2 at, float s, float t, float seed) {
+  float flap = smoothstep(-0.3, 0.3, sin(t * 0.45 + seed * 3.0));
+  float phase = t * 7.0 + seed * 5.0;
+  at.y -= 0.06 * s * sin(phase) * flap;
+  vec2 q = (p - at) / s;
+  q.x = abs(q.x);
+  float a1 = 0.18 + 0.6 * sin(phase) * flap;
+  float a2 = a1 - 0.3 - 0.55 * sin(phase - 1.2) * flap;
+  vec2 shoulder = vec2(0.05, 0.02);
+  vec2 wrist = shoulder + 0.36 * vec2(cos(a1), sin(a1));
+  vec2 tip = wrist + 0.42 * vec2(cos(a2), sin(a2));
+  float inner = taper(q, shoulder, wrist, 0.1, 0.07);
+  float outer = taper(q, wrist, tip, 0.07, 0.018);
+  float body = length(q / vec2(0.1, 0.14)) * 0.1 - 0.1;
+  float head = length(q - vec2(0.0, 0.12)) - 0.07;
+  float bird = min(min(inner, outer), min(body, head));
+  vec2 b = vec2(q.x, q.y - 0.08);
+  float beak = max(abs(b.x) - 0.022 * (1.0 + b.y / 0.04), max(b.y, -b.y - 0.045));
+  float px = PX / s;
+  col = mix(col, vec3(0.22, 0.3, 0.42), 1.0 - smoothstep(-px, px, bird - 0.03));
+  vec3 feathers = mix(vec3(0.97, 0.98, 1.0), vec3(0.75, 0.8, 0.88), smoothstep(0.0, 0.05, q.y - (wrist.y - 0.02)) * step(shoulder.x + 0.05, q.x));
+  feathers = mix(feathers, vec3(0.12, 0.14, 0.2), 1.0 - smoothstep(-px, px, length(q - tip) - 0.13));
+  col = mix(col, feathers, 1.0 - smoothstep(-px, px, bird));
+  col = mix(col, vec3(1.0, 0.75, 0.2), 1.0 - smoothstep(-px, px, beak));
+  return mix(col, vec3(0.1, 0.12, 0.18), 1.0 - smoothstep(-px, px, length(q - vec2(0.03, 0.135)) - 0.014));
+}
+// A cloud drifting across in two tones: the sky's colour with it laid over.
+vec3 drifting(vec3 col, vec2 p, float i, float wide, float aspect, float t) {
+  float drift = max(1.4 * wide, aspect) + 0.6;
+  vec2 at = vec2(mod((i - 1.0) * 0.55 * wide + t * (0.012 + i * 0.004) + drift * 0.5, drift) - drift * 0.5, 0.13 + 0.12 * fract(i * 0.618 + 0.2));
+  float s = 0.28 - i * 0.05;
+  col = mix(col, vec3(0.8, 0.88, 0.97), fill(cloud(p - at + vec2(0.0, 0.015 * s), s)));
+  return mix(col, vec3(1.0), fill(cloud(p - at, s) + 0.02 * s));
 }
 vec3 scene(vec2 fc) {
   vec2 p = (fc - 0.5 * uRes) / uRes.y;
+  PX = 1.0 / uRes.y;
+  float aspect = uRes.x / uRes.y;
+  float wide = min(aspect, 1.7);
   float t = uTime;
   float v = voice();
-  float hor = -0.06;
-  if (p.y >= hor) return land(p, t, v, hor);
-  // The lake: a mirror, broken by slow ripples
-  float down = hor - p.y;
-  float z = 0.3 / down;
-  float rip = noise(vec2(p.x * z * 0.8, z * 6.0 - t * 0.4)) - 0.5;
-  vec2 m = vec2(p.x + rip * 0.006, hor + down + rip * 0.012 * (0.3 + down * 4.0));
-  vec3 col = land(m, t, v, hor) * 0.6 + vec3(0.0, 0.008, 0.02);
-  col += vec3(0.1, 0.25, 0.2) * smoothstep(0.82, 0.98, noise(vec2(p.x * z * 1.5, z * 14.0 - t))) * 0.12;
-  return col * (1.0 - smoothstep(0.0, 0.5, down) * 0.35);
+  float hor = -0.04;
+  vec3 col;
+  if (p.y > hor) {
+    // The sky, the sun with its rings of glow, clouds drifting by in two tones.
+    col = mix(vec3(0.74, 0.91, 1.0), vec3(0.27, 0.62, 0.95), smoothstep(hor, 0.5, p.y));
+    vec2 sun = vec2(0.3 * wide, 0.3);
+    float sd = length(p - sun);
+    col = mix(col, mix(col, vec3(1.0, 0.97, 0.8), 0.25), fill(sd - 0.16 - 0.006 * sin(t * 1.5)));
+    col = mix(col, mix(col, vec3(1.0, 0.95, 0.7), 0.4), fill(sd - 0.11 - 0.004 * sin(t * 1.5 + 1.0)));
+    col = mix(col, vec3(1.0, 0.9, 0.45), fill(sd - 0.07));
+    col = drifting(drifting(drifting(col, p, 0.0, wide, aspect, t), p, 1.0, wide, aspect, t), p, 2.0, wide, aspect, t);
+    // A little island on the horizon with its palm.
+    vec2 isl = p - vec2(-0.32 * wide, hor);
+    float hill = length(isl / vec2(1.0, 0.45)) * 0.45 - 0.045;
+    float trunk = segment(isl, vec2(0.005, 0.015), vec2(0.02, 0.086)) - 0.0028;
+    float leaves = palmCrown((isl - vec2(0.02, 0.088)) / 0.2, 0.07 * sin(t * 1.3)) * 0.2;
+    col = mix(col, vec3(0.18, 0.62, 0.55), fill(min(min(hill, trunk), leaves)));
+  } else {
+    // The sea: lighter at the horizon, deeper close to us.
+    float down = hor - p.y;
+    float z = 0.5 / down;
+    col = mix(vec3(0.33, 0.72, 0.9), vec3(0.08, 0.42, 0.75), smoothstep(0.0, 0.45, down));
+    // Wave marks: little arched strokes in rows, drifting and bobbing, smaller with distance.
+    float row = floor(z * 1.5);
+    float rz = (row + 0.5) / 1.5;
+    float ry = hor - 0.5 / rz;
+    float across = p.x * rz * 1.2 + t * 0.05 * (mod(row, 2.0) < 1.0 ? 1.0 : -1.0) + hash11(row) * 5.0;
+    float cell = floor(across);
+    float w = (fract(across) - 0.5) / 0.18;
+    float archY = ry + 0.004 * sin(t * 1.8 + cell * 2.0 + row) + (0.014 / rz) * (1.0 - w * w);
+    float mark = outline(p.y - archY, max(0.005 / rz, PX * 0.7)) * (1.0 - smoothstep(0.75, 1.0, abs(w)))
+      * step(hash12(vec2(cell, row)), 0.6) * (1.0 - smoothstep(5.0, 30.0, z));
+    col = mix(col, vec3(0.9, 0.97, 1.0), mark * 0.9);
+    // The sun's path: twinkles flashing on the water under it.
+    vec2 sq = vec2(p.x * rz * 4.0, row);
+    vec2 sid = floor(sq);
+    float flash = pow(0.5 + 0.5 * sin(t * (2.0 + 2.0 * hash12(sid)) + hash12(sid + 4.0) * 30.0), 6.0);
+    float onPath = 1.0 - smoothstep(0.02, 0.06 + down * 0.25, abs(p.x - 0.3 * wide));
+    vec2 sl = vec2((fract(sq.x) - 0.5) / (rz * 4.0), p.y - ry);
+    col = mix(col, mix(col, vec3(0.75, 0.93, 1.0), 0.35), onPath);
+    col = mix(col, vec3(1.0, 0.97, 0.8), twinkle(sl, max((0.02 + v * 0.01) / rz, PX * 4.0)) * flash * onPath);
+    col = mix(col, vec3(0.96, 0.99, 1.0), outline(p.y - hor + 0.002, 0.0015) * 0.6);
+    // A buoy bobbing on the left, red and white, with its ripple.
+    vec2 buoy = p - vec2(-0.5 * wide + mix(0.05, 0.12, smoothstep(0.6, 1.2, aspect)), hor - 0.12 + 0.008 * sin(t * 1.4));
+    float body = sdBox(buoy - vec2(0.0, 0.03), vec2(0.02, 0.03)) - 0.008;
+    float stripe = step(0.5, fract(buoy.y / 0.024));
+    col = mix(col, vec3(0.95, 0.97, 1.0), outline(length(buoy * vec2(0.45, 1.6)) - 0.02, 0.0025) * (0.6 + 0.4 * sin(t * 1.4)));
+    col = mix(col, mix(vec3(0.95, 0.25, 0.25), vec3(1.0), stripe), fill(body) * step(-0.004, buoy.y));
+    col = mix(col, vec3(1.0, 0.85, 0.3), fill(length(buoy - vec2(0.0, 0.075)) - 0.008));
+  }
+  // The pod, far to near: a small one far out, and a pair close in that leap side by side. On a narrow screen they're
+  // smaller and leap shorter, so a leap stays in view.
+  float k = clamp(aspect * 1.3, 0.62, 1.0);
+  float W = aspect + 0.5 * k;
+  float reachC = min(0.24 * k, 0.4 * aspect);
+  float reachAB = min(0.5 * k, 0.48 * aspect);
+  float sA = 0.2 * k;
+  float sB = 0.15 * k;
+  float sC = 0.085 * k;
+  vec4 poseC; vec2 motionC; vec4 eventsC;
+  vec4 poseB; vec2 motionB; vec4 eventsB;
+  vec4 poseA; vec2 motionA; vec4 eventsA;
+  float wC = hor - 0.075;
+  float wB = hor - 0.15;
+  float wA = hor - 0.235;
+  podState(t, sC, 4.0, 21.0, 0.05 * k, reachC, 0.275 * aspect, W, 0.0, wC, poseC, motionC, eventsC);
+  podState(t, sB, 2.5, 0.3, 0.07 * k, reachAB, 0.225 * aspect, W, 0.1 * k * smoothstep(0.6, 1.2, aspect), wB, poseB, motionB, eventsB);
+  podState(t, sA, 2.5, 0.0, 0.07 * k, reachAB, 0.225 * aspect, W, 0.0, wA, poseA, motionA, eventsA);
+  vec3 shapeA; vec3 partsA;
+  vec3 shapeB; vec3 partsB;
+  vec3 shapeC; vec3 partsC;
+  col = dolphinWater(col, p, poseC, motionC, sC, reachC, wC, shapeC, partsC);
+  col = dolphinWater(col, p, poseB, motionB, sB, reachAB, wB, shapeB, partsB);
+  col = dolphinWater(col, p, poseA, motionA, sA, reachAB, wA, shapeA, partsA);
+  // Each pixel shades only the nearest dolphin over it (the near pair in front of the far one), with its outline.
+  float onB = step(shapeB.z, 0.014 * sB + PX * 1.5);
+  float onA = step(shapeA.z, 0.014 * sA + PX * 1.5);
+  vec3 shape = mix(mix(shapeC, shapeB, onB), shapeA, onA);
+  vec3 parts = mix(mix(partsC, partsB, onB), partsA, onA);
+  float size = mix(mix(sC, sB, onB), sA, onA);
+  float waterY = mix(mix(wC, wB, onB), wA, onA);
+  col = dolphinSkin(col, p, shape, parts, size, waterY);
+  // Rings spreading where each broke the surface, and the splash nearest this pixel (its crown and flying drops).
+  float ring = max(max(rings(p, vec2(eventsA.x, wA), eventsA.y, sA), rings(p, vec2(eventsA.z, wA), eventsA.w, sA * 1.2)),
+               max(max(rings(p, vec2(eventsB.x, wB), eventsB.y, sB), rings(p, vec2(eventsB.z, wB), eventsB.w, sB * 1.2)),
+                   max(rings(p, vec2(eventsC.x, wC), eventsC.y, sC), rings(p, vec2(eventsC.z, wC), eventsC.w, sC * 1.2))));
+  col = mix(col, vec3(0.9, 0.97, 1.0), ring * 0.8 * step(p.y, hor));
+  vec4 best = vec4(eventsA.x, wA, eventsA.y, sA);
+  float bestD = length(p - best.xy) + step(0.48, abs(best.z - 0.475)) * 9.0;
+  best = nearer(best, bestD, vec4(eventsA.z, wA, eventsA.w, sA * 1.2), p);
+  best = nearer(best, bestD, vec4(eventsB.x, wB, eventsB.y, sB), p);
+  best = nearer(best, bestD, vec4(eventsB.z, wB, eventsB.w, sB * 1.2), p);
+  best = nearer(best, bestD, vec4(eventsC.x, wC, eventsC.y, sC), p);
+  best = nearer(best, bestD, vec4(eventsC.z, wC, eventsC.w, sC * 1.2), p);
+  col = mix(col, vec3(1.0), splash(p, best.xy, best.z, best.w, best.x * 13.0));
+  // Gulls wheeling over: two close, one far, drifting across on the breeze.
+  float sky = 1.6 * max(aspect, 0.8) + 0.6;
+  vec2 g1 = vec2(mod(t * 0.035 + 0.2, sky) - sky * 0.5, 0.33 + 0.03 * sin(t * 0.4));
+  vec2 g2 = vec2(mod(t * 0.03 + 0.9, sky) - sky * 0.5, 0.25 + 0.025 * sin(t * 0.33 + 2.0));
+  vec2 g3 = vec2(mod(-t * 0.018 + 1.4, sky) - sky * 0.5, 0.18 + 0.01 * sin(t * 0.5));
+  // Each pixel draws the gull nearest it.
+  float n2 = step(length(p - g2) / 0.085, length(p - g1) / 0.11);
+  vec3 g = mix(vec3(g1, 0.11), vec3(g2, 0.085), n2);
+  float seed = n2;
+  float n3 = step(length(p - g3) / 0.05, length(p - g.xy) / g.z);
+  g = mix(g, vec3(g3, 0.05), n3);
+  seed = mix(seed, 2.0, n3);
+  return gull(col, p, g.xy, g.z, t, seed);
 }
 `
 
-/** Deep space: a nebula in the coach's own colours, its gas slowly churning, dark dust lanes, stars drifting past at
- *  different depths, a heart that beats, and a comet now and then. */
-const NEBULA = /* glsl */ `
+/** The northern lights drawn like a poster: ribbons of aurora flowing over layered mountains that fade into the
+ *  distance, a pine shore with a lit cabin, and all of it mirrored in a still lake that ripples now and then. */
+const NORTHERN_LIGHTS = /* glsl */ `${TOON}
+// A mountain range's height at x: sharp peaks and gentler shoulders.
+float range(float x, float seed, float height) {
+  float a = 1.0 - abs(sin(x * 2.2 + seed));
+  float b = 1.0 - abs(sin(x * 4.7 + seed * 2.3));
+  return height * (0.55 * a * a + 0.3 * b * b + 0.15 * sin(x * 9.0 + seed * 5.0) * 0.5);
+}
+// A ribbon of aurora: bright along its lower edge, fading up, in curtains that shimmer.
+vec3 ribbon(vec2 p, float base, float speed, float seed, float t, float v) {
+  float x = p.x;
+  float edge = base + 0.07 * sin(x * 2.1 + t * speed + seed) + 0.03 * sin(x * 5.3 - t * speed * 1.4 + seed * 2.0);
+  float up = p.y - edge;
+  float body = smoothstep(-0.03, 0.004, up) * exp(-max(up, 0.0) * (7.0 - v * 2.5)) + exp(-abs(up) / 0.004) * 0.6;
+  float curtains = 0.65 + 0.35 * sin(x * 38.0 + sin(x * 3.0 + t * 0.4 + seed) * 4.0 + t * 0.6);
+  vec3 c = mix(vec3(0.25, 1.0, 0.6), vec3(0.6, 0.4, 1.0), smoothstep(0.0, 0.18, up));
+  c = mix(c, vec3(1.0, 0.45, 0.75), smoothstep(0.12, 0.3, up) * 0.6);
+  return c * body * curtains * (0.75 + 0.25 * sin(x * 1.3 - t * 0.9 + seed));
+}
+vec3 world(vec2 p, float t, float v, float wide) {
+  // The sky, its stars and the aurora.
+  vec3 col = mix(vec3(0.1, 0.17, 0.33), vec3(0.02, 0.03, 0.1), smoothstep(-0.05, 0.5, p.y));
+  vec2 sq = p * 50.0;
+  vec2 sid = floor(sq);
+  float sh = hash12(sid);
+  vec2 so = (fract(sq) - 0.5 - (hash22(sid + 3.0) - 0.5) * 0.6) / 50.0;
+  float shine = 0.55 + 0.45 * sin(t * (1.0 + sh * 5.0) + sh * 40.0);
+  col += vec3(0.8, 0.9, 1.0) * fill(length(so) - PX * (0.5 + sh * 1.3)) * step(sh, 0.14) * shine;
+  col += ribbon(p, 0.16, 0.25, 0.0, t, v) * 0.9;
+  col += ribbon(p, 0.27, 0.18, 2.4, t, v) * 0.55;
+  // Three ranges of mountains, nearer ones darker, the far ones hazy blue with snow on their peaks. A narrow screen
+  // shows fewer of them rather than squeezing them thin.
+  float x = p.x * 1.6 / max(wide, 0.9);
+  vec3 haze = vec3(0.16, 0.24, 0.42);
+  float r1 = range(x + 0.3, 1.0, 0.24);
+  col = mix(col, mix(haze, vec3(0.3, 0.36, 0.55), 0.3), fill(p.y - r1));
+  float snowline = 0.12 + 0.008 * sin(x * 31.0) + 0.005 * sin(x * 67.0 + 1.0);
+  col = mix(col, vec3(0.6, 0.68, 0.88), fill(p.y - r1) * fill(snowline - p.y));
+  float r2 = -0.02 + range(x * 1.3 + 2.0, 4.0, 0.2);
+  col = mix(col, vec3(0.13, 0.18, 0.33), fill(p.y - r2));
+  float r3 = -0.05 + range(x * 1.7 + 5.0, 7.0, 0.12);
+  col = mix(col, vec3(0.08, 0.12, 0.24), fill(p.y - r3));
+  // The near shore: a dark band of pines, and a cabin with its window lit.
+  float shore = -0.085 + 0.012 * sin(x * 3.0 + 1.0);
+  float cell = floor(p.x / 0.022);
+  float lx = (fract(p.x / 0.022) - 0.5) * 0.022;
+  float tall = 0.03 + 0.03 * hash11(cell);
+  float pine = max(abs(lx) - (shore + tall - p.y) * 0.28, p.y - shore - tall);
+  vec3 dark = vec3(0.03, 0.05, 0.11);
+  col = mix(col, dark, fill(min(p.y - shore, pine)));
+  vec2 cabin = p - vec2(-0.22 * wide, shore + 0.004);
+  float house = sdBox(cabin - vec2(0.0, 0.013), vec2(0.02, 0.013));
+  float roof = max(abs(cabin.x) * 0.75 + cabin.y - 0.04, -cabin.y + 0.022);
+  col = mix(col, dark, fill(min(house, roof)));
+  float window = sdBox(cabin - vec2(0.006, 0.012), vec2(0.005, 0.0045));
+  col = mix(col, vec3(1.0, 0.75, 0.35), fill(window));
+  col += vec3(1.0, 0.6, 0.25) * exp(-length(cabin - vec2(0.006, 0.012)) / 0.02) * 0.25;
+  return col;
+}
 vec3 scene(vec2 fc) {
   vec2 p = (fc - 0.5 * uRes) / uRes.y;
+  PX = 1.0 / uRes.y;
+  float aspect = uRes.x / uRes.y;
   float t = uTime;
   float v = voice();
-  float s = t * 0.024;
-  vec2 q = rot(s * 0.6) * p * 1.55 + vec2(s * 0.4, 0.0);
-  vec2 w1 = vec2(fbm(q + vec2(0.0, s)), fbm(q + vec2(5.2, 1.3) - s));
-  vec2 w2 = vec2(fbm(q + 3.0 * w1 + vec2(1.7, 9.2) + s * 0.7), fbm(q + 3.0 * w1 + vec2(8.3, 2.8)));
-  float f = fbm(q + 3.4 * w2);
-  float aspect = uRes.x / uRes.y;
-  vec3 hot = mix(uA, vec3(1.0, 0.35, 0.65), 0.4);
-  vec3 cool = mix(uB, vec3(0.3, 0.2, 0.95), 0.35);
-  vec3 col = vec3(0.006, 0.005, 0.02);
-  // Regions of the cloud glow in different gases: the coach's colours, a magenta and a warm amber
-  vec3 tint = mix(cool, hot, smoothstep(0.3, 0.7, w2.x));
-  tint = mix(tint, vec3(1.0, 0.25, 0.7), smoothstep(0.55, 0.8, w1.y) * 0.55);
-  tint = mix(tint, vec3(1.0, 0.62, 0.32), smoothstep(0.62, 0.85, w2.y) * 0.4);
-  float glow = pow(smoothstep(0.3, 0.9, f), 2.0);
-  col += tint * glow * 1.6;
-  col += tint * smoothstep(0.15, 0.7, f) * 0.12;
-  col += vec3(1.0, 0.9, 0.97) * pow(smoothstep(0.72, 1.0, f), 4.0) * 0.45;
-  float dust = smoothstep(0.5, 0.72, fbm(q * 2.4 + w1 * 1.5 + 11.0));
-  col *= 1.0 - dust * 0.8;
-  // A glowing heart off to one side
-  vec2 heart = vec2(0.34 * min(aspect, 1.2), 0.16);
-  float beat = 1.0 + 0.25 * pow(0.5 + 0.5 * sin(t * 0.9), 8.0);
-  col += hot * 0.3 * exp(-length(p - heart) * 3.2) * (0.5 + f) * beat;
-  col += vec3(1.0, 0.9, 0.95) * exp(-length(p - heart) * 40.0) * 0.5 * beat;
-  col *= 1.0 + v * 0.6;
-  // Stars drifting past: the nearer, the quicker.
-  col += stars(p + vec2(t * 0.003, t * 0.001), t, 0.12) * 0.9 + brightStars(p + vec2(t * 0.007, t * 0.002), t, 0.16);
-  // A comet crossing slowly every twenty-five seconds, its tail streaming away from the heart.
-  float pass = mod(t, 25.0) / 25.0;
-  vec2 comet = vec2(mix(-0.75, 0.35, pass) * aspect, mix(0.42, -0.1, pass));
-  vec2 tail = normalize(comet - heart);
-  vec2 cr = p - comet;
-  float along = dot(cr, tail);
-  float side = dot(cr, vec2(-tail.y, tail.x)) - along * along * 0.6;
-  float glowTail = exp(-side * side / (0.00002 + max(along, 0.0) * 0.0006)) * step(0.0, along) * exp(-max(along, 0.0) * 7.0);
-  float head = exp(-dot(cr, cr) / 0.00002);
-  float shown = smoothstep(0.0, 0.1, pass) * (1.0 - smoothstep(0.85, 1.0, pass));
-  col += (vec3(0.75, 0.9, 1.0) * glowTail * 0.55 + vec3(1.0) * head * 1.5) * shown;
+  float wide = min(aspect, 1.6);
+  float lake = -0.095;
+  // Below the shore the lake mirrors everything, a ripple running through it now and then.
+  float below = step(p.y, lake);
+  float wobble = 0.004 * sin((lake - p.y) * 160.0 - t * 2.0) * smoothstep(0.0, 0.2, lake - p.y);
+  vec2 at = mix(p, vec2(p.x + wobble, 2.0 * lake - p.y), below);
+  vec3 col = world(at, t, v, wide);
+  if (below > 0.5) {
+    col = mix(col * 0.55, vec3(0.03, 0.06, 0.14), smoothstep(0.0, 0.45, lake - p.y) * 0.6);
+    // Bright ripple lines catching the aurora.
+    float rowAt = (lake - p.y) * 30.0;
+    float row = floor(rowAt);
+    float dash = step(0.55, fract(p.x * (2.0 + 6.0 * hash11(row)) + t * 0.04 * (hash11(row + 3.0) - 0.5) + hash11(row + 7.0)));
+    float lines = outline((fract(rowAt) - 0.5) / 30.0, 0.0012) * dash * 0.22;
+    col += vec3(0.45, 0.95, 0.8) * lines * smoothstep(0.0, 0.06, lake - p.y);
+    col = mix(col, vec3(0.7, 0.85, 1.0), outline(p.y - lake + 0.0015, 0.001) * 0.4);
+  }
   return col;
 }
 `
 
-/** Iridescent silk folding in slow motion, tinted with the coach's colours, a glint of light sliding across it. */
-const LIQUID_SILK = /* glsl */ `
-// Satin drapes: long folds running on a diagonal, gathered and loosened along their length.
-float folds(vec2 p, float t) {
-  vec2 d = normalize(vec2(0.5, 1.0));
-  float u = dot(p, d);
-  float w = dot(p, vec2(-d.y, d.x));
-  float warp = 1.4 * fbm3(vec2(w * 1.2 + t * 0.05, u * 0.6 - t * 0.04)) + 0.35 * sin(w * 2.0 + t * 0.2);
-  float h = sin(u * 6.0 + warp * 3.0 + t * 0.15);
-  h += 0.45 * sin(u * 13.0 + warp * 5.0 - t * 0.12 + 1.7);
-  h += 0.2 * sin(u * 23.0 + warp * 8.0 + t * 0.1);
-  return h * 0.35;
+/** Space drawn like a poster: a ringed planet banded in the coach's colours turning slowly, a moon orbiting it, a
+ *  little cratered world, soft clouds of nebula, twinkling stars and a comet now and then. */
+const NEBULA = /* glsl */ `${TOON}
+// The colour of the planet's nth band.
+vec3 bandColour(float n) {
+  float m = mod(n, 3.0);
+  return m < 1.0 ? uA : m < 2.0 ? mix(uA, uB, 0.5) : mix(uB, vec3(1.0, 0.9, 0.8), 0.3);
 }
 vec3 scene(vec2 fc) {
   vec2 p = (fc - 0.5 * uRes) / uRes.y;
+  PX = 1.0 / uRes.y;
+  float aspect = uRes.x / uRes.y;
+  float wide = min(aspect, 1.6);
+  float t = uTime;
   float v = voice();
-  float t = uTime * (1.0 + v * 0.35);
-  float e = 1.5 / uRes.y;
-  float h = folds(p, t);
-  vec2 g = vec2(folds(p + vec2(e, 0.0), t) - h, folds(p + vec2(0.0, e), t) - h) / e;
-  vec3 n = normalize(vec3(-g * 0.2, 1.0));
-  // A key light from the upper left, a coloured rim light from the lower right
-  vec3 key = normalize(vec3(-0.35, 0.75, 0.55));
-  vec3 rimL = normalize(vec3(0.7, -0.3, 0.6));
-  vec3 view = vec3(0.0, 0.0, 1.0);
-  float d1 = max(dot(n, key), 0.0);
-  float d2 = max(dot(n, rimL), 0.0);
-  float s1 = pow(max(dot(n, normalize(key + view)), 0.0), 26.0);
-  float s2 = pow(max(dot(n, normalize(rimL + view)), 0.0), 18.0);
-  // The cloth drifts between the coach's colours and a deep violet
-  float k = 0.5 + 0.5 * sin(dot(p, vec2(1.3, 0.7)) * 1.5 + uTime * 0.05);
-  vec3 cloth = mix(mix(uA, uB, k), vec3(0.32, 0.12, 0.55), 0.4);
-  vec3 col = cloth * (0.06 + 0.85 * pow(d1, 2.5)) + mix(uB, vec3(1.0, 0.4, 0.8), 0.4) * pow(d2, 3.0) * 0.45;
-  col += vec3(1.0, 0.97, 0.92) * s1 * (0.85 + v * 0.7) + mix(uA, vec3(1.0), 0.5) * s2 * 0.5;
-  // An iridescent sheen where the folds turn away
-  float fres = pow(1.0 - n.z, 2.0);
-  col += (0.5 + 0.5 * cos(TAU * (h * 0.8 + fres * 3.0 + vec3(0.0, 0.33, 0.67)))) * fres * 1.1;
-  // A light swinging slowly past: its glint slides across the folds.
-  float swing = uTime * 0.23;
-  vec3 glint = normalize(vec3(cos(swing) * 0.8, sin(swing * 0.7) * 0.6, 0.55) + view);
-  col += mix(vec3(1.0), uA, 0.25) * pow(max(dot(n, glint), 0.0), 90.0) * (0.6 + v * 0.8);
-  col *= 0.55 + 0.45 * smoothstep(-0.5, 0.5, h);
+  // Deep space, and nebula in soft flat steps of the coach's colours.
+  vec3 col = mix(vec3(0.05, 0.03, 0.13), vec3(0.01, 0.01, 0.05), length(p * vec2(0.7, 1.0)));
+  float cloud = fbm3(p * 2.2 + vec2(t * 0.01, -t * 0.006) + 3.0);
+  vec3 tintA = mix(vec3(0.42, 0.2, 0.85), uA, 0.3) * 0.42;
+  vec3 tintB = mix(vec3(0.9, 0.28, 0.65), uB, 0.25) * 0.45;
+  col = mix(col, tintA, smoothstep(0.48, 0.5, cloud) * 0.7);
+  col = mix(col, tintB, smoothstep(0.6, 0.62, cloud) * 0.7);
+  col = mix(col, mix(tintB, vec3(1.0, 0.85, 0.95), 0.35), smoothstep(0.7, 0.72, cloud) * 0.6);
+  // Stars: dots, and now and then a bright four-pointed one.
+  vec2 sq = p * 40.0;
+  vec2 sid = floor(sq);
+  float sh = hash12(sid);
+  vec2 so = (fract(sq) - 0.5 - (hash22(sid + 3.0) - 0.5) * 0.6) / 40.0;
+  float shine = 0.55 + 0.45 * sin(t * (0.8 + sh * 4.0) + sh * 50.0);
+  col += vec3(0.85, 0.9, 1.0) * fill(length(so) - PX * (0.6 + sh * 1.4)) * step(sh, 0.16) * shine;
+  vec2 middle = (fract(sq) - 0.5) / 40.0;
+  col += vec3(1.0, 0.95, 0.85) * twinkle(middle, 0.014 * (0.6 + 0.4 * shine) * (1.0 + v * 0.5)) * step(sh, 0.025);
+  // A comet crossing every twenty seconds, in from beyond one edge and out past the other.
+  float pass = mod(t, 20.0) / 20.0;
+  float edgeX = 0.5 * aspect + 0.3;
+  vec2 from = vec2(-edgeX, 0.42);
+  vec2 to = vec2(edgeX, 0.02);
+  vec2 head = mix(from, to, pass);
+  vec2 dir = normalize(from - to);
+  vec2 cr = p - head;
+  float along = dot(cr, dir);
+  float tailWidth = 0.004 * clamp(along / 0.2, 0.0, 1.0) + 0.001;
+  float tail = fill(abs(dot(cr, vec2(-dir.y, dir.x))) - tailWidth) * step(0.0, along) * (1.0 - smoothstep(0.0, 0.22, along));
+  col = mix(col, vec3(0.75, 0.9, 1.0), tail * 0.7);
+  col = mix(col, vec3(1.0), fill(length(cr) - 0.005));
+
+  // The ringed planet, low on the right (nearer the middle of a narrow screen, and smaller): bands turning, a shadow
+  // over its far side, rings behind it and across its front.
+  float side = smoothstep(0.6, 1.2, aspect);
+  float S = mix(0.7, 1.0, side);
+  vec2 planet = vec2(mix(0.08, 0.36 * wide, side), -0.2);
+  float radius = 0.24;
+  vec2 pp = (p - planet) / S;
+  vec2 rp = rot(-0.35) * pp;
+  // The rings: an ellipse 3.6 times flatter than wide, its edges and grooves measured on the screen so they stay smooth
+  // where it's flattest. Shaded at the back, brightening round to the front.
+  float ringR = length(rp * vec2(1.0, 3.6));
+  float grad = max(length(rp * vec2(1.0, 12.96)) / max(ringR, 1e-4), 1.0) / S;
+  float ring = fill((abs(ringR - 0.4) - 0.07) / grad);
+  float grooveAA = 18.0 * grad * PX;
+  ring *= 0.7 + 0.3 * smoothstep(-grooveAA, grooveAA, 0.25 - abs(fract(ringR * 18.0) - 0.5));
+  vec3 ringCol = mix(vec3(0.95, 0.85, 0.7), mix(uA, vec3(1.0), 0.5), 0.35);
+  ringCol *= mix(0.75, 1.0, smoothstep(-0.06, 0.06, -rp.y));
+  col = mix(col, ringCol, ring);
+  float body = (length(pp) - radius) * S;
+  float lat = pp.y / radius + 0.25 * pp.x / radius;
+  float bands = lat * 4.0 + 0.4 * sin(pp.x * 8.0 + t * 0.4 + lat * 3.0);
+  float band = floor(bands);
+  vec3 bandCol = mix(bandColour(band), bandColour(band + 1.0), smoothstep(1.0 - fwidth(bands), 1.0, fract(bands)));
+  bandCol *= 0.85 + 0.15 * (1.0 + v);
+  float lit = fill((length(pp - vec2(-0.08, 0.06)) - radius * 1.02) * S);
+  bandCol = mix(bandCol * 0.45, bandCol, lit);
+  bandCol = mix(bandCol, bandCol + 0.25, outline((length(pp - vec2(-0.01, 0.01)) - radius + 0.012) * S, 0.006 * S) * lit);
+  col = mix(col, bandCol, fill(body));
+  float front = ring * step(rp.y, 0.0);
+  col = mix(col, ringCol, front);
+  col = mix(col, ringCol * 0.55, front * fill((length(pp - vec2(0.02, -0.03)) - radius) * S) * 0.4);
+  // Its moon, orbiting: in front on one side, hidden behind on the other.
+  float orbit = t * 0.25;
+  vec2 moonAt = planet + rot(-0.35) * vec2(cos(orbit) * 0.42, sin(orbit) * 0.42 / 3.6) * S;
+  float inFront = step(0.0, sin(orbit) * -1.0);
+  float moon = length(p - moonAt) - 0.028 * S;
+  float shown = max(inFront, 1.0 - fill(body));
+  vec3 moonCol = mix(vec3(0.45, 0.42, 0.55), vec3(0.88, 0.86, 0.95), fill(length(p - moonAt - vec2(-0.008, 0.008) * S) - 0.026 * S));
+  col = mix(col, moonCol, fill(moon) * shown);
+  // A little cratered world, up on the left.
+  vec2 small = p - vec2(mix(-0.11, -0.4 * wide, side), 0.27);
+  float sb = length(small) - 0.06;
+  vec3 smallCol = mix(vec3(0.95, 0.55, 0.45), vec3(1.0, 0.75, 0.6), fill(length(small - vec2(-0.015, 0.015)) - 0.058));
+  float craters = min(min(length(small - vec2(0.02, 0.01)) - 0.012, length(small - vec2(-0.02, -0.022)) - 0.008), length(small - vec2(-0.012, 0.03)) - 0.006);
+  smallCol = mix(smallCol, smallCol * 0.75, fill(craters));
+  col += vec3(1.0, 0.6, 0.5) * fill(sb - 0.02) * 0.06;
+  col = mix(col, smallCol, fill(sb));
+  return col;
+}
+`
+
+/** Ribbons of silk drifting over a flowing wash of colour: a soft mesh gradient in the coach's colours, and see-through
+ *  ribbons rippling across it, each with a shadow and a bright edge. */
+const LIQUID_SILK = /* glsl */ `${TOON}
+// A ribbon across the screen: where p is across its width (0 to 1 inside), wobbling along its length.
+float ribbonAt(vec2 p, float tilt, float off, float width, float t, float seed) {
+  vec2 q = rot(tilt) * p;
+  float centre = off + 0.06 * sin(q.x * 2.4 + t * 0.35 + seed) + 0.03 * sin(q.x * 5.1 - t * 0.5 + seed * 2.0);
+  float w = width * (0.75 + 0.25 * sin(q.x * 1.7 + t * 0.3 + seed * 3.0));
+  return (q.y - centre) / w + 0.5;
+}
+vec3 scene(vec2 fc) {
+  vec2 p = (fc - 0.5 * uRes) / uRes.y;
+  PX = 1.0 / uRes.y;
+  float t = uTime;
+  float v = voice();
+  // The wash: four pools of colour wandering, blended where they meet.
+  vec3 c1 = uA;
+  vec3 c2 = mix(uB, vec3(0.35, 0.2, 0.8), 0.45);
+  vec3 c3 = vec3(0.95, 0.4, 0.7);
+  vec3 c4 = vec3(0.08, 0.06, 0.22);
+  float s = t * (0.12 + v * 0.06);
+  vec2 a1 = vec2(sin(s * 0.9) * 0.6, cos(s * 0.7) * 0.3);
+  vec2 a2 = vec2(cos(s * 0.6 + 2.0) * 0.6, sin(s * 0.8 + 1.0) * 0.35);
+  vec2 a3 = vec2(sin(s * 0.5 + 4.0) * 0.5, cos(s * 1.1 + 3.0) * 0.3);
+  vec2 a4 = vec2(cos(s * 0.4 + 5.0) * 0.7, sin(s * 0.6) * 0.4);
+  vec2 wp = p + 0.08 * vec2(sin(p.y * 3.0 + s * 2.0), cos(p.x * 2.5 - s * 1.6));
+  float w1 = 1.0 / (0.02 + dot(wp - a1, wp - a1));
+  float w2 = 1.0 / (0.02 + dot(wp - a2, wp - a2));
+  float w3 = 0.6 / (0.02 + dot(wp - a3, wp - a3));
+  float w4 = 1.4 / (0.02 + dot(wp - a4, wp - a4));
+  vec3 col = (c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4) / (w1 + w2 + w3 + w4);
+  col *= 0.7;
+  // Three ribbons, back to front: a shadow under each, the ribbon see-through, its edges catching the light.
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    float r = ribbonAt(p, -0.45 + fi * 0.32, -0.18 + fi * 0.17, 0.11 + fi * 0.02, t, fi * 2.7);
+    float rs = ribbonAt(p + vec2(0.012, -0.018), -0.45 + fi * 0.32, -0.18 + fi * 0.17, 0.11 + fi * 0.02, t, fi * 2.7);
+    float widthPx = 0.11 / PX;
+    float inside = smoothstep(0.0, 1.5 / widthPx, r) * (1.0 - smoothstep(1.0 - 1.5 / widthPx, 1.0, r));
+    float shadow = smoothstep(-0.1, 0.1, rs) * (1.0 - smoothstep(0.9, 1.1, rs));
+    col *= 1.0 - shadow * 0.3;
+    vec3 silk = mix(mix(uA, vec3(1.0), 0.35), mix(uB, vec3(1.0, 0.6, 0.85), 0.5), r);
+    silk *= 0.75 + 0.35 * sin(r * PI);
+    col = mix(col, silk, inside * 0.55);
+    float across = clamp(r, 0.0, 1.0);
+    col += vec3(1.0) * inside * (exp(-across / 0.04) + exp(-(1.0 - across) / 0.04)) * 0.35 * (1.0 + v);
+    // A sheen sliding along it.
+    float sweep = fract(dot(p, vec2(0.6, 0.3)) * 0.8 - t * 0.05 + fi * 0.33) - 0.5;
+    col += vec3(1.0) * inside * exp(-sweep * sweep / 0.004) * 0.15;
+  }
+  // A fine still grain, like the weave of the silk.
+  col *= 1.0 + (hash12(fc) - 0.5) * 0.025;
   return col;
 }
 `
@@ -897,23 +869,23 @@ vec3 scene(vec2 fc) {
       vec2 a = vec2((hash11(cycle) - 0.5) * uRes.x / uRes.y * 0.9, 0.3 + 0.15 * hash11(cycle + 3.0));
       vec2 dir = normalize(vec2(hash11(cycle + 1.0) < 0.5 ? -0.9 : 0.9, -0.35));
       vec2 head = a + dir * shot * 0.6;
-      float trail = exp(-pow(segment(p, head, head - dir * 0.12) / (0.0014 + 0.0006 * uScale), 2.0)) * smoothstep(0.12, 0.0, dot(p - head, -dir));
+      float trail = exp(-pow(segment(p, head, head - dir * 0.12) / (0.0014 + 0.0006 * uScale), 2.0)) * (1.0 - smoothstep(0.0, 0.12, dot(p - head, -dir)));
       col += vec3(1.0, 0.55, 0.9) * trail * sin(shot / 0.6 * PI) * 1.3;
     }
-    // The sun, cut by bars that sink toward the horizon
+    // The sun, cut by bars that sink toward the horizon (smaller on a narrow screen)
     vec2 c = vec2(0.0, hor + 0.15);
     float d = length(p - c);
-    float r = 0.24;
+    float r = 0.24 * min(1.0, uRes.x / uRes.y * 1.4);
     vec3 sunCol = mix(vec3(1.0, 0.22, 0.6), vec3(1.0, 0.86, 0.3), smoothstep(c.y - r, c.y + r * 0.7, p.y));
     float bars = p.y < c.y ? step(0.38 + (c.y - p.y) / r * 0.55, fract((p.y - t * 0.03) * 38.0)) : 0.0;
-    float disc = smoothstep(r + 0.002, r - 0.002, d) * (1.0 - bars);
+    float disc = (1.0 - smoothstep(r - 0.002, r + 0.002, d)) * (1.0 - bars);
     col += vec3(1.0, 0.3, 0.55) * exp(-max(d - r, 0.0) * 9.0) * 0.35 * (1.0 + v * 0.6);
     col = mix(col, sunCol, disc);
     // Mountains on either side, edged in neon
     float side = smoothstep(0.1, 0.42, abs(p.x));
     float peak = 1.0 - abs(noise(vec2(p.x * 5.0, 1.0)) * 2.0 - 1.0);
     float ridge = hor + side * (0.05 + 0.14 * peak * peak);
-    float m = smoothstep(ridge + 0.0015, ridge - 0.0015, p.y);
+    float m = 1.0 - smoothstep(ridge - 0.0015, ridge + 0.0015, p.y);
     vec3 rock = vec3(0.07, 0.01, 0.12) + vec3(0.5, 0.05, 0.6) * smoothstep(0.75, 1.0, noise(vec2(p.x * 40.0, p.y * 40.0))) * 0.15;
     col = mix(col, rock, m * step(0.001, side));
     col += vec3(1.0, 0.2, 0.85) * exp(-abs(p.y - ridge) / (0.0025 + 0.001 * uScale)) * side * 0.8;
@@ -922,8 +894,10 @@ vec3 scene(vec2 fc) {
   }
   float down = hor - p.y;
   float z = 0.25 / down;
-  float x = p.x * z;
-  float px = z / uRes.y;
+  // On a narrow screen the lanes sit closer, so they run down the floor rather than straight off its sides.
+  float narrow = clamp(uRes.x / uRes.y, 0.5, 1.0);
+  float x = p.x * z / narrow;
+  float px = z / narrow / uRes.y;
   float pz = z * z / 0.25 / uRes.y;
   col = vec3(0.04, 0.0, 0.07) + vec3(0.22, 0.02, 0.2) * exp(-down * 7.0);
   // The grid racing toward you
@@ -960,9 +934,7 @@ vec3 scene(vec2 fc) {
 export const SCENE_SHADERS = {
   midnight: MIDNIGHT,
   "deep-end": DEEP_END,
-  "finals-night": FINALS_NIGHT,
   "open-water": OPEN_WATER,
-  "glow-tide": GLOW_TIDE,
   "northern-lights": NORTHERN_LIGHTS,
   nebula: NEBULA,
   "liquid-silk": LIQUID_SILK,

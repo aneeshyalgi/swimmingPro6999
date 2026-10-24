@@ -18,6 +18,9 @@ const REVEAL_MS = 1400
 const MAX_PIXELS = 1_100_000
 // Seconds into a scene's own clock it starts at (a moment when every scene has something going on).
 const TIME_OFFSET = 20
+// The clock starts over after this long, so it never grows big enough for the GPU to lose the precision the
+// animations need (a chat can stay open all day).
+const CLOCK_WRAP = 3 * 60 * 60
 
 // Safari has no idle callbacks: a short timeout stands in.
 const idleCallbacks = () => typeof window.requestIdleCallback === "function"
@@ -127,7 +130,7 @@ export function CallScene({ scene, origin, tone, level, phase, warm, variant = "
       renderer.size(Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale)))
       speak += ((phase.current === "speaking" ? 1 : 0) - speak) * 0.06
       const input = {
-        time: ((now - started) / 1000) * (reduced ? 0.15 : 1) + TIME_OFFSET, level: reduced ? 0 : level.current ?? 0,
+        time: (((now - started) / 1000) * (reduced ? 0.15 : 1)) % CLOCK_WRAP + TIME_OFFSET, level: reduced ? 0 : level.current ?? 0,
         speak, a: state.tone[0], b: state.tone[1], scale,
       }
       renderer.clear()
