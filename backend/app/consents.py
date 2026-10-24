@@ -23,7 +23,7 @@ from app.db import get_supabase_client
 router = APIRouter(prefix="/api/consents", tags=["Consents"])
 
 # The Terms and Privacy Policy version (their date, as on the pages); kept with every consent given under it.
-LEGAL_VERSION = "2026-10-18"
+LEGAL_VERSION = "2026-10-19"
 PARENTAL_CONSENT_AGE = 16
 KEY, KIND = "consents", "consent_record"
 # The Mind and Nutrition records (mental.KEY, nutrition.KEY) and daily check-ins: what health consent covers.

@@ -412,6 +412,14 @@ create table if not exists public.user_platform_surveys (
   updated_at timestamptz not null default now()
 );
 
+-- Whether they agreed to be emailed now and then to ask for their feedback, and when they last chose
+-- (migrations/2026-10-19_add_survey_email_permission.sql).
+alter table public.user_platform_surveys
+  add column if not exists survey_emails_ok boolean not null default false;
+
+alter table public.user_platform_surveys
+  add column if not exists survey_emails_at timestamptz;
+
 create unique index if not exists idx_user_platform_surveys_user_version
   on public.user_platform_surveys (user_id, survey_version);
 

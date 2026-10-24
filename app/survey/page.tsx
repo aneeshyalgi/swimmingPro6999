@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AlertTriangle, CheckCircle2, LoaderCircle, RefreshCw, Star } from "lucide-react"
+import { SurveyEmails } from "@/components/survey/survey-emails"
 import { SurveyFlow, resumeAt } from "@/components/survey/survey-flow"
 import { BackToDashboard, SurveyNotice, SurveyScreen } from "@/components/survey/survey-scene"
 import {
-  clearProgress, emptyDraft, openSurvey, readProgress, saveProgress, sendSurvey,
+  asksEmails, clearProgress, emptyDraft, openSurvey, readProgress, saveProgress, sendSurvey,
   type SurveyAnswers, type SurveyBlock, type SurveyProgress, type SurveyState,
 } from "@/lib/survey"
 
@@ -16,7 +17,8 @@ const ELSEWHERE: Record<SurveyBlock, string> = { signed_out: "/auth?next=/survey
 /**
  * /survey: athletes rate SwimGPT and answer a few questions about it. Only for signed-in athletes who pay for SwimGPT
  * (the API checks the same): anyone else is sent to sign in, to pay or to finish setting up. An athlete who already
- * answered this round is told so, and while the survey isn't open (its table doesn't exist yet) the page says that.
+ * answered this round is told so, and can change whether we may email them; while the survey isn't open (its table
+ * doesn't exist yet) the page says that.
  */
 export default function SurveyPage() {
   const router = useRouter()
@@ -68,6 +70,7 @@ export default function SurveyPage() {
   }
 
   const { state, account, firstName } = survey
+  const asks = asksEmails(state)
   if (!state.available) {
     return (
       <SurveyScreen tone="#fcd34d">
@@ -82,7 +85,9 @@ export default function SurveyPage() {
       <SurveyScreen tone="#34d399">
         <SurveyNotice icon={CheckCircle2} tone="text-emerald-300" title={`You've already answered${firstName ? `, ${firstName}` : ""}. Thank you!`}
           body={`You rated SwimGPT ${state.response.rating} out of 5 on ${when}. Your answers are with the team building SwimGPT.`}
-          action={<BackToDashboard primary />} />
+          action={<BackToDashboard primary />}>
+          {asks && <SurveyEmails value={state.survey_emails === true} onSaved={(saved) => setSurvey({ ...survey, state: saved })} />}
+        </SurveyNotice>
       </SurveyScreen>
     )
   }
@@ -92,10 +97,10 @@ export default function SurveyPage() {
     saveProgress(state.version, account, next)
   }
   const send = async (answers: SurveyAnswers) => {
-    const saved = await sendSurvey(answers)
+    const saved = await sendSurvey(answers, asks)
     clearProgress(state.version, account)
     setSent(true)
     setSurvey({ ...survey, state: saved })
   }
-  return <SurveyFlow firstName={firstName} progress={progress} onProgress={changeProgress} onSend={send} />
+  return <SurveyFlow firstName={firstName} asksEmails={asks} progress={progress} onProgress={changeProgress} onSend={send} />
 }

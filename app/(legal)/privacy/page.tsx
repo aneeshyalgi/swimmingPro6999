@@ -40,7 +40,7 @@ const sections: LegalSection[] = [
               <tr><td>Mind and Nutrition answers, check-ins</td><td>Tailor mental and nutrition guidance</td><td>Art. 9(2)(a), 6(1)(a): your consent</td></tr>
               <tr><td>A parent or guardian&apos;s consent (under 16)</td><td>Prove that they agreed</td><td>Art. 6(1)(c), 7(1), 8</td></tr>
               <tr><td>Chats, voice and video frames</td><td>AI coaching answers</td><td>Art. 6(1)(b)</td></tr>
-              <tr><td>Survey answers, if you take part</td><td>Improve SwimGPT</td><td>Art. 6(1)(f); being contacted about them: 6(1)(a)</td></tr>
+              <tr><td>Survey answers, if you take part</td><td>Improve SwimGPT</td><td>Art. 6(1)(f); emails about your answers or new surveys: 6(1)(a)</td></tr>
               <tr><td>Payment data</td><td>Subscriptions and purchases, bookkeeping</td><td>Art. 6(1)(b) and (c)</td></tr>
             </tbody>
           </table>
@@ -180,7 +180,7 @@ const sections: LegalSection[] = [
     id: "emails",
     title: "Emails we send",
     body: (
-      <p>You receive account emails (confirming your email address, resetting your password), sent through Supabase. They are part of providing SwimGPT (Art. 6(1)(b) GDPR). We don&apos;t send newsletters or marketing emails; if we ever want to, we will ask you first.</p>
+      <p>You receive account emails (confirming your email address, resetting your password), sent through Supabase. They are part of providing SwimGPT (Art. 6(1)(b) GDPR). If you agree in our feedback survey, we also email you now and then to ask for your feedback, for example when there&apos;s a new survey (see <a href="#survey">Feedback survey</a>). We don&apos;t send newsletters or other marketing emails; if we ever want to, we will ask you first.</p>
     ),
   },
   {
@@ -195,8 +195,9 @@ const sections: LegalSection[] = [
     title: "Feedback survey",
     body: (
       <>
-        <p>In your dashboard we may ask you to rate SwimGPT and answer a few questions about it. If you take part, we keep your answers with your account: your rating, how often you use SwimGPT and how your training has changed, the features you use and your rating of each, what you like, what we should improve and build next, how likely you are to recommend SwimGPT, anything you write in your own words, and whether we may contact you about your answers.</p>
+        <p>In your dashboard we may ask you to rate SwimGPT and answer a few questions about it. If you take part, we keep your answers with your account: your rating, how often you use SwimGPT and how your training has changed, the features you use and your rating of each, what you like, what we should improve and build next, how likely you are to recommend SwimGPT, anything you write in your own words, whether we may contact you about your answers, and whether we may email you when there&apos;s a new survey, with when you last chose.</p>
         <p>We use them only to improve SwimGPT. The legal basis is our legitimate interest in learning what works for our athletes and improving SwimGPT (Art. 6(1)(f) GDPR). Taking part is voluntary: you can skip the survey, and nothing in SwimGPT depends on it. Please don&apos;t include health information in what you write. If you allow us to contact you about your answers, we may email you about them (Art. 6(1)(a) GDPR); you can withdraw this at any time by email.</p>
+        <p>If you allow us to email you when there&apos;s a new survey, we email you now and then to ask for your feedback (Art. 6(1)(a) GDPR). You can withdraw this at any time: on the survey page, with the link in each of these emails, or by emailing us.</p>
         <p>Until you send them, unfinished answers stay in your browser (see <a href="#device">Cookies and storage on your device</a>). We keep your answers until you delete your account, and delete them sooner if you ask us to.</p>
       </>
     ),

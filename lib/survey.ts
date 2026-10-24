@@ -39,6 +39,8 @@ const draftSchema = z.object({
   recommend: z.number().int().min(0).max(10).nullable(),
   comments: z.string().max(COMMENT_LENGTH),
   contact_ok: z.boolean(),
+  // Answers saved on the device before this was asked don't have it: not agreed.
+  survey_emails_ok: z.boolean().default(false),
 })
 /** The answers while they're being given: a question not answered yet is null (or empty). */
 export type SurveyDraft = z.infer<typeof draftSchema>
@@ -53,17 +55,29 @@ export type SurveyAnswers = Omit<SurveyDraft, "rating" | "usage_frequency" | "tr
 export const emptyDraft = (): SurveyDraft => ({
   rating: null, usage_frequency: null, training_impact: null, features_used: [], feature_ratings: {}, liked: [], liked_note: "",
   improve: [], improve_note: "", wishlist: [], wishlist_note: "", recommend: null, comments: "", contact_ok: false,
+  survey_emails_ok: false,
 })
 
-// GET and POST /api/survey. `available` is false until the survey's table exists; `response` is this round's answer.
+// GET and POST /api/survey. `available` is false until the survey's table exists; `response` is this round's answer;
+// `survey_emails` is whether the athlete lets us email them now and then to ask for their feedback, null (or missing,
+// from an API from before) while the API can't keep it, so the survey doesn't ask.
 const stateSchema = z.object({
   version: z.string(),
   available: z.boolean(),
   response: z.object({ rating: z.number(), submitted_at: z.string() }).nullable(),
+  survey_emails: z.boolean().nullish(),
 })
 export type SurveyState = z.infer<typeof stateSchema>
 
-export const sendSurvey = (answers: SurveyAnswers) => apiRequest("/survey", stateSchema, { body: answers })
+/** Whether the survey asks for permission to email the athlete: only once the API can keep the answer. */
+export const asksEmails = (state: SurveyState) => typeof state.survey_emails === "boolean"
+
+/** Sends the answers, leaving out the email permission when the survey didn't ask for it (`asks`). */
+export const sendSurvey = ({ survey_emails_ok, ...answers }: SurveyAnswers, asks: boolean) =>
+  apiRequest("/survey", stateSchema, { body: asks ? { ...answers, survey_emails_ok } : answers })
+
+/** After answering: gives or withdraws permission to email the athlete now and then to ask for their feedback. */
+export const setSurveyEmails = (ok: boolean) => apiRequest("/survey/emails", stateSchema, { method: "PUT", body: { survey_emails_ok: ok } })
 
 /** Why someone can't take the survey: they aren't signed in, don't pay for SwimGPT, or haven't set up their profile. */
 export type SurveyBlock = "signed_out" | "unpaid" | "no_profile"

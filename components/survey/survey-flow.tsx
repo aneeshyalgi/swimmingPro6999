@@ -9,8 +9,10 @@ import {
   SlidersHorizontal, Smartphone, Star, Target, ThumbsUp, TrendingDown, TrendingUp, Trophy, Users, Wallet, Watch, Waves, WifiOff, Wrench,
   Zap, type LucideIcon,
 } from "lucide-react"
-import { Switch } from "@/components/ui/switch"
-import { ChoiceGroup, LEVEL_TONES, Note, OptionCard, Picks, RATING_WORDS, ScoreScale, StarRating, type Option } from "@/components/survey/survey-inputs"
+import { EMAILS_QUESTION } from "@/components/survey/survey-emails"
+import {
+  ChoiceGroup, LEVEL_TONES, Note, OptionCard, Picks, RATING_WORDS, ScoreScale, StarRating, SwitchRow, type Option,
+} from "@/components/survey/survey-inputs"
 import { BackToDashboard, Counter, SurveyScreen, Words } from "@/components/survey/survey-scene"
 import { cn } from "@/lib/utils"
 import {
@@ -281,8 +283,10 @@ function Thanks({ firstName, rating, ref }: { firstName: string; rating: number;
  * The survey: an intro, the questions one at a time, then a thank-you. The answers (`progress`) belong to the page,
  * which keeps them on the device until they're sent, so leaving and coming back carries on where the athlete left off.
  */
-export function SurveyFlow({ firstName, progress, onProgress, onSend }: {
+export function SurveyFlow({ firstName, asksEmails, progress, onProgress, onSend }: {
   firstName: string
+  /** The last question also asks whether we may email them (only once the API can keep the answer). */
+  asksEmails: boolean
   progress: SurveyProgress
   onProgress: (progress: SurveyProgress) => void
   /** Sends the answers: resolves once they're saved, rejects with why they weren't. */
@@ -481,15 +485,14 @@ export function SurveyFlow({ firstName, progress, onProgress, onSend }: {
           <ScoreScale value={answers.recommend} onChange={(value) => set("recommend", value)} />
           <Note label="Anything else you'd like to tell us?" placeholder="Ideas, problems, praise: it all helps." value={answers.comments} max={COMMENT_LENGTH}
             onChange={(value) => set("comments", value)} index={12} />
-          <label className="sv-toggle-row sv-rise flex cursor-pointer items-start gap-3.5 rounded-2xl p-4" style={{ "--i": 13 } as CSSProperties}>
-            <Switch checked={answers.contact_ok} onCheckedChange={(checked) => set("contact_ok", checked)}
-              className="mt-0.5 data-[state=checked]:bg-[var(--sv-tone)] data-[state=unchecked]:bg-white/15" />
-            <span>
-              <span className="block text-sm font-semibold text-white">You can email me about my answers</span>
-              <span className="mt-0.5 block text-xs leading-5 text-slate-400">Only about this feedback, at your account&apos;s email address.</span>
-            </span>
-          </label>
-          <PrivacyNote index={14} />
+          <div className="grid gap-2.5">
+            <SwitchRow title="You can email me about my answers" detail="Only about this feedback, at your account's email address."
+              checked={answers.contact_ok} onChange={(checked) => set("contact_ok", checked)} index={13} />
+            {asksEmails && (
+              <SwitchRow {...EMAILS_QUESTION} checked={answers.survey_emails_ok} onChange={(checked) => set("survey_emails_ok", checked)} index={14} />
+            )}
+          </div>
+          <PrivacyNote index={15} />
         </div>
       )
       break

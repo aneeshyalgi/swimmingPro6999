@@ -2,6 +2,7 @@
 
 import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react"
 import { Check, Star, type LucideIcon } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
@@ -198,6 +199,23 @@ export function Note({ label, value, onChange, max, placeholder, index }: {
       <Textarea value={value} maxLength={max} rows={3} placeholder={placeholder} onChange={(event) => onChange(event.target.value)}
         className="sv-field mt-2.5 min-h-[104px] resize-y px-4 py-3 placeholder:text-slate-500 focus-visible:ring-0 focus-visible:ring-offset-0" />
       {value.length > max * 0.8 && <span className="mt-1.5 block text-right text-[11px] tabular-nums text-slate-500">{value.length} / {max}</span>}
+    </label>
+  )
+}
+
+/** A yes-or-no question answered with a switch, which its title and detail toggle too. With `index` it rises into place. */
+export function SwitchRow({ title, detail, checked, onChange, index }: {
+  title: string; detail: string; checked: boolean; onChange: (checked: boolean) => void; index?: number
+}) {
+  return (
+    <label className={cn("sv-toggle-row flex cursor-pointer items-start gap-3.5 rounded-2xl p-4", index !== undefined && "sv-rise")}
+      style={index === undefined ? undefined : ({ "--i": index } as CSSProperties)}>
+      <Switch checked={checked} onCheckedChange={onChange}
+        className="mt-0.5 data-[state=checked]:bg-[var(--sv-tone)] data-[state=unchecked]:bg-white/15" />
+      <span>
+        <span className="block text-sm font-semibold text-white">{title}</span>
+        <span className="mt-0.5 block text-xs leading-5 text-slate-400">{detail}</span>
+      </span>
     </label>
   )
 }

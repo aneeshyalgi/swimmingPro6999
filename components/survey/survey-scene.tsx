@@ -143,7 +143,7 @@ export function SurveyScreen({ tone = "#57e5ea", status, progress, footer, onKey
 }
 
 /** A message in place of the questions (opening, already answered, not open, or not loaded), with a way on. */
-export function SurveyNotice({ icon: Icon, tone = "text-white", title, body, busy = false, action }: {
+export function SurveyNotice({ icon: Icon, tone = "text-white", title, body, busy = false, action, children }: {
   icon: LucideIcon
   /** The icon's colour. */
   tone?: string
@@ -152,6 +152,8 @@ export function SurveyNotice({ icon: Icon, tone = "text-white", title, body, bus
   /** Still opening: the icon spins and screen readers hear that the page is busy. */
   busy?: boolean
   action?: ReactNode
+  /** Below the message, before the way on: say, a choice to make. */
+  children?: ReactNode
 }) {
   return (
     <div role={busy ? "status" : undefined} aria-busy={busy || undefined}
@@ -162,7 +164,12 @@ export function SurveyNotice({ icon: Icon, tone = "text-white", title, body, bus
       </span>
       <h2 className="sv-rise mt-8 text-balance text-2xl font-bold tracking-tight text-white sm:text-3xl" style={{ "--i": 1 } as CSSProperties}>{title}</h2>
       {body && <div className="sv-rise mt-3 text-sm leading-6 text-slate-400 sm:text-base" style={{ "--i": 2 } as CSSProperties}>{body}</div>}
-      {action && <div className="sv-rise mt-8 flex flex-wrap items-center justify-center gap-3" style={{ "--i": 3 } as CSSProperties}>{action}</div>}
+      {children && <div className="sv-rise mt-8 w-full" style={{ "--i": 3 } as CSSProperties}>{children}</div>}
+      {action && (
+        <div className={cn("sv-rise flex flex-wrap items-center justify-center gap-3", children ? "mt-6" : "mt-8")} style={{ "--i": children ? 4 : 3 } as CSSProperties}>
+          {action}
+        </div>
+      )}
     </div>
   )
 }
