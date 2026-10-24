@@ -22,10 +22,11 @@ import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
 import { CalendarDay } from "@/components/calendar-day"
 import { WorkoutBuilder } from "@/components/workout-builder"
 import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
+import { WeekCoach, WeekCoachButton, type WeekLink } from "@/components/week-coach"
 import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, LoadingLane, TwoColumnFlow, WeekSkeleton, inputClass, shortDate, todayISO, useRemovals } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import { blankDoc, docFromItem, type BuilderDoc } from "@/lib/workout-builder"
-import { GENERATION_CANCELLED, downloadGymPdf, downloadWeekPdf, gymSavedSchema, gymWeekSchema, mondayISO, shiftWeek, trainingRequest, type GymItem, type GymWeek } from "@/lib/training"
+import { GENERATION_CANCELLED, downloadGymPdf, downloadWeekPdf, gymSavedSchema, gymWeekSchema, mondayISO, shiftWeek, trainingRequest, type GymItem, type GymWeek, type TrainingWeek } from "@/lib/training"
 
 const planSteps = ["Reading your onboarding, meets and check-ins", "Choosing your coach's sessions for this training block", "Matching every movement to your level and equipment", "Personalising warm-ups and mobility", "Adding them to your gym week"]
 
@@ -50,9 +51,18 @@ function withCompleted(week: GymWeek, key: string, completed: boolean): GymWeek 
   return { ...week, days, summary: { ...week.summary, completed: days.reduce((sum, day) => sum + day.workouts.filter((item) => item.completed).length, 0) } }
 }
 
-/** The Workout Library: a strength & dryland calendar that is independent of swim training. */
-export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => Promise<void>; onGuideEvent?: (event: GuideEvent) => void }) {
-  const [weekStart, setWeekStart] = useState(() => mondayISO())
+/**
+ * The Workout Library: a strength & dryland calendar that is independent of swim training. `refresh` changes when
+ * workouts were added from elsewhere (the coach chat), so the open week reads them in; `revealWeek` opens a week.
+ * `coach`: the athlete's coach, who re-plans a planned week with them in a panel beside it; `onOpenCoachChat` opens the
+ * coach chat (with a message to send there), for anything that isn't changing the week.
+ */
+export function WorkoutCalendar({ onChanged, onGuideEvent, refresh = 0, revealWeek = null, coach = null, onOpenCoachChat }: {
+  onChanged: () => Promise<void>; onGuideEvent?: (event: GuideEvent) => void
+  refresh?: number; revealWeek?: { weekStart: string; at: number } | null; coach?: string | null
+  onOpenCoachChat?: (draft: string) => void
+}) {
+  const [weekStart, setWeekStart] = useState(() => revealWeek?.weekStart ?? mondayISO())
   const [week, setWeek] = useState<GymWeek | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -60,7 +70,6 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
   const [notice, setNotice] = useState<string | null>(null)
   const [planning, setPlanning] = useState(false)
   const generation = useWeekGeneration()
-  const [armed, setArmed] = useState(false)
   const [editing, setEditing] = useState<Editing | null>(null)
   const [dateAction, setDateAction] = useState<DateAction | null>(null)
   const [deleting, setDeleting] = useState<GymItem | null>(null)
@@ -74,6 +83,21 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
   const ticks = useRef(new Map<string, Promise<boolean>>())
   // Workouts being deleted: each is shown going on itself, not in a banner.
   const removals = useRemovals()
+  // The coach chat beside the week, and the workouts it just changed (they glow for a moment).
+  const [coachOpen, setCoachOpen] = useState(false)
+  const [changed, setChanged] = useState<ReadonlySet<string> | null>(null)
+  // What the re-planner shows on the week while it's open (see WeekLink).
+  const [coachLink, setCoachLink] = useState<WeekLink | null>(null)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
+  useEffect(() => {
+    if (!changed) return
+    const timer = window.setTimeout(() => setChanged(null), 4800)
+    return () => window.clearTimeout(timer)
+  }, [changed])
   const inFlight = useRef(false)
   const activeWeek = useRef(weekStart)
   activeWeek.current = weekStart
@@ -95,6 +119,15 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
     return () => controller.abort()
   }, [load])
 
+  // Workouts added from the coach chat: the open week reads them in, as it stands (a save in progress reads it anyway).
+  const refreshed = useRef(refresh)
+  useEffect(() => {
+    if (refresh === refreshed.current) return
+    refreshed.current = refresh
+    if (!inFlight.current) void load().catch(() => { /* the next change reads the week again */ })
+  }, [refresh, load])
+  useEffect(() => { if (revealWeek) setWeekStart(revealWeek.weekStart) }, [revealWeek])
+
   const showWeek = useCallback((data: GymWeek) => { if (activeWeek.current === data.week_start) setWeek(data) }, [])
   const perform = async (operation: () => Promise<GymWeek | void>, message: string) => {
     if (inFlight.current) return false
@@ -115,28 +148,71 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
     }
   }
 
+  /** A save from the coach chat runs as the week's own do: one at a time, after the ticks still saving. */
+  const guard = async <T,>(work: () => Promise<T>): Promise<T> => {
+    if (inFlight.current) throw new Error("Another change to your week is still saving. Try again in a moment.")
+    inFlight.current = true; setBusy(true); setError(null); setNotice(null)
+    try {
+      await Promise.all(ticks.current.values())
+      return await work()
+    } finally {
+      inFlight.current = false; setBusy(false)
+    }
+  }
+  /** Show the workouts the coach chat changed glowing (again: the glow restarts). */
+  const glow = (ids: ReadonlySet<string>) => {
+    setChanged(null)
+    window.setTimeout(() => { if (alive.current) setChanged(ids) }, 40)
+  }
+  const coachChanged = (saved: TrainingWeek | GymWeek, highlight: string[]) => {
+    showWeek(saved as GymWeek)
+    glow(new Set(highlight))
+    void onChanged().catch(() => { /* the summary catches up with the next change */ })
+  }
+  /** A fresh plan for the rest of the week, asked for in the re-planner: every workout it planned glows on the week. */
+  const coachReplan = async () => {
+    const saved = await planWeek()
+    if (!saved) return false
+    glow(new Set(saved.days.filter((day) => day.date >= today).flatMap((day) => day.workouts.filter((item) => item.source === "ai").map((item) => item.key))))
+    return true
+  }
+  /** Scroll to the first day the coach chat changed and show its workouts glowing. */
+  const showChanged = (highlight: string[]) => {
+    const ids = new Set(highlight)
+    glow(ids)
+    const day = week?.days.find((entry) => entry.workouts.some((item) => ids.has(item.key)))
+    if (day) document.getElementById(`gym-day-${day.date}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
+  }
+
   const days = week?.days ?? []
   const dayMinutes = (item: GymWeek["days"][number]) => item.workouts.reduce((sum, workout) => sum + workout.workout.estimated_duration_minutes, 0)
   const maxDayMinutes = Math.max(1, ...days.map(dayMinutes))
   const openDays = days.filter((item) => item.date >= today)
-  const aiPending = days.flatMap((item) => item.workouts).filter((item) => item.source === "ai" && !item.completed)
-  const weekEndLabel = shortDate(new Date(Date.parse(`${shiftWeek(weekStart, 1)}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10), { day: "numeric", month: "short", year: "numeric" })
+  const weekEnd = new Date(Date.parse(`${shiftWeek(weekStart, 1)}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10)
+  const weekEndLabel = shortDate(weekEnd, { day: "numeric", month: "short", year: "numeric" })
+  // A week planned with AI is re-planned with the coach until it's over; one not planned yet is planned first, so its
+  // re-planner opens only once there's a plan to change.
+  const planned = days.some((item) => item.workouts.some((workout) => workout.source === "ai"))
+  const canReplan = planned && weekEnd >= today
+  useEffect(() => { if (week && !canReplan) setCoachOpen(false) }, [week, canReplan])
 
-  const planWeek = async () => {
-    if (aiPending.length && !armed) {
-      setArmed(true)
-      window.setTimeout(() => setArmed(false), 3500)
-      return
-    }
-    setArmed(false); setPlanning(true)
+  /** Plan the rest of the week with AI (planning it again replaces its AI workouts not ticked off). Resolves the week as
+   *  saved, or null when it wasn't. */
+  const planWeek = async (): Promise<GymWeek | null> => {
+    setPlanning(true)
     onGuideEvent?.("gym-started")
     let cancelled = false
-    const saved = await perform(() => generation.run("/gym/generate", gymWeekSchema, { week_start: weekStart }).catch((failure: unknown) => {
-      cancelled = failure instanceof Error && failure.message === GENERATION_CANCELLED
-      throw failure
-    }), "Your gym week is ready: strength sessions on spread-out days and mobility on the rest.")
+    const result: { week: GymWeek | null } = { week: null }
+    const saved = await perform(async () => {
+      result.week = await generation.run("/gym/generate", gymWeekSchema, { week_start: weekStart }).catch((failure: unknown) => {
+        cancelled = failure instanceof Error && failure.message === GENERATION_CANCELLED
+        throw failure
+      })
+      return result.week
+    }, planned ? "Your gym week is re-planned: what you'd ticked off or added is as it was." : "Your gym week is ready: strength sessions on spread-out days and mobility on the rest.")
     onGuideEvent?.(saved ? "gym-done" : cancelled ? "gym-cancelled" : "gym-failed")
     setPlanning(false)
+    return saved ? result.week : null
   }
   const openBuilder = (doc: BuilderDoc, key: string | null, isNew: boolean) => {
     setFocusDate(null)
@@ -264,6 +340,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
         {item.workouts.map((workout) => <CompletionRow key={workout.key} checked={workout.completed} saving={ticking.has(workout.key)} locked={future} busy={busy} hint={future ? "You can tick this off on the day" : undefined}
           label={workout.workout.title} onToggle={() => toggle(workout)} removal={removals.get(workout.key)} onDismissRemoval={() => removals.dismiss(workout.key)}>
           <GymWorkoutCard item={workout} defaultOpen={expanded} onOpen={expanded ? undefined : (event) => openSession(workout.key, event.currentTarget)}
+            className={changed?.has(workout.key) ? "wc-changed wc-gym" : undefined}
             onEdit={() => openBuilder(docFromItem(workout), workout.key, false)} actions={cardMenu(workout)} />
         </CompletionRow>)}
         {(expanded || !item.workouts.length) && <button type="button" disabled={busy} onClick={() => newWorkout(item.date)} className="group flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-500 transition-all hover:border-violet-300/40 hover:text-violet-100 disabled:opacity-50">
@@ -283,7 +360,8 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
       <p className="sr-only" role="status" aria-live="polite">{removals.announcement}</p>
 
       <Reveal index={0}>
-        <section data-guide="gym-week" aria-busy={loading} className="relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(167,139,250,0.16),rgba(12,20,28,0.95)_45%,rgba(87,229,234,0.1))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-6">
+        <section data-guide="gym-week" data-coach-week="gym" aria-busy={loading} className={cn("relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(167,139,250,0.16),rgba(12,20,28,0.95)_45%,rgba(87,229,234,0.1))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-6",
+          coachOpen && canReplan && "wc-linked wc-gym")}>
           {loading && <span aria-hidden className="tl-topbar tl-topbar-violet" />}
           <div className="pointer-events-none absolute -left-20 -top-24 h-64 w-64 rounded-full bg-violet-400/15 blur-3xl" />
           <div className="relative flex flex-wrap items-start justify-between gap-4">
@@ -301,12 +379,13 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
                 <Button size="sm" variant="ghost" className="h-8 rounded-full px-3 text-xs" disabled={busy || loading} onClick={() => setWeekStart(mondayISO())}>This Week</Button>
                 <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full" aria-label="Next week" disabled={busy || loading} onClick={() => setWeekStart(shiftWeek(weekStart, 1))}><ChevronRight className="h-4 w-4" /></Button>
               </div>
+              {coach && canReplan && <WeekCoachButton kind="gym" coach={coach} week={week} today={today} open={coachOpen} disabled={loading || planning} onOpen={() => setCoachOpen(true)} />}
               <ExportWeekButton onExport={exportWeek} disabled={!week || loading || planning} />
               <Button variant="outline" disabled={busy || loading} onClick={() => newWorkout()} className="rounded-full border-white/15 bg-white/[0.04]"><Plus className="mr-1.5 h-4 w-4" />New workout</Button>
-              <Button data-guide="gym-generate" disabled={busy || loading || !openDays.length} onClick={() => void planWeek()}
-                className={cn("rounded-full font-semibold shadow-[0_10px_30px_rgba(167,139,250,0.3)] transition-all hover:-translate-y-0.5", armed ? "bg-amber-300 text-slate-950 hover:bg-amber-200" : "bg-gradient-to-r from-violet-300 to-cyan-300 text-slate-950")}>
-                <Sparkles className="mr-2 h-4 w-4" />{armed ? "Tap again to replace AI workouts" : aiPending.length ? "Re-plan with AI" : "Plan my week with AI"}
-              </Button>
+              {!planned && <Button data-guide="gym-generate" disabled={busy || loading || !openDays.length} onClick={() => void planWeek()}
+                className="rounded-full bg-gradient-to-r from-violet-300 to-cyan-300 font-semibold text-slate-950 shadow-[0_10px_30px_rgba(167,139,250,0.3)] transition-all hover:-translate-y-0.5">
+                <Sparkles className="mr-2 h-4 w-4" />Plan my week with AI
+              </Button>}
             </div>
           </div>
 
@@ -317,6 +396,8 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
               return (
                 <CalendarDay key={item.date} tone="gym" index={index} date={item.date} dayName={item.day_name} isToday={item.date === today} past={item.date < today}
                   level={minutes / maxDayMinutes} amount={minutes ? String(minutes) : null} unit="min" {...dayProgress(item)} emptyLabel="Free"
+                  changed={!!changed && item.workouts.some((workout) => changed.has(workout.key))}
+                  coach={coachLink ? { scanning: coachLink.scanning, pending: coachLink.pending[item.date], focus: coachLink.focus === item.date } : undefined}
                   onOpen={(event) => { setFocusOrigin(tileCentre(event.currentTarget)); setFocusDate(item.date) }}
                   icons={item.workouts.length > 0 && <>
                     <Dumbbell className="h-3 w-3 text-violet-200" />
@@ -401,6 +482,12 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
         </AlertDialogContent>
       </AlertDialog>
 
+      {coachOpen && coach && canReplan && (
+        <WeekCoach key={weekStart} kind="gym" coach={coach} weekStart={weekStart}
+          week={week} today={today} busy={busy || planning} guard={guard} onClose={() => { setCoachOpen(false); setCoachLink(null) }} onApplied={coachChanged}
+          onUndone={coachChanged} onShow={showChanged} onReplan={coachReplan} onOpenChat={onOpenCoachChat} onLink={setCoachLink} />
+      )}
+
       <DayFocus tone="gym" eyebrow="Gym week" date={focusDay ? focusDate : null} origin={focusOrigin}
         days={days.map((item) => ({ date: item.date, day_name: item.day_name, ...dayProgress(item) }))}
         onDate={setFocusDate} onClose={() => setFocusDate(null)}
@@ -421,7 +508,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent }: { onChanged: () => 
 
       <WorkoutFocus tone="gym" id={openWorkout ? focusSession : null} origin={focusOrigin}
         sessions={weekSessions.map(({ day, workout }) => ({ id: workout.key, title: workout.workout.title,
-          eyebrow: `${shortDate(day.date, { weekday: "short", day: "numeric", month: "short" })} · ${workout.source === "manual" ? "Your workout" : "AI workout"}` }))}
+          eyebrow: `${shortDate(day.date, { weekday: "short", day: "numeric", month: "short" })} · ${workout.source === "manual" ? "Your workout" : workout.source === "coach" ? "From your coach" : "AI workout"}` }))}
         onSelect={setFocusSession} onClose={() => setFocusSession(null)}
         summary={openWorkout && <>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-300/25 bg-violet-400/10 px-3 py-1 text-xs font-semibold tabular-nums text-violet-100"><Timer className="h-3.5 w-3.5" />{openWorkout.workout.workout.estimated_duration_minutes} min</span>

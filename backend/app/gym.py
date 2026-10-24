@@ -32,6 +32,7 @@ from app.training import (
     TrainingRoute, athlete_brief, competitions, generate_structured, gym_items, load_records, record_id, save_record,
     week_pdf_response,
 )
+from app.training_days import chosen
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +236,11 @@ def strength_athlete(profile):
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
     readiness = [item["feedback"] for item in recent_athlete_feedback(profile["id"]) if str(item["date"])[:10] >= cutoff]
     meets = [{"date": meet["date"], "priority": meet.get("priority"), "name": meet.get("name")} for meet in competitions(profile)]
-    return athlete_from_profile(profile, completed_sessions=completed, readiness=readiness, competitions=meets)
+    athlete = athlete_from_profile(profile, completed_sessions=completed, readiness=readiness, competitions=meets)
+    days = chosen(profile)  # the athlete's own strength days and mobility, chosen on the dashboard
+    if days is not None:
+        athlete.strength_days, athlete.mobility_days = days["gym"], days["mobility"]
+    return athlete
 
 
 def _narrate(profile, session: PlannedSession, notes: str, job: Any = None) -> dict[str, Any]:
@@ -311,8 +316,9 @@ async def generate_gym(request: GymGenerateRequest, http: Request, authorization
 def plan_gym_week(profile, week_start: date, notes: str = "") -> dict[str, Any]:
     """Plan the rest of the week with the SwimGPT Strength & Mobility System; returns the updated gym week.
 
-    Strength & Mobility sessions go on spread-out days and the coach's mobility routine on the other open days.
-    Days with your own or completed workouts are kept (and count toward your weekly strength sessions).
+    Strength & Mobility sessions go on spread-out days (or the athlete's chosen strength days) and the coach's mobility
+    routine on the other open days (unless they've turned it off). Days with your own or completed workouts are kept (and
+    count toward your weekly strength sessions).
     """
     today = datetime.now(timezone.utc).date()
     if week_start + timedelta(days=7) <= today:
@@ -325,9 +331,15 @@ def plan_gym_week(profile, week_start: date, notes: str = "") -> dict[str, Any]:
                  if date.fromisoformat(day["date"]) >= today and day["date"] not in kept_days]
     if not open_days:
         raise HTTPException(status_code=409, detail="Every remaining day this week already has a workout of yours. Pick a future week.")
-    kept_strength = sum(not str(item["focus"]).startswith("Mobility") for item in kept)
-    sessions = plan_week(strength_athlete(profile), week_start, open_days, today, kept_strength)
+    athlete = strength_athlete(profile)
+    # On the athlete's own days, the days left are planned, so only the workouts on them count toward the week.
+    kept_strength = sum(not str(item["focus"]).startswith("Mobility") for item in kept
+                        if athlete.strength_days is None or item["date"] >= today.isoformat())
+    sessions = plan_week(athlete, week_start, open_days, today, kept_strength)
     if not sessions:
+        if athlete.strength_days is not None and not athlete.mobility_days:
+            raise HTTPException(status_code=409, detail="There's nothing left to plan this week: your strength days already have their workouts "
+                                                        "(or are race days), and the mobility routine is off in your training days.")
         raise HTTPException(status_code=409, detail="There's nothing left to plan this week (race days stay free of gym work). Pick a future week.")
     job = week_jobs.current()
 

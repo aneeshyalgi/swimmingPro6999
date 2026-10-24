@@ -3,6 +3,8 @@ from itertools import product
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
+
 from app.gym import GymWorkout, plan_gym_week
 from app.strength_library import DRILLS, EQUIPMENT_BY_FACILITY, FAMILIES
 from app.strength_planner import Athlete, context_for, plan_week, training_block
@@ -253,6 +255,69 @@ class CoachWithoutGymProgramTests(unittest.TestCase):
             text = f"{item.workout['rationale']} {item.workout['coaching_notes']}"
             for other in ("Coach Timothy", "Coach Pete", "Coach Robert", "Coach Tony"):
                 self.assertNotIn(other, text)
+
+
+class ChosenStrengthDaysTests(unittest.TestCase):
+    """The strength days and mobility an athlete chose on the dashboard (training_days)."""
+    MON_THU_SAT = [True, False, False, True, False, True, False]
+
+    def test_strength_goes_only_on_the_chosen_days_and_mobility_on_the_others(self):
+        sessions = plan_week(athlete(strength_days=self.MON_THU_SAT), MONDAY, WEEK, MONDAY)
+        self.assertEqual([session.day.weekday() for session in strength(sessions)], [0, 3, 5])
+        self.assertEqual(len(sessions), 7)
+
+    def test_mobility_can_be_left_off(self):
+        sessions = plan_week(athlete(strength_days=self.MON_THU_SAT, mobility_days=False), MONDAY, WEEK, MONDAY)
+        self.assertEqual([(session.kind, session.day.weekday()) for session in sessions], [("strength", 0), ("strength", 3), ("strength", 5)])
+
+    def test_mid_week_every_chosen_day_left_is_planned(self):
+        friday = MONDAY + timedelta(days=4)
+        days = [False, False, False, False, True, True, True]
+        sessions = plan_week(athlete(strength_days=days), MONDAY, WEEK[4:], friday)
+        self.assertEqual([session.day.weekday() for session in strength(sessions)], [4, 5, 6])
+        # Spread over the week instead, the same three a week come to one in its last three days.
+        self.assertEqual(len(strength(plan_week(athlete(), MONDAY, WEEK[4:], friday))), 1)
+
+    def test_race_days_stay_free_of_strength_on_chosen_days_too(self):
+        meet = [{"date": (MONDAY + timedelta(days=5)).isoformat(), "priority": "A", "name": "Nationals"}]
+        days = [False, False, False, True, True, False, False]   # Thursday and Friday: the two days before the meet
+        sessions = plan_week(athlete(strength_days=days, competitions=meet), MONDAY, WEEK, MONDAY)
+        self.assertEqual(strength(sessions), [])
+        self.assertEqual(len(strength(plan_week(athlete(strength_days=days), MONDAY, WEEK, MONDAY))), 2)  # without the meet: both
+
+    def test_nothing_to_plan_on_the_athletes_days_says_why(self):
+        week = {"days": [{"date": day.isoformat(), "workouts": []} for day in WEEK]}
+        for days, mobility, words in ((self.MON_THU_SAT, False, "mobility routine is off"), (self.MON_THU_SAT, True, "race days stay free"),
+                                      (None, False, "race days stay free")):
+            with patch("app.gym.gym_week", return_value=week),                     patch("app.gym.strength_athlete", return_value=athlete(strength_days=days, mobility_days=mobility)),                     patch("app.gym.plan_week", return_value=[]), patch("app.gym.datetime") as clock:
+                clock.now.return_value.date.return_value = MONDAY
+                with self.assertRaises(HTTPException) as raised:
+                    plan_gym_week({"id": "profile-a"}, MONDAY)
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertIn(words, raised.exception.detail)
+
+    def test_no_strength_days_chosen_leaves_only_mobility(self):
+        sessions = plan_week(athlete(gym_sessions=0, strength_days=[False] * 7), MONDAY, WEEK, MONDAY)
+        self.assertEqual({session.kind for session in sessions}, {"mobility"})
+        self.assertEqual(len(sessions), 7)
+
+    def test_the_competition_block_caps_sessions_on_chosen_days_too(self):
+        meet = [{"date": (MONDAY + timedelta(days=12)).isoformat(), "priority": "A", "name": "Nationals"}]   # next week: competition block
+        days = [True, True, True, True, True, False, False]
+        sessions = strength(plan_week(athlete(gym_sessions=5, strength_days=days, competitions=meet), MONDAY, WEEK, MONDAY))
+        self.assertEqual(len(sessions), 3)
+        self.assertTrue(all(days[session.day.weekday()] for session in sessions))
+
+    def test_on_chosen_days_only_the_workouts_from_today_on_count(self):
+        thursday = MONDAY + timedelta(days=3)
+        done = {"key": "done", "date": MONDAY.isoformat(), "source": "coach", "completed": True, "focus": "From your coach"}
+        week = {"days": [{"date": day.isoformat(), "workouts": [done] if day == MONDAY else []} for day in WEEK]}
+        for days, counted in ((self.MON_THU_SAT, 0), (None, 1)):
+            with patch("app.gym.gym_week", return_value=week), patch("app.gym.strength_athlete", return_value=athlete(strength_days=days)),                     patch("app.gym.plan_week", return_value=[]) as planner, patch("app.gym.datetime") as clock:
+                clock.now.return_value.date.return_value = thursday
+                with self.assertRaises(HTTPException):
+                    plan_gym_week({"id": "profile-a"}, MONDAY)        # nothing comes back from the stand-in planner
+            self.assertEqual(planner.call_args.args[4], counted)
 
 
 if __name__ == "__main__":

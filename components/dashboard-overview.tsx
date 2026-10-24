@@ -1,12 +1,13 @@
 "use client"
 
-import Link from "next/link"
+import type { MouseEvent } from "react"
 import type { LucideIcon } from "lucide-react"
 import { ArrowRight, CheckCircle2, Clock, Dumbbell, Flag, Heart, Moon, Sparkles, Timer, Waves } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { DashboardOverviewData } from "@/lib/dashboard"
 import { cn } from "@/lib/utils"
 import { ProgressRing, Reveal, Tile, TileHeader, isMissing } from "@/components/dashboard-ui"
+import { TrainingDaysEditor } from "@/components/training-days"
 
 type Metric = DashboardOverviewData["weekly"][number]
 
@@ -30,9 +31,14 @@ const ratio = (metric?: Metric) => {
 export function DashboardOverview({
   data,
   onViewToday,
+  onOpenChat,
+  onDaysSaved,
 }: {
   data: DashboardOverviewData
   onViewToday: () => void
+  onOpenChat: (event: MouseEvent<HTMLElement>) => void
+  /** The athlete saved their training days: their swims and strength sessions a week now. */
+  onDaysSaved: (week: { swims: number; strength: number }) => void
 }) {
   const consistency = [
     { label: "Swim week", metric: pickMetric(data.performance, "Swim week consistency"), tone: "cyan" as const, icon: Waves, iconTone: "text-accent" },
@@ -156,8 +162,13 @@ export function DashboardOverview({
         </div>
       </div>
 
-      {/* AI insight */}
+      {/* The days the athlete trains */}
       <Reveal index={3}>
+        <TrainingDaysEditor onSaved={onDaysSaved} onOpenTraining={onViewToday} />
+      </Reveal>
+
+      {/* AI insight */}
+      <Reveal index={4}>
         <div className="relative overflow-hidden rounded-[22px] border border-accent/25 bg-[linear-gradient(120deg,rgba(87,229,234,0.14),rgba(14,22,30,0.92)_45%,rgba(56,120,220,0.14))] p-6 shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-7">
           <div className="pointer-events-none absolute -left-10 -top-16 h-48 w-48 rounded-full bg-accent/20 blur-3xl" />
           <div className="relative flex flex-col gap-5 md:flex-row md:items-center">
@@ -170,10 +181,8 @@ export function DashboardOverview({
               <p className="mt-2 text-sm leading-7 text-slate-300">{data.insight.body}</p>
               <p className="mt-2 text-xs text-slate-500">{data.insight.basis}</p>
             </div>
-            <Button asChild className="shrink-0 rounded-full bg-white/10 text-white hover:bg-white/15">
-              <Link href="/coach-chat">
-                Discuss with coach <ArrowRight className="h-4 w-4" />
-              </Link>
+            <Button onClick={onOpenChat} className="shrink-0 cursor-pointer rounded-full bg-white/10 text-white hover:bg-white/15">
+              Discuss with coach <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
         </div>

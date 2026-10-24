@@ -1,7 +1,7 @@
 "use client"
 
 import type { MouseEvent, ReactNode } from "react"
-import { CheckCircle2, Clock, Dumbbell, Flame, Lightbulb, Pencil, Snowflake, Sparkles, UserRound, Waves } from "lucide-react"
+import { CheckCircle2, Clock, Dumbbell, Flame, Lightbulb, MessageSquare, Pencil, Snowflake, Sparkles, UserRound, Waves } from "lucide-react"
 import { Expander, phoneTitle } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import type { GymItem } from "@/lib/training"
@@ -127,14 +127,16 @@ export function GymWorkoutCard({ item, onEdit, actions, className, defaultOpen =
   const meta = item.workout.meta
   const when = [meta?.label, meta?.start_time && (meta.end_time ? `${meta.start_time}–${meta.end_time}` : meta.start_time)].filter(Boolean).join(" · ")
   const manual = item.source === "manual"
+  // Added from the coach chat or a call.
+  const fromCoach = item.source === "coach"
   return (
     <Expander defaultOpen={defaultOpen} onOpen={onOpen} className={cn(item.completed ? "border-emerald-400/25" : "border-violet-400/15", className)} header={
       <div className="flex items-center gap-3">
         <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", item.completed ? "bg-emerald-400/15 text-emerald-300" : tone.icon)}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Dumbbell className="h-5 w-5" />}</span>
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-px normal-case tracking-normal", manual ? "bg-sky-400/15 text-sky-200" : "bg-violet-400/15 text-violet-200")}>
-              {manual ? <UserRound className="h-2.5 w-2.5" /> : <Sparkles className="h-2.5 w-2.5" />}{manual ? "Yours" : "AI"}
+            <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-px normal-case tracking-normal", manual ? "bg-sky-400/15 text-sky-200" : fromCoach ? "bg-accent/15 text-cyan-100" : "bg-violet-400/15 text-violet-200")}>
+              {manual ? <UserRound className="h-2.5 w-2.5" /> : fromCoach ? <MessageSquare className="h-2.5 w-2.5" /> : <Sparkles className="h-2.5 w-2.5" />}{manual ? "Yours" : fromCoach ? "Coach" : "AI"}
             </span>
             {when && <span className="normal-case tracking-normal text-slate-400">{when}</span>}
             {item.completed && <span>Completed</span>}

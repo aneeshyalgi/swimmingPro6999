@@ -220,3 +220,5 @@ class CoachChatRequest(BaseModel):
 class CoachChatResponse(BaseModel):
     content: str
     sources: list[dict[str, Any]] = Field(default_factory=list)
+    # The kinds of session the reply prescribes, when it prescribes any: the chat offers to add them to the athlete's weeks.
+    plan: Literal["swim", "gym", "both"] | None = None

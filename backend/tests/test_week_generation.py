@@ -65,9 +65,21 @@ class StreamedReplyTests(unittest.TestCase):
 
     def test_a_complete_reply_is_returned(self):
         client = FakeClient(answer('{"title": "a", "items": []}'))
-        self.assertEqual(self.reply(client), '{"title": "a", "items": []}')
+        with patch.object(training, "get_settings", return_value=SimpleNamespace(openai_plan_model="gpt-4.1", openai_plan_reasoning_effort="low")):
+            self.assertEqual(self.reply(client), '{"title": "a", "items": []}')
         self.assertTrue(client.stream.closed)
         self.assertEqual(client.requests[0]["max_completion_tokens"], 500)
+        self.assertEqual(client.requests[0]["temperature"], 0.3)
+
+    def test_a_reasoning_model_gets_its_effort_and_room_to_think(self):
+        client = FakeClient(answer('{"title": "a", "items": []}'))
+        with patch.object(training, "get_settings", return_value=SimpleNamespace(openai_plan_model="gpt-5.5", openai_plan_reasoning_effort="low")):
+            self.reply(client)
+        request = client.requests[0]
+        self.assertEqual((request["model"], request["reasoning_effort"]), ("gpt-5.5", "low"))
+        self.assertEqual(request["max_completion_tokens"], 500 + training.REASONING_TOKENS)
+        self.assertNotIn("temperature", request)
+        self.assertEqual(request["timeout"].read, 2 * training.SILENT_SECONDS)
 
     def test_a_reply_stuck_writing_whitespace_is_stopped_at_once(self):
         stuck = [chunk('{"title": "a", "items": [1, 2, 3'), *[chunk("    ") for _ in range(10_000)]]

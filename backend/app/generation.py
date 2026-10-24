@@ -5,7 +5,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from app.config import get_settings
+from app.config import get_settings, sampling
 from app.context import coach_key, coach_recommendation, plan_context, recommended_coach, select_coach
 
 
@@ -132,7 +132,8 @@ COACH PROGRAM:
     problem = "no response"
     for _ in range(PLAN_ATTEMPTS):
         response = client.chat.completions.create(
-            model=settings.openai_plan_model, temperature=0.2, response_format={"type": "json_object"}, messages=messages,
+            model=settings.openai_plan_model, **sampling(settings.openai_plan_model, settings.openai_plan_reasoning_effort, 0.2),
+            response_format={"type": "json_object"}, messages=messages,
         )
         content = response.choices[0].message.content or ""
         try:

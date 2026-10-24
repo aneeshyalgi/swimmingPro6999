@@ -32,9 +32,10 @@ import { GUIDE_SUBTAB, type GuideEvent, type GuideTarget } from "@/components/da
 import { NewSwimEditor, TrainingItemEditor, type EditTarget } from "@/components/training-item-editor"
 import { cn } from "@/lib/utils"
 import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
+import { WeekCoach, WeekCoachButton, type WeekLink } from "@/components/week-coach"
 import {
   GENERATION_CANCELLED, competitionSchema, competitionsSchema, downloadSwimPdf, downloadWeekItemPdf, downloadWeekPdf, mondayISO, shiftWeek, timeText, workoutSchema,
-  trainingRequest, weekSchema, type Competition, type TrainingWeek, type Workout,
+  trainingRequest, weekSchema, type Competition, type GymWeek, type TrainingWeek, type Workout,
 } from "@/lib/training"
 
 type CompetitionData = z.infer<typeof competitionsSchema>
@@ -75,11 +76,17 @@ const subTabs = [
 
 /** `guide`: where the dashboard guide is pointing; opens the matching sub-tab so the spotlight can find its button. */
 /** `onGuideEvent`: tells the guided setup when the user starts or finishes a step it is walking them through. */
-export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
+/** `refresh`: changes when sessions were added from elsewhere (the coach chat), so the open week reads them in. */
+/** `reveal`: opens a sub-tab on a week (where those sessions went). */
+/** `coach`: the athlete's coach, who re-plans a generated week with them in a panel beside it. */
+/** `onOpenCoachChat`: opens the coach chat (with a message to send there), for anything that isn't changing the week. */
+export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, reveal = null, coach = null, onOpenCoachChat }: {
   onChanged: () => Promise<void>; guide?: GuideTarget | null; onGuideEvent?: (event: GuideEvent) => void
+  refresh?: number; reveal?: { tab: "week" | "library"; weekStart: string; at: number } | null; coach?: string | null
+  onOpenCoachChat?: (draft: string) => void
 }) {
-  const [subTab, setSubTab] = useState<string>(() => (guide ? GUIDE_SUBTAB[guide] : "week"))
-  const [weekStart, setWeekStart] = useState(() => mondayISO())
+  const [subTab, setSubTab] = useState<string>(() => reveal?.tab ?? (guide ? GUIDE_SUBTAB[guide] : "week"))
+  const [weekStart, setWeekStart] = useState(() => (reveal?.tab === "week" ? reveal.weekStart : mondayISO()))
   const [week, setWeek] = useState<TrainingWeek | null>(null)
   const [meets, setMeets] = useState<CompetitionData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -94,9 +101,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   // The day a swim of the athlete's own is being written for (in the full-page swim editor).
   const [adding, setAdding] = useState<string | null>(null)
   const [resultKey, setResultKey] = useState<string | null>(null)
-  // A week being generated, or re-planned from today; and the question before re-planning.
+  // A week being generated, or re-planned from today (asked for in the coach's re-planner).
   const [generating, setGenerating] = useState<"week" | "replan" | null>(null)
-  const [confirmReplan, setConfirmReplan] = useState(false)
   const generation = useWeekGeneration()
   // Ticks save in the background, several at once: the sessions being saved, and their saves (resolving whether saved).
   const [ticking, setTicking] = useState<ReadonlySet<string>>(() => new Set())
@@ -108,6 +114,11 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const [focusOrigin, setFocusOrigin] = useState<{ x: number; y: number } | null>(null)
   // The workout open in the full-screen workout view.
   const [focusSession, setFocusSession] = useState<string | null>(null)
+  // The coach chat beside the week, and the sessions it just changed (they glow for a moment).
+  const [coachOpen, setCoachOpen] = useState(false)
+  const [changed, setChanged] = useState<ReadonlySet<string> | null>(null)
+  // What the re-planner shows on the week while it's open (see WeekLink).
+  const [coachLink, setCoachLink] = useState<WeekLink | null>(null)
   const mounted = useRef(false)
   const inFlight = useRef(false)
   const activeWeek = useRef(weekStart)
@@ -142,6 +153,24 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
     if (guide !== "add-meet") setWeekStart(mondayISO())
   }, [guide])
 
+  // Sessions added from the coach chat: the open week reads them in, as it stands (a save in progress reads it anyway).
+  const refreshed = useRef(refresh)
+  useEffect(() => {
+    if (refresh === refreshed.current) return
+    refreshed.current = refresh
+    if (!inFlight.current) void load().catch(() => { /* the next change reads the week again */ })
+  }, [refresh, load])
+  useEffect(() => {
+    if (!reveal) return
+    setSubTab(reveal.tab)
+    if (reveal.tab === "week") setWeekStart(reveal.weekStart)
+  }, [reveal])
+  useEffect(() => {
+    if (!changed) return
+    const timer = window.setTimeout(() => setChanged(null), 4800)
+    return () => window.clearTimeout(timer)
+  }, [changed])
+
   const perform = async (operation: () => Promise<void>, message: string): Promise<boolean> => {
     if (inFlight.current) return false
     inFlight.current = true; setBusy(true); setError(null); setNotice(null)
@@ -161,6 +190,39 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       if (mounted.current) setBusy(false)
     }
     return saved
+  }
+
+  /** A save from the coach chat runs as the week's own do: one at a time, after the ticks still saving. */
+  const guard = async <T,>(work: () => Promise<T>): Promise<T> => {
+    if (inFlight.current) throw new Error("Another change to your week is still saving. Try again in a moment.")
+    inFlight.current = true; setBusy(true); setError(null); setNotice(null)
+    try {
+      await Promise.all(ticks.current.values())
+      return await work()
+    } finally {
+      inFlight.current = false
+      if (mounted.current) setBusy(false)
+    }
+  }
+  /** The sessions the coach chat changed, as the week names them (a swim by its key, a day's mobility by its date). */
+  const changedIds = (highlight: string[]) => new Set(highlight.map((key) => (key.startsWith("mobility:") ? key : `swim:${key}`)))
+  /** Show the sessions the coach chat changed glowing (again: the glow restarts). */
+  const glow = (ids: ReadonlySet<string>) => {
+    setChanged(null)
+    window.setTimeout(() => { if (mounted.current) setChanged(ids) }, 40)
+  }
+  const coachChanged = (saved: TrainingWeek | GymWeek, highlight: string[]) => {
+    const data = saved as TrainingWeek
+    if (mounted.current && activeWeek.current === data.week_start) setWeek(data)
+    glow(changedIds(highlight))
+    void onChanged().catch(() => { /* the summary catches up with the next change */ })
+  }
+  /** Scroll to the first day the coach chat changed and show its sessions glowing. */
+  const showChanged = (highlight: string[]) => {
+    const ids = changedIds(highlight)
+    glow(ids)
+    const day = week?.days.find((entry) => ids.has(`mobility:${entry.date}`) || entry.workouts.some((item) => ids.has(`swim:${item.key}`)))
+    if (day) document.getElementById(`day-${day.date}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
   }
 
   const mutateState = (item: Workout, change: Partial<Pick<Workout, "favorite" | "template">>) => perform(async () => {
@@ -194,6 +256,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   const weekEnd = new Date(Date.parse(`${weekStart}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10)
   const dayMeters = week?.days.map((day) => day.workouts.reduce((sum, item) => sum + item.distance_meters, 0)) ?? []
   const maxDayMeters = Math.max(1, ...dayMeters)
+  // Swims already on a week not generated yet (added, copied or from the coach's plan in chat): generating plans around them.
+  const swimsAdded = !week?.generated && !!week?.days.some((day) => day.workouts.length)
   type Day = TrainingWeek["days"][number]
   /**
    * Tick a session off, or untick it. The tick shows it at once and the rest of the week follows straight after, while it
@@ -372,7 +436,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       const label = item.origin === "My workout" ? "Your swim" : index === 0 ? "First swim" : index === 1 ? "Second swim" : `Additional swim ${index + 1}`
       return {
         id: `swim:${item.key}`, date: day.date, label, title: item.workout.title, completed: item.completed,
-        className: cn(item.completed && "border-emerald-400/25"),
+        className: cn(item.completed && "border-emerald-400/25", changed?.has(`swim:${item.key}`) && "wc-changed wc-swim"),
         menu: itemMenu({ kind: "swim", key: item.key, date: day.date, title: item.workout.title, completed: item.completed }),
         onToggle: () => toggleSwim(item),
         chips: <>{chip(<><Waves className="h-3.5 w-3.5" />{item.distance_meters.toLocaleString()} m</>, "border-accent/25 bg-accent/10 text-cyan-100")}{doneChip(item.completed)}</>,
@@ -423,7 +487,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       const count = `${day.mobility.length} exercise${day.mobility.length === 1 ? "" : "s"}`
       sessions.push({
         id: `mobility:${day.date}`, date: day.date, label: "Mobility", title: `${day.day_name} mobility`, completed: day.mobility_completed,
-        className: cn("border-emerald-400/15", day.mobility_completed && "border-emerald-400/30"),
+        className: cn("border-emerald-400/15", day.mobility_completed && "border-emerald-400/30", changed?.has(`mobility:${day.date}`) && "wc-changed wc-swim"),
         menu: itemMenu({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed }),
         onToggle: () => togglePart("mobility", day.date, day.mobility_completed),
         chips: <>{chip(<><Heart className="h-3.5 w-3.5" />{count}</>, "border-emerald-300/25 bg-emerald-400/10 text-emerald-100")}{chip(<><Clock className="h-3.5 w-3.5" />{minutes} min</>)}{doneChip(day.mobility_completed)}</>,
@@ -486,10 +550,12 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
   /**
    * Generate the week, or re-plan it (`replan`: from today, around everything that stays; the guided setup only follows
    * generating). The reply is the saved week, so it's shown straight away; the dashboard summary catches up in the background.
+   * Resolves the week as saved, or null when it wasn't.
    */
-  const runWeek = async (replan: boolean) => {
-    if (inFlight.current) return
+  const runWeek = async (replan: boolean): Promise<TrainingWeek | null> => {
+    if (inFlight.current) return null
     inFlight.current = true
+    let saved: TrainingWeek | null = null
     const fromToday = weekStart <= today
     setBusy(true); setGenerating(replan ? "replan" : "week"); setError(null); setNotice(null)
     if (!replan) onGuideEvent?.("swim-started")
@@ -499,6 +565,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       await Promise.all(ticks.current.values())
       const generated = await generation.run(replan ? "/week/replan" : "/week/generate", weekSchema, { week_start: weekStart })
       if (mounted.current && activeWeek.current === generated.week_start) setWeek(generated)
+      saved = generated
       outcome = "swim-done"
       if (mounted.current) setNotice(!replan ? "Your personalised swim week is ready."
         : `Your swim week is re-planned${fromToday ? " from today" : ""}. Everything you'd ticked off, favorited or added is as it was.`)
@@ -511,12 +578,23 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
       if (mounted.current) { setBusy(false); setGenerating(null) }
     }
     if (!replan) onGuideEvent?.(outcome)
+    return saved
   }
   const generateWeek = () => runWeek(false)
-  const replanWeek = () => runWeek(true)
-  // A generated week can be re-planned until it's over (from today, or in full while it's still ahead).
+  // A generated week can be re-planned with the coach until it's over (from today, or in full while it's still ahead);
+  // a week not generated yet is generated first, so its re-planner opens only once there's a plan to change.
   const canReplan = !!week?.generated && weekEnd >= today
   const replanFromToday = weekStart <= today
+  useEffect(() => { if (week && !canReplan) setCoachOpen(false) }, [week, canReplan])
+  /** A fresh plan for the rest of the week, asked for in the re-planner: every session it wrote glows on the week. */
+  const coachReplan = async () => {
+    const saved = await runWeek(true)
+    if (!saved) return false
+    const from = weekStart > today ? weekStart : today
+    glow(new Set(saved.days.filter((day) => day.date >= from).flatMap((day) => [
+      ...day.workouts.map((item) => `swim:${item.key}`), ...(day.mobility.length ? [`mobility:${day.date}`] : [])])))
+    return true
+  }
 
   return (
     <div className="space-y-6">
@@ -552,7 +630,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
               void perform(async () => {}, `Swim added to ${dayLabel(adding)}.`)
             }} /> : <>
           <Reveal index={0}>
-            <section data-guide="swim-week" aria-busy={loading} className="relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(87,229,234,0.14),rgba(12,20,28,0.95)_45%,rgba(56,120,220,0.12))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-6">
+            <section data-guide="swim-week" data-coach-week="swim" aria-busy={loading} className={cn("relative overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(87,229,234,0.14),rgba(12,20,28,0.95)_45%,rgba(56,120,220,0.12))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.3)] sm:p-6",
+              coachOpen && canReplan && "wc-linked wc-swim")}>
               {loading && <span aria-hidden className="tl-topbar" />}
               <div className="pointer-events-none absolute -left-20 -top-24 h-64 w-64 rounded-full bg-accent/15 blur-3xl" />
               <div className="pointer-events-none absolute -bottom-24 right-0 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
@@ -565,7 +644,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                   <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                     {week?.phase && <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 font-medium text-cyan-100"><Layers className="h-3.5 w-3.5" />{week.phase}</span>}
                     {week && <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1", week.generated ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200" : "border-white/10 bg-white/[0.04] text-slate-400")}>
-                      <span className={cn("h-1.5 w-1.5 rounded-full", week.generated ? "bg-emerald-300" : "bg-slate-500")} />{week.generated ? "AI week saved" : "Not generated yet"}
+                      <span className={cn("h-1.5 w-1.5 rounded-full", week.generated ? "bg-emerald-300" : "bg-slate-500")} />{week.generated ? "AI week saved" : swimsAdded ? "Swims added · week not generated" : "Not generated yet"}
                     </span>}
                     {weekStart === mondayISO() && <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-slate-300">Current week</span>}
                   </div>
@@ -576,9 +655,9 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                     <Button size="sm" variant="ghost" className="h-8 rounded-full px-3 text-xs" disabled={busy || loading} onClick={() => setWeekStart(mondayISO())}>This Week</Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 rounded-full" aria-label="Next week" disabled={busy || loading} onClick={() => setWeekStart(shiftWeek(weekStart, 1))}><ChevronRight className="h-4 w-4" /></Button>
                   </div>
+                  {coach && canReplan && <WeekCoachButton kind="swim" coach={coach} week={week} today={today} open={coachOpen} disabled={loading || !!generating} onOpen={() => setCoachOpen(true)} />}
                   <ExportWeekButton onExport={exportWeek} disabled={!week || loading || !!generating} />
                   {!week?.generated && week && <Button data-guide="swim-generate" disabled={busy || loading} onClick={generateWeek} className="rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950 shadow-[0_10px_30px_rgba(87,229,234,0.3)] transition-transform hover:-translate-y-0.5 hover:from-cyan-200 hover:to-sky-300"><Sparkles className="mr-2 h-4 w-4" />Generate Swim Week</Button>}
-                  {canReplan && <Button disabled={busy || loading} onClick={() => setConfirmReplan(true)} className="rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950 shadow-[0_10px_30px_rgba(87,229,234,0.3)] transition-transform hover:-translate-y-0.5 hover:from-cyan-200 hover:to-sky-300"><Sparkles className="mr-2 h-4 w-4" />Re-plan with AI</Button>}
                 </div>
               </div>
 
@@ -590,6 +669,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
                   return (
                     <CalendarDay key={day.date} tone="swim" index={idx} date={day.date} dayName={day.day_name} isToday={day.date === today} past={day.date < today}
                       level={meters / maxDayMeters} amount={meters ? compactMeters(meters) : null} unit="metres" {...dayProgress(day)}
+                      changed={!!changed && (changed.has(`mobility:${day.date}`) || day.workouts.some((item) => changed.has(`swim:${item.key}`)))}
+                      coach={coachLink ? { scanning: coachLink.scanning, pending: coachLink.pending[day.date], focus: coachLink.focus === day.date } : undefined}
                       emptyLabel={day.competitions.length ? "Meet" : day.strength ? "Gym" : day.mobility.length ? "Mobility" : isRest ? "Rest" : "Free"}
                       onOpen={(event) => { setFocusOrigin(tileCentre(event.currentTarget)); setFocusDate(day.date) }}
                       icons={<>
@@ -622,7 +703,9 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
               ].map((stat, idx) => <Reveal key={stat.label} index={idx + 1} className={stat.className}><StatCard {...stat} className="h-full" /></Reveal>)}
             </div>
             {!week.generated && <Reveal index={6}>
-              <EmptyState icon={Sparkles} title="No AI week saved for these dates" body="Your existing sessions, manual workouts and competitions are shown below. Generate a week to fill the remaining onboarding availability."
+              <EmptyState icon={Sparkles} title="No AI week saved for these dates" body={swimsAdded
+                ? "The swims you've added are shown below and stay as they are. Generating plans each day's focus, mobility and recovery around them, and adds swims only if your weekly availability has room."
+                : "Your existing sessions, manual workouts and competitions are shown below. Generate a week to fill the remaining onboarding availability."}
                 action={<Button disabled={busy || loading} onClick={generateWeek} className="rounded-full bg-accent text-accent-foreground hover:bg-accent/90"><Sparkles className="mr-2 h-4 w-4" />Generate Swim Week</Button>} />
             </Reveal>}
             {week.coaching_note && <Reveal index={6}>
@@ -701,7 +784,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         </TabsContent>
 
         <TabsContent value="library" className="mt-0 space-y-5">
-          <WorkoutCalendar onChanged={onChanged} onGuideEvent={onGuideEvent} />
+          <WorkoutCalendar onChanged={onChanged} onGuideEvent={onGuideEvent} refresh={refresh} revealWeek={reveal?.tab === "library" ? reveal : null} coach={coach}
+            onOpenCoachChat={onOpenCoachChat} />
         </TabsContent>
 
         <TabsContent value="competitions" className="mt-0 space-y-5">
@@ -755,23 +839,6 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={confirmReplan} onOpenChange={setConfirmReplan}>
-        <AlertDialogContent className="border-white/10 bg-[#0d151c]">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-white">{replanFromToday ? "Re-plan the rest of this week?" : "Re-plan this week?"}</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2 text-sm text-slate-400">
-                <p>Your coach writes {replanFromToday ? "today to Sunday" : "this week"} again around your availability, meets and profile: new swims, mobility and day plans.</p>
-                <p>These stay as they are: {replanFromToday && "the days before today, "}swims you&apos;ve ticked off, favorited or saved as a template, swims you&apos;ve added, moved or copied, and mobility you&apos;ve ticked off. To keep any other swim, favorite it first.</p>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="rounded-full">Cancel</AlertDialogCancel>
-            <AlertDialogAction className="rounded-full bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => void replanWeek()}>Re-plan week</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <AlertDialog open={!!deletingMeet} onOpenChange={(open) => { if (!open) setDeletingMeet(null) }}>
         <AlertDialogContent className="border-white/10 bg-[#0d151c]">
@@ -801,6 +868,12 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent }: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {coachOpen && coach && canReplan && subTab === "week" && (
+        <WeekCoach key={weekStart} kind="swim" coach={coach} weekStart={weekStart} week={week} today={today}
+          busy={busy || !!generating} guard={guard} onClose={() => { setCoachOpen(false); setCoachLink(null) }} onApplied={coachChanged} onUndone={coachChanged}
+          onShow={showChanged} onReplan={coachReplan} onOpenChat={onOpenCoachChat} onLink={setCoachLink} />
+      )}
 
       <DayFocus tone="swim" eyebrow="Swim week" date={focusDay ? focusDate : null} origin={focusOrigin}
         days={(week?.days ?? []).map((day) => ({ date: day.date, day_name: day.day_name, ...dayProgress(day) }))}

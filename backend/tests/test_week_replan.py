@@ -52,6 +52,7 @@ class Athlete:
         self.own: dict[str, list[str]] = {}  # day -> the athlete's own swims (titles)
         self.mobility_done: set[str] = set()
         self.meets: dict[str, str] = {}
+        self.chosen: list[int] | None = None   # the swims a day the athlete chose on the dashboard, if they did
         self.saved = None
         self.layout = None
 
@@ -110,6 +111,7 @@ class Athlete:
                                 "_week_settings": lambda profile: ("Build", self.swims_a_week), "competitions": lambda profile: [],
                                 "_write_week": write, "get_supabase_client": lambda: client, "datetime": Frozen}.items():
                 stack.enter_context(patch.object(training, name, value))
+            stack.enter_context(patch("app.training_days.chosen", lambda profile: self.chosen and {"swim": self.chosen, "gym": None, "mobility": True}))
             training.replan_week(PROFILE, MONDAY)
         update = client.table.return_value.update
         self.saved = update.call_args.args[0]["details"] if update.called else None
@@ -188,6 +190,22 @@ class ReplanWeekTests(unittest.TestCase):
         athlete.swims_a_week = 14
         athlete.replan()
         self.assertEqual([len(athlete.saved_day(day)["swims"]) for day in DAYS], [1, 1, 2, 2, 2, 2, 2])
+
+    def test_on_the_athletes_chosen_days_new_swims_go_only_there(self):
+        athlete = self.athlete
+        athlete.chosen = [1, 1, 2, 0, 1, 0, 1]      # 6 a week: two on Wednesday, none on Thursday or Saturday
+        athlete.replan()
+        self.assertEqual([len(athlete.saved_day(day)["swims"]) for day in DAYS], [1, 1, 2, 0, 1, 0, 1])
+        self.assertTrue(athlete.saved_day(THU)["rest"])
+        self.assertIn("rest / recovery day", athlete.layout[3])
+
+    def test_a_chosen_day_with_a_swim_that_stays_gets_no_second_one(self):
+        athlete = self.athlete
+        athlete.chosen = [1, 1, 1, 1, 1, 1, 0]
+        athlete.ticked.add(self.sessions[WED])
+        athlete.replan()
+        self.assertEqual([len(athlete.saved_day(day)["swims"]) for day in DAYS], [1, 1, 1, 1, 1, 1, 0])
+        self.assertEqual(athlete.saved_day(WED)["swims"], [swim("Old swim Wed")])
 
     def test_no_coach_swim_on_race_day(self):
         athlete = self.athlete

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import Link from "next/link"
@@ -40,6 +40,7 @@ import { LegalLinks } from "@/components/legal/legal-links"
 import { PaceCalculator } from "@/components/pace-calculator"
 import { StrokeLab } from "@/components/video-lab/stroke-lab"
 import { CoachAvatar } from "@/components/coach-avatar"
+import { CoachChat, loadCoachInfo } from "@/components/coach-chat"
 import { CoachSwitcher, type SwitchReturn } from "@/components/coach-switcher"
 import { GettingStarted, GuideSpotlight, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
@@ -49,6 +50,7 @@ import { WorkoutBuilderSection } from "@/components/workout-builder-section"
 import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
 import { Banner } from "@/components/training-ui"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
+import type { TrainingTarget } from "@/lib/coach-plan"
 
 const navGroups = [
   {
@@ -105,7 +107,17 @@ export default function DashboardPage() {
   const [userData, setUserData] = useState<OnboardingData | null>(null)
   const [dashboardPlan, setDashboardPlan] = useState<DashboardPlan | null>(null)
   const [overview, setOverview] = useState<DashboardOverviewData | null>(null)
-  const [coach, setCoach] = useState<string | null>(null)
+  const [coaches, setCoaches] = useState<string[]>([])
+  const coach = coaches[0] ?? null
+  // Coach chat, open full screen over the dashboard. `call` opens it straight into a voice call (ending that call closes
+  // the chat again); `origin` is the button it opens out of.
+  const [coachChat, setCoachChat] = useState<{ call: boolean; origin: { x: number; y: number } | null; draft?: string } | null>(null)
+  // Set while the open chat has a history entry of its own (?coach=chat), so closing it is a step back.
+  const chatEntry = useRef(false)
+  // Sessions the coach chat adds show in an open Training section straight away (`trainingRefresh`), and
+  // `trainingReveal` opens it on the week they went in.
+  const [trainingRefresh, setTrainingRefresh] = useState(0)
+  const [trainingReveal, setTrainingReveal] = useState<(TrainingTarget & { at: number }) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState("overview")
   const [dashboardError, setDashboardError] = useState<string | null>(null)
@@ -175,8 +187,9 @@ export default function DashboardPage() {
         })
         setDashboardPlan(result.plan.plan)
         setOverview(result.overview)
-        setCoach(profile.recommended_coaches[0] ?? null)
+        setCoaches(profile.recommended_coaches)
         setUserKey(profile.user_key)
+        loadCoachInfo().catch(() => undefined)
         localStorage.setItem("swimgpt_user_key", profile.user_key)
         localStorage.setItem("swimgpt_coaches", JSON.stringify(profile.recommended_coaches))
       } catch (error) {
@@ -200,6 +213,23 @@ export default function DashboardPage() {
     window.history.replaceState(window.history.state, "", window.location.pathname)
   }, [])
 
+  // The chat has an address, as it did when it was a page: Back and Forward close and reopen it, and a reload (or an old
+  // /coach-chat link) opens it once the dashboard has loaded. A call is never redialled by a reload.
+  useEffect(() => {
+    const view = () => new URLSearchParams(window.location.search).get("coach")
+    const opening = view()
+    if (opening === "chat" || opening === "call") {
+      setCoachChat({ call: opening === "call", origin: null })
+      if (opening === "call") window.history.replaceState(window.history.state, "", `${window.location.pathname}?coach=chat`)
+    }
+    const onPopState = () => {
+      chatEntry.current = view() === "chat"
+      setCoachChat(chatEntry.current ? { call: false, origin: null } : null)
+    }
+    window.addEventListener("popstate", onPopState)
+    return () => window.removeEventListener("popstate", onPopState)
+  }, [])
+
   const refreshOverview = async () => {
     const request = ++overviewRequest.current
     const { data: { session }, error } = await supabase.auth.getSession()
@@ -216,7 +246,7 @@ export default function DashboardPage() {
 
   // A new coach rebuilds the season plan, so the whole dashboard (plan, overview and coach) is reloaded.
   const refreshAfterCoachSwitch = async (newCoach: string) => {
-    setCoach(newCoach)
+    setCoaches([newCoach])
     localStorage.setItem("swimgpt_coaches", JSON.stringify([newCoach]))
     const request = ++overviewRequest.current
     const { data: { session } } = await supabase.auth.getSession()
@@ -227,7 +257,41 @@ export default function DashboardPage() {
     const result = dashboardResponseSchema.parse(await response.json())
     setDashboardPlan(result.plan.plan)
     if (request === overviewRequest.current) setOverview(result.overview)
-    setCoach(result.profile.recommended_coaches[0] ?? newCoach)
+    setCoaches(result.profile.recommended_coaches.length ? result.profile.recommended_coaches : [newCoach])
+  }
+
+  /** `draft`: a message to start the chat with (asked in a week's re-planner, but meant for the coach chat). */
+  const openCoachChat = (call: boolean, event?: MouseEvent<HTMLElement>, draft?: string) => {
+    if (!coach) return
+    const rect = event?.currentTarget.getBoundingClientRect()
+    setCoachChat({ call, origin: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null, draft })
+    if (chatEntry.current) return
+    chatEntry.current = true
+    window.history.pushState(window.history.state, "", `${window.location.pathname}?coach=chat`)
+  }
+
+  const closeCoachChat = () => {
+    setCoachChat(null)
+    if (chatEntry.current) {
+      chatEntry.current = false
+      window.history.back()
+    } else {
+      window.history.replaceState(window.history.state, "", window.location.pathname)
+    }
+  }
+
+  /** The coach chat added sessions to the athlete's weeks: the Training section and the summary show them. */
+  const trainingAdded = () => {
+    setTrainingRefresh((value) => value + 1)
+    void refreshOverview().catch(() => { /* the summary catches up with the next change */ })
+  }
+
+  /** From the coach chat to where its sessions went: Training, on that sub-tab and week. */
+  const openTraining = (target: TrainingTarget) => {
+    closeCoachChat()
+    setActiveTab("swim")
+    setTrainingReveal({ ...target, at: Date.now() })
+    window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
   const handleSignOut = async () => {
@@ -299,8 +363,11 @@ export default function DashboardPage() {
     requestAnimationFrame(() => setGuide("gym-week"))
   }
 
+  const chatOpen = coachChat !== null && userKey !== null && coach !== null
+
   return (
-    <div className="min-h-screen bg-[#070b10] text-foreground">
+    // The chat covers the dashboard while it's open, so keyboard focus and screen readers stay inside it.
+    <div inert={chatOpen} className="min-h-screen bg-[#070b10] text-foreground">
       <div aria-hidden="true" className="pointer-events-none fixed inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(87,229,234,0.10),transparent_50%),radial-gradient(ellipse_at_bottom_left,rgba(56,120,220,0.10),transparent_55%)]" />
       </div>
@@ -390,7 +457,7 @@ export default function DashboardPage() {
             <div className="space-y-2 border-t border-white/[0.07] p-3">
               {coach && !sidebarCollapsed && (
                 <div className="dc-card relative overflow-hidden rounded-2xl border border-accent/25 bg-[linear-gradient(140deg,rgba(87,229,234,0.14),rgba(255,255,255,0.02))]">
-                  <Link href="/coach-chat" className="group flex items-center gap-2.5 px-3 pb-2.5 pt-3 transition-colors hover:bg-white/[0.03]" title={`Chat with ${coach}`}>
+                  <button type="button" onClick={(event) => openCoachChat(false, event)} className="group flex w-full cursor-pointer items-center gap-2.5 px-3 pb-2.5 pt-3 text-left transition-colors hover:bg-white/[0.03]" title={`Chat with ${coach}`}>
                     <span className="relative shrink-0">
                       <CoachAvatar name={coach} shape="circle" className="h-9 w-9 border-2 border-[#0b1218]" />
                       <span aria-hidden className="cv-live absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#0b1218] bg-emerald-400" />
@@ -403,10 +470,10 @@ export default function DashboardPage() {
                       <MessageSquare className="h-4 w-4" />
                       <span className="sr-only">Open chat</span>
                     </span>
-                  </Link>
+                  </button>
                   <div className="px-3 pb-3">
-                    <Link href="/coach-chat?call=1&from=dashboard" aria-label={`Talk to ${coach} in a live voice call`}
-                      className="dc-call cv-launch group relative flex items-center gap-2.5 overflow-hidden rounded-xl py-2 pl-2 pr-3 text-slate-950 transition-transform duration-300 hover:-translate-y-0.5 active:translate-y-0">
+                    <button type="button" onClick={(event) => openCoachChat(true, event)} aria-label={`Talk to ${coach} in a live voice call`}
+                      className="dc-call cv-launch group relative flex w-full cursor-pointer items-center gap-2.5 overflow-hidden rounded-xl py-2 pl-2 pr-3 text-left text-slate-950 transition-transform duration-300 hover:-translate-y-0.5 active:translate-y-0">
                       <span aria-hidden className="cv-launch-sheen" />
                       <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-950/15">
                         <span aria-hidden className="dc-ring absolute inset-0 rounded-full" />
@@ -417,17 +484,17 @@ export default function DashboardPage() {
                         <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-950/70">Live voice call</span>
                       </span>
                       <span aria-hidden className="dc-eq relative flex h-4 items-end gap-[3px]"><i /><i /><i /><i /></span>
-                    </Link>
+                    </button>
                   </div>
                 </div>
               )}
               {coach && sidebarCollapsed && (
-                <Link href="/coach-chat?call=1&from=dashboard" title={`Talk to ${coach}`} aria-label={`Talk to ${coach} in a live voice call`}
-                  className="dc-call cv-launch relative mx-auto grid h-11 w-11 place-items-center overflow-hidden rounded-xl text-slate-950 transition-transform hover:scale-105">
+                <button type="button" onClick={(event) => openCoachChat(true, event)} title={`Talk to ${coach}`} aria-label={`Talk to ${coach} in a live voice call`}
+                  className="dc-call cv-launch relative mx-auto grid h-11 w-11 cursor-pointer place-items-center overflow-hidden rounded-xl text-slate-950 transition-transform hover:scale-105">
                   <span aria-hidden className="cv-launch-sheen" />
                   <span aria-hidden className="dc-ring absolute inset-1.5 rounded-lg" />
                   <Phone className="relative h-5 w-5" strokeWidth={2.4} />
-                </Link>
+                </button>
               )}
               <div className={cn("flex items-center gap-3 rounded-2xl p-2", sidebarCollapsed && "justify-center")}>
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent via-accent-foreground to-primary text-sm font-bold text-primary-foreground">
@@ -479,7 +546,7 @@ export default function DashboardPage() {
             </div>
           </aside>
 
-          <main className="min-w-0 flex-1">
+          <main data-coach-dock className="min-w-0 flex-1">
             {/* Header */}
             <header className="sticky top-0 z-40 border-b border-white/[0.07] bg-[#070b10]/75 backdrop-blur-xl">
               <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6 lg:px-8">
@@ -499,11 +566,11 @@ export default function DashboardPage() {
                   <SurveyLink invite={survey} className="hidden lg:flex" />
                   {coach && (
                     <div className="flex h-9 items-center rounded-full border border-white/10 bg-white/[0.03] transition-colors hover:border-white/20">
-                      <Link href="/coach-chat" aria-label={`Chat with ${coach}`}
-                        className="flex h-full items-center gap-2 rounded-l-full pl-1.5 pr-3 text-sm font-medium text-white transition-colors hover:bg-accent/10">
+                      <button type="button" onClick={(event) => openCoachChat(false, event)} aria-label={`Chat with ${coach}`}
+                        className="flex h-full cursor-pointer items-center gap-2 rounded-l-full pl-1.5 pr-3 text-sm font-medium text-white transition-colors hover:bg-accent/10">
                         <CoachAvatar key={coach} name={coach} shape="circle" className="h-6 w-6 animate-in fade-in zoom-in-50 duration-500" />
                         <span className="hidden md:inline">Chat with {coach}</span>
-                      </Link>
+                      </button>
                       <span aria-hidden className="h-5 w-px bg-white/10" />
                       <button type="button" onClick={() => setCoachSwitcherOpen(true)} aria-label="Switch coach" title="Switch coach"
                         className="group flex h-full items-center gap-1.5 rounded-r-full pl-2.5 pr-3 text-sm font-medium text-slate-300 transition-colors hover:bg-accent/10 hover:text-accent">
@@ -514,12 +581,12 @@ export default function DashboardPage() {
                   )}
                   {/* The sidebar's call button is hidden on smaller screens, so the header carries it there. */}
                   {coach && (
-                    <Link href="/coach-chat?call=1&from=dashboard" aria-label={`Talk to ${coach} in a live voice call`} title={`Talk to ${coach}`}
-                      className="dc-call cv-launch relative flex h-9 items-center gap-1.5 overflow-hidden rounded-full px-3 text-sm font-semibold text-slate-950 lg:hidden">
+                    <button type="button" onClick={(event) => openCoachChat(true, event)} aria-label={`Talk to ${coach} in a live voice call`} title={`Talk to ${coach}`}
+                      className="dc-call cv-launch relative flex h-9 cursor-pointer items-center gap-1.5 overflow-hidden rounded-full px-3 text-sm font-semibold text-slate-950 lg:hidden">
                       <span aria-hidden className="cv-launch-sheen" />
                       <Phone className="relative h-4 w-4" strokeWidth={2.4} />
                       <span className="relative hidden sm:inline">Talk</span>
-                    </Link>
+                    </button>
                   )}
                   <Button variant="ghost" size="icon" className="rounded-full text-slate-300 hover:bg-white/[0.06] lg:hidden" onClick={() => setSubscriptionOpen(true)} aria-label="Subscription">
                     <CreditCard className="h-5 w-5" />
@@ -612,10 +679,16 @@ export default function DashboardPage() {
                   }}
                 />
                 <SurveyLink invite={survey} variant="dashboard" className="lg:hidden" />
-                <DashboardOverview data={overview} onViewToday={() => setActiveTab("swim")} />
+                <DashboardOverview data={overview} onViewToday={() => setActiveTab("swim")} onOpenChat={(event) => openCoachChat(false, event)}
+                  onDaysSaved={({ swims, strength }) => {
+                    // Saving the days sets the weekly numbers: the header, the setup guide and the summary show the new ones.
+                    setUserData((current) => current && { ...current, swimSessionsPerWeek: swims, gymSessionsPerWeek: strength })
+                    void refreshOverview().catch(() => { /* the summary catches up with the next change */ })
+                  }} />
               </TabsContent>
               <TabsContent value="swim" className="mt-0 space-y-6">
-                <TrainingPanel onChanged={refreshOverview} guide={guide} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })} />
+                <TrainingPanel onChanged={refreshOverview} guide={guide} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })}
+                  refresh={trainingRefresh} reveal={trainingReveal} coach={coach} onOpenCoachChat={(draft) => openCoachChat(false, undefined, draft)} />
               </TabsContent>
               <TabsContent value="builder" className="mt-0">
                 <WorkoutBuilderSection onChanged={refreshOverview} onOpenGymWeek={openGymWeek} />
@@ -646,7 +719,12 @@ export default function DashboardPage() {
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
       {coach && (
         <CoachSwitcher open={coachSwitcherOpen} current={coach} returned={switchReturn}
-          onClose={() => { setCoachSwitcherOpen(false); setSwitchReturn(null) }} onSwitched={refreshAfterCoachSwitch} />
+          onClose={() => { setCoachSwitcherOpen(false); setSwitchReturn(null) }} onSwitched={refreshAfterCoachSwitch}
+          onChat={() => { setCoachSwitcherOpen(false); setSwitchReturn(null); openCoachChat(false) }} />
+      )}
+      {chatOpen && (
+        <CoachChat userKey={userKey} coaches={coaches} call={coachChat.call} origin={coachChat.origin} draft={coachChat.draft} swimsPerWeek={userData.swimSessionsPerWeek} onClose={closeCoachChat}
+          onTrainingAdded={trainingAdded} onOpenTraining={openTraining} />
       )}
       {userKey && (
         <GuidedSetup

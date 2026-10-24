@@ -109,6 +109,17 @@ export type StrengthFocus = "coach" | "upper" | "lower" | "full" | "core"
 export type StrengthRequest = { week_start: string; mode: "week" | "single"; day?: string; focus?: StrengthFocus; notes: string }
 export type SwimWorkout = z.infer<typeof swimSessionSchema>
 export type TrainingWeek = z.infer<typeof weekSchema>
+
+/** The days the athlete trains, Monday first: swims a day (0–2), strength days, and mobility on the other days. */
+export const trainingDaysSchema = z.object({
+  swim: z.array(z.number().int().min(0).max(2)).length(7),
+  gym: z.array(z.boolean()).length(7),
+  mobility: z.boolean(),
+  // Whether each part is the athlete's own choice; otherwise it's how SwimGPT spreads their weekly number.
+  chosen: z.object({ swim: z.boolean(), gym: z.boolean() }),
+  saved_at: z.string().nullable(),
+})
+export type TrainingDays = z.infer<typeof trainingDaysSchema>
 export type Competition = z.infer<typeof competitionSchema>
 export type RaceResultData = z.infer<typeof raceResultSchema>
 

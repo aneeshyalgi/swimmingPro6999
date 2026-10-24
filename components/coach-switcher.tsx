@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
-import Link from "next/link"
 import {
   AlertTriangle, ArrowRight, BadgeCheck, CalendarRange, Check, Dumbbell, Info, Loader2, Lock, MessageSquare, Repeat, RotateCcw, Sparkles,
   Star, Waves, X,
@@ -74,24 +73,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
  * Switching coach from the dashboard: browse every coach (best fit first, in their own colours), see why each fits,
  * pay for the switch on Stripe's checkout page, and on coming back watch the handover while the season plan is rebuilt
  * on the new coach's program. `returned` is set when the dashboard opens it on the way back from Stripe;
- * `onSwitched` refreshes the dashboard behind it once the new coach is saved.
+ * `onSwitched` refreshes the dashboard behind it once the new coach is saved, and `onChat` closes it into the chat
+ * with the new coach.
  */
-export function CoachSwitcher({ open, current, returned = null, onClose, onSwitched }: {
+export function CoachSwitcher({ open, current, returned = null, onClose, onSwitched, onChat }: {
   open: boolean
   current: string
   returned?: SwitchReturn | null
   onClose: () => void
   onSwitched: (coach: string) => Promise<void>
+  onChat: () => void
 }) {
   if (!open || typeof document === "undefined") return null
-  return createPortal(<Switcher current={current} returned={returned} onClose={onClose} onSwitched={onSwitched} />, document.body)
+  return createPortal(<Switcher current={current} returned={returned} onClose={onClose} onSwitched={onSwitched} onChat={onChat} />, document.body)
 }
 
-function Switcher({ current: initial, returned, onClose, onSwitched }: {
+function Switcher({ current: initial, returned, onClose, onSwitched, onChat }: {
   current: string
   returned: SwitchReturn | null
   onClose: () => void
   onSwitched: (coach: string) => Promise<void>
+  onChat: () => void
 }) {
   const [options, setOptions] = useState<Options | null>(null)
   const [loadError, setLoadError] = useState("")
@@ -121,6 +123,12 @@ function Switcher({ current: initial, returned, onClose, onSwitched }: {
     setLeaving(true)
     window.setTimeout(onClose, 240)
   }, [onClose])
+
+  // "Say hi" leaves the same way, then the chat with the new coach opens over the dashboard.
+  const sayHi = () => {
+    setLeaving(true)
+    window.setTimeout(onChat, 240)
+  }
 
   useEffect(() => {
     let live = true
@@ -296,7 +304,7 @@ function Switcher({ current: initial, returned, onClose, onSwitched }: {
         ) : stage === "switching" ? (
           <Handover from={current} to={coach.name} steps={steps} step={step} />
         ) : stage === "done" ? (
-          <Done coach={coach} onClose={close} />
+          <Done coach={coach} onClose={close} onChat={sayHi} />
         ) : stage === "failed" ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-14 text-center">
             <span className="grid h-14 w-14 place-items-center rounded-2xl border border-rose-300/30 bg-rose-500/10"><AlertTriangle className="h-7 w-7 text-rose-300" /></span>
@@ -667,7 +675,7 @@ function Handover({ from, to, steps, step }: { from: string; to: string; steps: 
   )
 }
 
-function Done({ coach, onClose }: { coach: CoachProfile; onClose: () => void }) {
+function Done({ coach, onClose, onChat }: { coach: CoachProfile; onClose: () => void; onChat: () => void }) {
   const first = firstName(coach.name)
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 overflow-y-auto px-6 py-10 text-center sm:py-14">
@@ -692,10 +700,10 @@ function Done({ coach, onClose }: { coach: CoachProfile; onClose: () => void }) 
         </p>
       </div>
       <div className="csw-stagger flex flex-col gap-2 sm:flex-row">
-        <Link href="/coach-chat" style={{ "--i": 3 } as CSSProperties} className="csw-cta group inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-bold">
+        <button type="button" onClick={onChat} style={{ "--i": 3 } as CSSProperties} className="csw-cta group inline-flex cursor-pointer items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-bold">
           <MessageSquare className="relative h-4 w-4" /><span className="relative">Say hi to {first}</span>
           <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-1" />
-        </Link>
+        </button>
         <button type="button" onClick={onClose} style={{ "--i": 4 } as CSSProperties}
           className="rounded-full border border-white/12 px-6 py-3 text-sm font-medium text-slate-200 transition-colors hover:bg-white/[0.06]">
           Back to dashboard

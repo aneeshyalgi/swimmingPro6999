@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode } from "react"
-import { Check, Maximize2 } from "lucide-react"
+import { ArrowRight, Check, Copy, Maximize2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const TONES = {
@@ -13,7 +13,10 @@ const TONES = {
  * One day of the swim or gym week calendar, drawn as a lane that fills with water to the day's training load. Clicking
  * it opens the day full screen (see DayFocus); it hands back its own position so the view can grow out of it.
  */
-export function CalendarDay({ tone, index, date, dayName, isToday, past, level, amount, unit, total, done, emptyLabel, icons, onOpen }: {
+/** A change the week's coach panel suggests for a day, marked on it until it's applied (see WeekLink). */
+const PENDING = { edit: Pencil, add: Plus, remove: Trash2, move: ArrowRight, copy: Copy, replan: RefreshCw } as const
+
+export function CalendarDay({ tone, index, date, dayName, isToday, past, level, amount, unit, total, done, emptyLabel, icons, changed = false, coach, onOpen }: {
   tone: keyof typeof TONES
   /** Position in the week, for the staggered entrance. */
   index: number
@@ -32,6 +35,11 @@ export function CalendarDay({ tone, index, date, dayName, isToday, past, level, 
   emptyLabel: string
   /** Small markers along the bottom (meet, strength, mobility…). */
   icons?: ReactNode
+  /** The coach chat just changed this day: it glows for a moment. */
+  changed?: boolean
+  /** The week's coach panel, while it's open: reading the week (`scanning`), a change it suggests for this day
+   *  (`pending`), and whether that change is being looked at (`focus`). */
+  coach?: { scanning: boolean; pending?: keyof typeof PENDING; focus: boolean }
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void
 }) {
   const styles = TONES[tone]
@@ -43,6 +51,7 @@ export function CalendarDay({ tone, index, date, dayName, isToday, past, level, 
     return () => cancelAnimationFrame(frame)
   }, [])
   const complete = total > 0 && done === total
+  const Pending = coach?.pending ? PENDING[coach.pending] : null
   const height = amount && filled ? 14 + Math.min(1, Math.max(0, level)) * 62 : 0
 
   const track = (event: PointerEvent<HTMLButtonElement>) => {
@@ -54,10 +63,11 @@ export function CalendarDay({ tone, index, date, dayName, isToday, past, level, 
   }
 
   return (
-    <button ref={ref} type="button" onClick={onOpen} onPointerMove={track} style={{ "--i": index } as CSSProperties}
+    <button ref={ref} type="button" onClick={onOpen} onPointerMove={track} style={{ "--i": index } as CSSProperties} data-day={date}
       aria-label={`${dayName} ${Number(date.slice(8))}${amount ? `, ${amount} ${unit}` : `, ${emptyLabel.toLowerCase()}`}${total ? `, ${done} of ${total} done` : ""}. Open full screen.`}
       className={cn("wk-in wk-tile group relative h-32 rounded-[20px] p-px text-left outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:h-40",
-        isToday ? cn("wk-ring", styles.ring) : cn("bg-white/[0.08]", styles.hover), styles.glow, past && !isToday && "opacity-70 hover:opacity-100")}>
+        isToday ? cn("wk-ring", styles.ring) : cn("bg-white/[0.08]", styles.hover), styles.glow, past && !isToday && "opacity-70 hover:opacity-100",
+        coach?.focus && "wc-tile-focus")}>
       <span className="relative flex h-full flex-col items-center overflow-hidden rounded-[19px] bg-[linear-gradient(180deg,#0c141c,#070c12)] px-1 pb-2 pt-2.5">
         <span aria-hidden className="wk-spot pointer-events-none absolute inset-0" />
 
@@ -98,6 +108,13 @@ export function CalendarDay({ tone, index, date, dayName, isToday, past, level, 
           <span className="flex h-3 items-center gap-0.5">{complete && <Check aria-hidden className="h-3 w-3 text-emerald-300 sm:hidden" strokeWidth={3.5} />}{icons}</span>
         </span>
       </span>
+      {changed && <span aria-hidden className={cn("wc-day-changed pointer-events-none absolute inset-0 rounded-[20px]", tone === "swim" ? "wc-swim" : "wc-gym")} />}
+      {coach?.scanning && <span aria-hidden className={cn("wc-tile-scan pointer-events-none absolute inset-0 overflow-hidden rounded-[20px]", tone === "swim" ? "wc-swim" : "wc-gym")} />}
+      {Pending && (
+        <span aria-hidden className={cn("wc-tile-pending pointer-events-none absolute inset-0 rounded-[20px]", `wc-pending-${coach!.pending}`)}>
+          <span className="wc-tile-mark absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full text-slate-950"><Pending className="h-3 w-3" strokeWidth={3} /></span>
+        </span>
+      )}
     </button>
   )
 }

@@ -21,7 +21,7 @@ from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from app.auth import get_authenticated_profile
-from app.config import get_settings
+from app.config import get_settings, sampling
 from app.coach_programs import program_for, render_overview, session_lines
 from app.context import athlete_coach, chat_context
 from app.swim_planner import SwimAssignment, assign_week, main_strokes, session_parts, taper_meet
@@ -602,6 +602,7 @@ GENERATION_SLOW = "Your coach is taking longer than usual right now. Nothing was
 STALLED_WHITESPACE = 64
 REPLY_SECONDS = 120
 SILENT_SECONDS = 30          # no data for this long: the connection is stuck, so the reply is tried again
+REASONING_TOKENS = 8000      # a reasoning model's room to think, on top of the reply's own tokens
 # Swims with more lines than this (plus one) are written in parts of about this many lines, all at the same time.
 PART_SIZE = 5
 # A reply with only minor issues gets one more attempt; then the better of the two is used, repaired where it can be.
@@ -669,11 +670,11 @@ def _reply(client: OpenAI, messages: list[dict[str, str]], response_format: dict
     deadline = deadline or time.monotonic() + REPLY_SECONDS
     settings = get_settings()
     model = settings.openai_plan_model
-    options: dict[str, Any] = {"max_completion_tokens": max_tokens}
-    if model.startswith("gpt-5"):
-        options["reasoning_effort"] = settings.openai_plan_reasoning_effort
-    else:
-        options["temperature"] = 0.3
+    options = sampling(model, settings.openai_plan_reasoning_effort, 0.3)
+    # A model's reasoning counts toward the reply's tokens, so it gets room of its own on top of the reply's.
+    thinking = REASONING_TOKENS if options.get("reasoning_effort", "none") != "none" else 0
+    options["max_completion_tokens"] = max_tokens + thinking
+
     def wait_turn() -> None:
         week_jobs.checkpoint(job)
         if time.monotonic() > deadline:
@@ -689,7 +690,9 @@ def _reply(client: OpenAI, messages: list[dict[str, str]], response_format: dict
         blank_run, finish, usage = 0, None, None
         stream = client.chat.completions.create(model=model, messages=messages, response_format=response_format, stream=True,
                                                 stream_options={"include_usage": True},
-                                                timeout=httpx.Timeout(limit, read=min(SILENT_SECONDS, limit)), **options)
+                                                # Nothing comes while a model reasons, so it gets twice as long before the
+                                                # connection counts as stuck.
+                                                timeout=httpx.Timeout(limit, read=min(SILENT_SECONDS * (2 if thinking else 1), limit)), **options)
         with stream:
             for chunk in stream:
                 week_jobs.checkpoint(job)
@@ -723,7 +726,7 @@ def _reply(client: OpenAI, messages: list[dict[str, str]], response_format: dict
 def generate_structured(profile, schema: type[BaseModel], objective: str,
                         check: Callable[[Any], list[str]] | None = None, attempts: int = 3,
                         grounding: tuple[str, list[str]] | None = None, *, max_tokens: int = 8000, job: Any = None,
-                        seconds: float | None = None, urgent: bool = False):
+                        seconds: float | None = None, urgent: bool = False, rules: str = GENERATION_RULES):
     """Generate JSON for `schema`. A reply that fails validation or `check` is sent back with its problems to fix; a
     cut-off or dropped reply is retried from scratch, and a rate-limit refusal waits as long as OpenAI asks. A reply
     with only SoftIssues gets one more attempt, then the best one is used with its repairs.
@@ -731,7 +734,8 @@ def generate_structured(profile, schema: type[BaseModel], objective: str,
     `job` (app.jobs) stops the call as soon as the athlete leaves and holds the generation's deadline; a worker thread
     passes it explicitly. Without one, the call gets week_jobs.GENERATION_SECONDS of its own. `seconds` limits this
     call further (for writing that has a fallback of its own); `urgent` puts it ahead of the line for a free call (a
-    short call an athlete waits on, not stuck behind the dozens of a swim week).
+    short call an athlete waits on, not stuck behind the dozens of a swim week). `rules` go before the athlete's data:
+    the rules for writing training, unless the call does something else with it (copying out a coach's session).
     """
     deadline = getattr(job, "deadline", None) or time.monotonic() + week_jobs.GENERATION_SECONDS
     if seconds is not None:
@@ -742,7 +746,7 @@ def generate_structured(profile, schema: type[BaseModel], objective: str,
     # them to the later calls. The task comes last.
     base: list[dict[str, str]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"{GENERATION_RULES}\n{grounding_text}"},
+        {"role": "user", "content": f"{rules}\n{grounding_text}"},
         {"role": "user", "content": objective},
     ]
     response_format = {"type": "json_schema", "json_schema": {
@@ -1751,10 +1755,6 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     phase, swims = _week_settings(profile)
     fixed = []
     manual = [item for day in existing["days"] for item in day["workouts"] if item["origin"] in MANUAL_ORIGINS]
-    fixed_swims = sum(item["origin"] not in MANUAL_ORIGINS for day in existing["days"] for item in day["workouts"])
-    if fixed_swims + len(manual) > swims:
-        raise HTTPException(status_code=409, detail="Existing scheduled training exceeds your onboarding availability. Update your availability before generating this week.")
-    prescribed_swims = swims - len(manual)
     for day in existing["days"]:
         if any(item["origin"] not in MANUAL_ORIGINS for item in day["workouts"]) or day["strength"] or day["mobility"]:
             fixed.append({
@@ -1763,23 +1763,36 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
                 "strength": day["strength"], "mobility": day["mobility"], "recovery": day["recovery"], "rest": False,
             })
     fixed_dates = {day["date"] for day in fixed}
-    manual_on: dict[str, int] = {}
+    own_swims: dict[str, list[str]] = {}
     for item in manual:
-        manual_on[item["date"]] = manual_on.get(item["date"], 0) + 1
+        own_swims.setdefault(item["date"], []).append(item["workout"]["title"])
+    manual_on = {day: len(titles) for day, titles in own_swims.items()}
+    # Named in the day's layout so its objective is about them: told only that a swim of theirs was on it, a day of
+    # them was written up as a recovery day.
+    own = {day: f"the athlete's own scheduled swim{'s' if len(titles) != 1 else ''}, which the objective covers: "
+                f"{'; '.join(titles)} (do not duplicate {'it' if len(titles) == 1 else 'them'})" for day, titles in own_swims.items()}
     week_days = [week_start + timedelta(days=index) for index in range(7)]
     free_days = [day for day in week_days if day.isoformat() not in fixed_dates]
-    swims_to_place = prescribed_swims - sum(len(day["swims"]) for day in fixed)
+    # Every swim already on the week stays and counts toward the athlete's swims, so only the ones still missing are
+    # added: none when they've scheduled as many or more already (a coach's plan from chat can have more), as re-planning.
+    swims_to_place = max(0, swims - len(manual) - sum(len(day["swims"]) for day in fixed))
     strength_to_place = 0  # Strength is planned in the Workout Library around this swim week.
 
-    # Deterministic weekly layout: sessions are spread evenly; doubles only when there are more swims than days.
+    # Deterministic weekly layout: sessions are spread evenly; doubles only when there are more swims than days. On the
+    # athlete's own days (chosen on the dashboard) instead, when they have them: as many as each day was given.
+    from app.training_days import chosen  # it imports this module
+    chosen_swims = (chosen(profile) or {}).get("swim")
     swim_plan = {day: 0 for day in free_days}
     remaining = swims_to_place
     for level in (1, 2):
-        candidates = [day for day in free_days if swim_plan[day] + manual_on.get(day.isoformat(), 0) < level]
+        candidates = [day for day in free_days if swim_plan[day] + manual_on.get(day.isoformat(), 0) < level
+                      and (chosen_swims is None or chosen_swims[day.weekday()] >= level)]
         take = min(remaining, len(candidates))
         for day in _spread(candidates, take):
             swim_plan[day] += 1
         remaining -= take
+    if chosen_swims is not None:
+        remaining = 0  # a swim with no room left on the athlete's days isn't put on a day they don't swim
     # Race day: the athlete races, so no coach session goes on it (that day's sessions leave the week, not move).
     race_meets = {date.fromisoformat(day["date"]): [meet.get("name") or "a meet" for meet in day["competitions"]]
                   for day in existing["days"] if day["competitions"]}
@@ -1808,14 +1821,14 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
             continue
         sessions_today = [assignments[(day, index)].label for index in range(swim_plan.get(day, 0)) if (day, index) in assignments]
         parts = [f"exactly {swim_plan[day]} generated swim{'s' if swim_plan[day] != 1 else ''} ({'; '.join(sessions_today)})" if swim_plan[day] else "no generated swim"]
-        if manual_on.get(day.isoformat()):
-            parts.append("the athlete's own scheduled swim (do not duplicate it)")
+        if day.isoformat() in own:
+            parts.append(own[day.isoformat()])
         parts.append("1 strength session" if day in strength_days else "no strength session")
         if not sessions_on[day] and day not in strength_days:
             parts = ["rest / recovery day: no swim and no strength session"]
         if day in race_meets:
             parts = [f"race day ({', '.join(race_meets[day])}): the athlete races, so no coach session"] + (
-                ["the athlete's own scheduled swim (do not duplicate it)"] if manual_on.get(day.isoformat()) else [])
+                [own[day.isoformat()]] if day.isoformat() in own else [])
         layout.append(label + "; ".join(parts) + "; plus mobility and recovery.")
 
     week_context = f"""Week {week_start} to {end - timedelta(days=1)}. Training phase: {phase or "use the athlete's goals"}.
@@ -2123,10 +2136,14 @@ def replan_week(profile, week_start: date) -> dict[str, Any]:
     staying = sum(info["swims"] if info["locked"] else len(info["kept"]) for info in days)
     on_day = {day: len(info["kept"]) for day, info in planned.items()}
     room = {day: 2 - sum(entry["stays"] for entry in info["entries"]) for day, info in planned.items()}
+    # On the athlete's own days (chosen on the dashboard) when they have them, as many as each day was given.
+    from app.training_days import chosen  # it imports this module
+    chosen_swims = (chosen(profile) or {}).get("swim")
     swim_plan = {day: 0 for day in planned}
     remaining = max(0, swims - staying)
     for level in (1, 2):
-        candidates = [day for day in planned if swim_plan[day] + on_day[day] < level and swim_plan[day] < room[day]]
+        candidates = [day for day in planned if swim_plan[day] + on_day[day] < level and swim_plan[day] < room[day]
+                      and (chosen_swims is None or chosen_swims[day.weekday()] >= level)]
         take = min(remaining, len(candidates))
         for day in _spread(candidates, take):
             swim_plan[day] += 1

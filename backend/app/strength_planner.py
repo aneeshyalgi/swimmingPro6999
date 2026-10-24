@@ -52,6 +52,8 @@ class Athlete:
     competitions: list[dict[str, Any]] = field(default_factory=list)  # {"date", "priority", "name"}
     started: date | None = None                      # first day with SwimGPT (anchors the block rotation)
     assessment: dict[str, Any] = field(default_factory=dict)
+    strength_days: list[bool] | None = None          # the athlete's own strength days, Monday first (training_days)
+    mobility_days: bool = True                       # the mobility routine on the days without strength
 
 
 def athlete_from_profile(profile: dict[str, Any], *, completed_sessions: int = 0, readiness: list[dict[str, Any]] | None = None,
@@ -547,20 +549,26 @@ def plan_week(athlete: Athlete, week_start: date, open_days: list[date], today: 
     """Strength & Mobility sessions on spread-out days, the coach's mobility routine on the other open days.
 
     A part-week (e.g. the week the athlete signs up) gets a pro-rated number of sessions; nothing hard lands on race
-    day or the two days before it; the competition and taper blocks cap the number of sessions.
+    day or the two days before it; the competition and taper blocks cap the number of sessions. With the athlete's own
+    strength days, sessions go only on those (one on each day left, less the workouts that stay), and mobility goes on
+    the other days only when they keep it.
     """
     ctx = context_for(athlete, week_start)
     phase = PHASES[ctx.block.key]
     remaining = sum(1 for index in range(7) if week_start + timedelta(days=index) >= today)
-    wanted = athlete.gym_sessions if remaining >= 7 else round(athlete.gym_sessions * remaining / 7)
-    if athlete.gym_sessions and remaining and not wanted:
-        wanted = 1
+    chosen = athlete.strength_days
+    if chosen is not None:
+        wanted = sum(chosen[day.weekday()] for day in (week_start + timedelta(days=index) for index in range(7)) if day >= today)
+    else:
+        wanted = athlete.gym_sessions if remaining >= 7 else round(athlete.gym_sessions * remaining / 7)
+        if athlete.gym_sessions and remaining and not wanted:
+            wanted = 1
     wanted = max(0, wanted - kept_strength)
     if phase.max_sessions is not None:
         wanted = min(wanted, phase.max_sessions)
     meet_days = {date.fromisoformat(meet["date"]) for meet in athlete.competitions if meet.get("priority") in COMPETITION_PRIORITIES}
     race_days = {meet - timedelta(days=offset) for meet in meet_days for offset in range(NO_GYM_DAYS_BEFORE_MEET + 1)}
-    eligible = [day for day in open_days if day not in race_days]
+    eligible = [day for day in open_days if day not in race_days and (chosen is None or chosen[day.weekday()])]
     wanted = min(wanted, len(eligible))
     strength_days = [eligible[int(index * len(eligible) / wanted)] for index in range(wanted)] if wanted else []
     order = ctx.coach.preference[ctx.block.key]
@@ -569,6 +577,6 @@ def plan_week(athlete: Athlete, week_start: date, open_days: list[date], today: 
     for index, (day, number) in enumerate(zip(strength_days, numbers)):
         sessions.append(strength_session(day, ctx.coach.sessions[number], ctx, extra=index >= 3))
     for day in open_days:
-        if day not in strength_days and day not in meet_days:
+        if day not in strength_days and day not in meet_days and athlete.mobility_days:
             sessions.append(mobility_session(day, ctx))
     return sorted(sessions, key=lambda session: session.day)

@@ -19,7 +19,7 @@ const REVEAL_MS = 1000
 const FALLBACK_MS = 6000
 const LABELS: [RegExp, string][] = [
   [/^\/$/, "Home"], [/^\/training-plans/, "Training Plans"], [/^\/video-analysis/, "Video Analysis"], [/^\/dashboard/, "Your dashboard"],
-  [/^\/auth/, "Welcome"], [/^\/onboarding/, "Plan setup"], [/^\/coach-chat/, "Coach chat"], [/^\/payment/, "Payment"],
+  [/^\/auth/, "Welcome"], [/^\/onboarding/, "Plan setup"], [/^\/payment/, "Payment"],
   [/^\/survey/, "Rate SwimGPT"],
 ]
 const labelFor = (path: string) => LABELS.find(([pattern]) => pattern.test(path))?.[1] ?? "SwimGPT"

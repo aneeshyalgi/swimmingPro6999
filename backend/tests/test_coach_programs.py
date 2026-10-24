@@ -173,15 +173,20 @@ class SwimWeekGenerationTests(unittest.TestCase):
                "gym_sessions_per_week": 0, "session_duration": "120", "facilities": ["50m Pool"],
                "recommended_coaches": ["Coach Robert"]}
 
-    def run_week(self, part_meters=None, meets=None):
+    def run_week(self, part_meters=None, meets=None, scheduled=None, chosen=None):
         """Generates the week; part_meters(check) picks the metres a part is written in (default: what its check wants);
-        meets: {day index: competition} entered by the athlete."""
+        meets: {day index: competition} entered by the athlete; scheduled: {day index: swims} already on it from the
+        athlete's coach in chat (saved as AI workouts); chosen: the swims a day the athlete chose on the dashboard."""
         from datetime import timedelta
         from unittest.mock import MagicMock
         from app import training
         from app.today import MobilityWork
 
-        empty_week = {"generated": False, "days": [{"date": (self.monday + timedelta(days=i)).isoformat(), "workouts": [], "strength": None,
+        def own(day, count):
+            return [{"key": f"coach-{day}-{n}", "date": day, "origin": "AI workout", "workout": {"title": f"Coach swim {n}"}} for n in range(count)]
+
+        empty_week = {"generated": False, "days": [{"date": (self.monday + timedelta(days=i)).isoformat(),
+                                                    "workouts": own((self.monday + timedelta(days=i)).isoformat(), (scheduled or {}).get(i, 0)), "strength": None,
                                                     "mobility": [], "competitions": [meets[i]] if meets and i in meets else [],
                                                     "objective": "", "recovery": []} for i in range(7)]}
         calls = []
@@ -208,7 +213,7 @@ class SwimWeekGenerationTests(unittest.TestCase):
 
         database = MagicMock()
         database.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"plan": {"phase": "Build"}}]
-        with patch.object(training, "week_view", return_value=empty_week), patch.object(training, "competitions", return_value=[]),                 patch.object(training, "get_supabase_client", return_value=database),                 patch.object(training, "build_grounding", return_value=("g", [])),                 patch.object(training, "generate_structured", side_effect=fake_generate),                 patch.object(training, "save_record") as save_record:
+        with patch.object(training, "week_view", return_value=empty_week), patch.object(training, "competitions", return_value=[]),                 patch.object(training, "get_supabase_client", return_value=database),                 patch.object(training, "build_grounding", return_value=("g", [])),                 patch.object(training, "generate_structured", side_effect=fake_generate),                 patch.object(training, "save_record") as save_record,                 patch("app.training_days.chosen", return_value=chosen and {"swim": chosen, "gym": None, "mobility": True}):
             training.build_week(self.profile, self.monday)
         return calls, save_record.call_args.args[5]
 
@@ -265,6 +270,53 @@ class SwimWeekGenerationTests(unittest.TestCase):
         day_prompts = [prompt for schema, prompt in calls if schema is training.DayPlan and "Plan 2030-01-12" in prompt]
         self.assertIn("race day (State Champs): the athlete races", day_prompts[0])
         self.assertLessEqual(len([swim for day in saved["plan"]["days"] for swim in day["swims"]]), 5)
+
+    def test_more_swims_from_the_coach_than_the_athletes_week_are_planned_around(self):
+        from app import training
+
+        # 7 swims added from a coach's plan in chat, against 5 a week in onboarding: the week is still generated, every
+        # one of them stays and no swim is added, but each day still gets its plan, mobility and recovery.
+        calls, saved = self.run_week(scheduled={0: 2, 1: 1, 2: 1, 3: 1, 4: 1, 6: 1})
+        self.assertEqual([swim for day in saved["plan"]["days"] for swim in day["swims"]], [])
+        self.assertEqual(saved["source_files"], [])
+        self.assertEqual(sum(schema is training.DayPlan for schema, _ in calls), 7)
+        self.assertEqual([day["rest"] for day in saved["plan"]["days"]], [False] * 5 + [True, False])
+        self.assertTrue(all(day["mobility"] for day in saved["plan"]["days"]))
+        monday = next(prompt for schema, prompt in calls if schema is training.DayPlan and "Plan 2030-01-07" in prompt)
+        self.assertIn("own scheduled swims, which the objective covers: Coach swim 0; Coach swim 1", monday)
+
+    def test_on_the_athletes_chosen_days_swims_go_only_there(self):
+        calls, saved = self.run_week(chosen=[2, 0, 1, 0, 1, 0, 1])   # 5 a week: two on Monday
+        swims = [len(day["swims"]) for day in saved["plan"]["days"]]
+        self.assertEqual(swims, [2, 0, 1, 0, 1, 0, 1])
+        self.assertEqual([day["rest"] for day in saved["plan"]["days"]], [False, True, False, True, False, True, False])
+        self.assertEqual(saved["source_files"], [assignment.label for assignment in assign_week("Coach Robert", self.monday, 5)])
+
+    def test_a_chosen_day_with_a_coach_swim_already_on_it_gets_no_more(self):
+        _, saved = self.run_week(chosen=[2, 0, 1, 0, 1, 0, 1], scheduled={0: 1, 1: 1})
+        # 5 a week less the 2 from the coach (Monday's and Tuesday's, which stay): one on each other chosen day, so
+        # Monday doesn't get its second, and nothing goes on Tuesday, which isn't one of them.
+        self.assertEqual([len(day["swims"]) for day in saved["plan"]["days"]], [0, 0, 1, 0, 1, 0, 1])
+
+    def test_a_race_on_a_chosen_day_takes_its_swim_and_nothing_moves(self):
+        meet = {"name": "State Champs", "date": "2030-01-09", "priority": "C"}          # Wednesday, a chosen day
+        calls, saved = self.run_week(chosen=[2, 0, 1, 0, 1, 0, 1], meets={2: meet})
+        self.assertEqual([len(day["swims"]) for day in saved["plan"]["days"]], [2, 0, 0, 0, 1, 0, 1])
+        self.assertFalse(saved["plan"]["days"][2]["rest"])
+
+    def test_more_swims_from_the_coach_than_the_chosen_days_hold_add_none(self):
+        _, saved = self.run_week(chosen=[2, 0, 1, 0, 1, 0, 1], scheduled={1: 2, 3: 2, 5: 2})
+        self.assertEqual([len(day["swims"]) for day in saved["plan"]["days"]], [0] * 7)
+
+    def test_without_chosen_days_the_week_is_spread_as_it_always_was(self):
+        _, saved = self.run_week()
+        self.assertEqual([len(day["swims"]) for day in saved["plan"]["days"]], [1, 1, 1, 0, 1, 1, 0])
+
+    def test_swims_from_the_coach_leave_the_rest_of_the_athletes_week_to_generate(self):
+        calls, saved = self.run_week(scheduled={0: 1, 3: 1})
+        swims = {day["date"]: len(day["swims"]) for day in saved["plan"]["days"]}
+        self.assertEqual(sum(swims.values()), 3)
+        self.assertEqual(swims["2030-01-07"] + swims["2030-01-10"], 0)   # the coach's swim days get no second swim
 
 
 if __name__ == "__main__":

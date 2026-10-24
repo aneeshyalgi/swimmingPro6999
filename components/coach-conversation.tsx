@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
-import { Captions, CaptionsOff, Hand, Loader2, Mic, MicOff, PhoneOff, RotateCcw, Send } from "lucide-react"
+import { ArrowRight, CalendarPlus, Captions, CaptionsOff, Hand, Loader2, Mic, MicOff, PhoneOff, RotateCcw, Send } from "lucide-react"
 import { CoachAvatar, coachLookKey } from "@/components/coach-avatar"
+import { CallScene, ScenePicker, SceneTitle } from "@/components/call-scenes"
 import { CoachLiveAvatar } from "@/components/coach-live-avatar"
+import { DEFAULT_SCENE, drawnScene, saveScene, savedScene, sceneById, type SceneId } from "@/lib/call-scenes"
 import { generateCoachSpeech, speechChunks, transcribeRecording } from "@/lib/coach-audio"
 import { playHangUpSound } from "@/lib/call-sounds"
 import { cn } from "@/lib/utils"
@@ -23,6 +25,8 @@ const TONES: Record<string, [string, string]> = {
   robert: ["#a78bfa", "#6366f1"], tony: ["#34d399", "#14b8a6"],
 }
 const LISTEN_TONE: [string, string] = ["#e0f2fe", "#57e5ea"]
+/** The coach's two colours (their orb on a call, and the scenes that take on their colours). */
+export const coachTone = (coach: string): [string, string] => TONES[coachLookKey(coach)] ?? TONES.brad
 
 const SILENCE_MS = 1150        // pause that ends the athlete's turn
 const MIN_SPEECH_MS = 280      // ignore coughs and clicks
@@ -38,10 +42,32 @@ const openers = (first: string) => [
   "I'm feeling tired. Should I go easier today?",
 ]
 
-/** Spoken parts: a short opening sentence so the coach starts talking quickly, then groups of up to ~360 characters. */
+// The longest piece of a reply spoken at once (the speech endpoint takes at most 3,000 characters).
+const PIECE_LIMIT = 400
+
+/** `text` in pieces of at most `limit` characters, cut at a comma, a semicolon or a space. */
+function pieces(text: string, limit: number): string[] {
+  const result: string[] = []
+  let rest = text.trim()
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit)
+    const cut = [window.lastIndexOf(", "), window.lastIndexOf("; "), window.lastIndexOf(" ")].find((index) => index > limit / 3) ?? -1
+    const end = cut > 0 ? cut + 1 : limit
+    result.push(rest.slice(0, end).trim())
+    rest = rest.slice(end).trim()
+  }
+  if (rest) result.push(rest)
+  return result
+}
+
+/** Spoken parts: a short opening sentence so the coach starts talking quickly, then groups of up to ~360 characters. A
+ *  line ends a sentence too (a list of sets has no full stops), and a sentence longer than a part is cut into pieces. */
 function spokenParts(text: string) {
   const plain = speechChunks(text).join(" ")
-  const sentences = plain.match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)?.map((part) => part.trim()).filter(Boolean) ?? []
+  const sentences = plain.split(/\n+/)
+    .flatMap((line) => line.match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g) ?? [])
+    .map((part) => part.trim()).filter(Boolean)
+    .flatMap((sentence) => pieces(sentence, PIECE_LIMIT))
   const parts: string[] = []
   for (const sentence of sentences) {
     const last = parts[parts.length - 1]
@@ -52,12 +78,18 @@ function spokenParts(text: string) {
   return parts.length ? parts : [plain]
 }
 
-export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
+/**
+ * `planOffer`: what the coach just prescribed on the call ("Swim session ready"), offered for the athlete's training;
+ * taking it (`onAddPlan`) ends the call, and the chat opens the plan.
+ */
+export function CoachConversation({ coach, coachName, origin, ask, onClose, planOffer = null, onAddPlan }: {
   coach: string
   coachName: string
   origin: { x: number; y: number } | null
   ask: (text: string, signal: AbortSignal) => Promise<string>
   onClose: () => void
+  planOffer?: { id: string; label: string } | null
+  onAddPlan?: () => void
 }) {
   const [phase, setPhase] = useState<Phase>("connecting")
   const [error, setError] = useState<string | null>(null)
@@ -69,6 +101,14 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
   const [seconds, setSeconds] = useState(0)
   const [closing, setClosing] = useState(false)
   const [opener, setOpener] = useState(0)
+  // The scene behind the call (components/call-scenes), picked from the top bar and kept on this device. `settled`
+  // is the scene once it has finished sweeping in; `titled` counts picks, each shown by name for a moment.
+  const [scene, setScene] = useState<SceneId>(() => savedScene())
+  const [settled, setSettled] = useState<SceneId>(scene)
+  const [sceneFrom, setSceneFrom] = useState<{ x: number; y: number } | null>(null)
+  const [scenesOpen, setScenesOpen] = useState(false)
+  const [scenesAvailable, setScenesAvailable] = useState(true)
+  const [titled, setTitled] = useState(0)
 
   const phaseRef = useRef<Phase>("connecting")
   const levelRef = useRef(0)
@@ -85,8 +125,13 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const askRef = useRef(ask)
   askRef.current = ask
+  // The smoothed voice level the orb shows, which the scene moves with too.
+  const glowRef = useRef(0)
+  const sceneButtonRef = useRef<HTMLButtonElement>(null)
+  const scenesOpenRef = useRef(false)
+  scenesOpenRef.current = scenesOpen
 
-  const tone = TONES[coachLookKey(coach)] ?? TONES.brad
+  const tone = coachTone(coach)
   const go = (next: Phase) => { phaseRef.current = next; setPhase(next) }
 
   // ---------------------------------------------------------------- audio graph
@@ -283,7 +328,8 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
 
       const target = current === "thinking" || current === "transcribing" ? 0.18 : Math.min(1, raw * 7)
       smooth += (target - smooth) * (target > smooth ? 0.35 : 0.08)
-      time += (dt / 1000) * (current === "thinking" || current === "transcribing" ? 2.2 : 1) * (reduced ? 0.25 : 1)
+      glowRef.current = smooth
+      time +=(dt / 1000) * (current === "thinking" || current === "transcribing" ? 2.2 : 1) * (reduced ? 0.25 : 1)
       paint(canvasRef.current, time, smooth, current, current === "listening" || current === "muted" ? LISTEN_TONE : tone)
       document.documentElement.style.setProperty("--cv-level", smooth.toFixed(3))
       frame = requestAnimationFrame(draw)
@@ -315,7 +361,8 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
   }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") end()
+      // Esc closes the scene picker first; with it closed, Esc ends the call.
+      if (event.key === "Escape") { if (scenesOpenRef.current) setScenesOpen(false); else end() }
       if (event.key === " " && event.target === document.body) { event.preventDefault(); if (phaseRef.current === "listening") void finishTurn(); else interrupt() }
     }
     window.addEventListener("keydown", onKey)
@@ -346,11 +393,17 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
     <div role="dialog" aria-modal="true" aria-label={`Voice conversation with ${coachName}`}
       className={cn("cv-root fixed inset-0 z-[100] flex flex-col overflow-hidden text-white", closing && "cv-closing")}
       style={{ "--cv-x": `${origin?.x ?? window.innerWidth / 2}px`, "--cv-y": `${origin?.y ?? window.innerHeight / 2}px`, "--cv-a": tone[0], "--cv-b": tone[1] } as CSSProperties}>
-      <div aria-hidden className="cv-backdrop absolute inset-0">
+      <div aria-hidden className={cn("cv-backdrop absolute inset-0", drawnScene(settled) && settled === scene && "vs-covered")}>
         <span className="cv-aurora cv-aurora-a" />
         <span className="cv-aurora cv-aurora-b" />
         <span className="cv-stars absolute inset-0" />
       </div>
+      {scenesAvailable && (
+        <CallScene scene={scene} origin={sceneFrom} tone={tone} level={glowRef} phase={phaseRef} warm={scenesOpen} onSettled={setSettled}
+          onUnavailable={() => { setScenesAvailable(false); setScene(DEFAULT_SCENE); setSettled(DEFAULT_SCENE) }}
+          onFailed={(_, previous) => { setScene(previous); setSettled(previous) }} />
+      )}
+      {titled > 0 && !closing && <SceneTitle key={titled} scene={scene} />}
 
       {/* Top bar */}
       <header className="cv-fade relative z-10 flex items-center justify-between gap-3 px-4 py-4 sm:px-8">
@@ -364,12 +417,41 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
             </p>
           </div>
         </div>
-        <button type="button" onClick={() => setCaptions((value) => !value)} aria-pressed={captions}
-          className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-slate-300 backdrop-blur transition-colors hover:bg-white/10 hover:text-white">
-          {captions ? <Captions className="h-4 w-4" /> : <CaptionsOff className="h-4 w-4" />}
-          <span className="hidden sm:inline">Captions</span>
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {scenesAvailable && (
+            <button ref={sceneButtonRef} type="button" onClick={() => setScenesOpen((value) => !value)} aria-haspopup="dialog" aria-expanded={scenesOpen}
+              aria-label={`Scene: ${sceneById(scene).name}. Change the scene`}
+              className={cn("vs-trigger flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] p-1 text-xs text-slate-300 backdrop-blur transition-colors hover:bg-white/10 hover:text-white sm:pr-3",
+                scenesOpen && "border-white/25 bg-white/[0.12] text-white")}>
+              <span aria-hidden className="vs-trigger-dot h-6 w-6 shrink-0 rounded-full" style={{ background: sceneById(scene).swatch }} />
+              <span className="hidden sm:inline">Scene</span>
+            </button>
+          )}
+          <button type="button" onClick={() => setCaptions((value) => !value)} aria-pressed={captions}
+            className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-slate-300 backdrop-blur transition-colors hover:bg-white/10 hover:text-white">
+            {captions ? <Captions className="h-4 w-4" /> : <CaptionsOff className="h-4 w-4" />}
+            <span className="hidden sm:inline">Captions</span>
+          </button>
+        </div>
       </header>
+
+      {/* The session the coach just gave: adding it ends the call and opens it in the chat. */}
+      {planOffer && !closing && (
+        <div className="pointer-events-none absolute inset-x-0 top-[72px] z-20 flex justify-center px-4 sm:top-[80px]">
+          <button key={planOffer.id} type="button" onClick={() => { onAddPlan?.(); end() }} title="Ends the call and opens the session to add"
+            className="cp-pill group pointer-events-auto relative inline-flex max-w-full items-center gap-2.5 overflow-hidden rounded-full py-1.5 pl-1.5 pr-4 text-left text-white">
+            <span aria-hidden className="cp-cta-sheen" />
+            <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-cyan-200 to-violet-300 text-slate-950">
+              <CalendarPlus className="h-4 w-4" />
+            </span>
+            <span className="relative min-w-0 leading-tight">
+              <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-100/85">{planOffer.label}</span>
+              <span className="block truncate text-sm font-semibold">Add to training<span className="font-normal text-slate-300"> · ends call</span></span>
+            </span>
+            <ArrowRight className="relative h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
+          </button>
+        </div>
+      )}
 
       {/* Orb */}
       <main className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4">
@@ -471,6 +553,12 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose }: {
         )}
       </footer>
       <p className="relative z-10 pb-4 text-center text-[11px] text-slate-600">AI-generated coach voice · Your speech is sent to OpenAI for transcription</p>
+
+      {scenesAvailable && !closing && (
+        <ScenePicker open={scenesOpen} place="call" current={scene} tone={tone} coachFirstName={first} returnFocus={sceneButtonRef}
+          onPick={(next, from) => { setScene(next); setSceneFrom(from); saveScene(next); setTitled((count) => count + 1) }}
+          onClose={() => setScenesOpen(false)} />
+      )}
     </div>,
     document.body,
   )
