@@ -132,8 +132,10 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const askRef = useRef(ask)
   askRef.current = ask
-  // The smoothed voice level the orb shows, which the scene moves with too.
-  const glowRef = useRef(0)
+  // What the scene behind the call moves with: the athlete's voice only, never the coach's (talking or thinking), so it
+  // looks the same whether or not the coach is speaking. `scenePhase` never says the coach is speaking.
+  const sceneLevel = useRef(0)
+  const scenePhase = useRef("listening")
   const sceneButtonRef = useRef<HTMLButtonElement>(null)
   const scenesOpenRef = useRef(false)
   scenesOpenRef.current = scenesOpen
@@ -562,7 +564,8 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
       }
       const target = current === "thinking" || current === "transcribing" ? 0.18 : Math.min(1, raw * 7)
       smooth += (target - smooth) * (target > smooth ? 0.35 : 0.08)
-      glowRef.current = smooth
+      const athlete = current === "listening" ? Math.min(1, raw * 7) : 0
+      sceneLevel.current += (athlete - sceneLevel.current) * (athlete > sceneLevel.current ? 0.35 : 0.08)
       time +=(dt / 1000) * (current === "thinking" || current === "transcribing" ? 2.2 : 1) * (reduced ? 0.25 : 1)
       paint(canvasRef.current, time, smooth, current, current === "listening" || current === "muted" ? LISTEN_TONE : tone)
       document.documentElement.style.setProperty("--cv-level", smooth.toFixed(3))
@@ -652,7 +655,7 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
         <span className="cv-stars absolute inset-0" />
       </div>
       {scenesAvailable && (
-        <CallScene scene={scene} origin={sceneFrom} tone={tone} level={glowRef} phase={phaseRef} warm={scenesOpen} onSettled={setSettled}
+        <CallScene scene={scene} origin={sceneFrom} tone={tone} level={sceneLevel} phase={scenePhase} warm={scenesOpen} onSettled={setSettled}
           onUnavailable={() => { setScenesAvailable(false); setScene(DEFAULT_SCENE); setSettled(DEFAULT_SCENE) }}
           onFailed={(_, previous) => { setScene(previous); setSettled(previous) }} />
       )}
