@@ -30,7 +30,8 @@ import { WaterBubbles } from "@/components/water-bubbles"
 import { CoachAvatar as CoachPortrait } from "@/components/coach-avatar"
 import { useCoachAudio } from "@/hooks/use-coach-audio"
 import { CallScene, ScenePicker, SceneTitle } from "@/components/call-scenes"
-import { CoachConversation, coachTone } from "@/components/coach-conversation"
+import { CONTINUED, CoachConversation, coachTone } from "@/components/coach-conversation"
+import { askCoachLive } from "@/lib/coach-audio"
 import { DEFAULT_SCENE, SCENE_PICKED, drawnScene, saveScene, savedScene, sceneById, type SceneId } from "@/lib/call-scenes"
 import { CoachPlanSheet, PlanCallout } from "@/components/coach-plan-sheet"
 import {
@@ -426,34 +427,35 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
     }
   }
 
-  // One spoken turn: written to the thread like a typed message, answered in short spoken style.
-  const converse = async (text: string, signal: AbortSignal): Promise<string> => {
+  // One spoken turn: written to the thread like a typed message, answered in short spoken style, the reply streamed
+  // (`onText`) so the call can start speaking it while it's being written.
+  const converse = async (text: string, signal: AbortSignal, onText: (text: string) => void): Promise<string> => {
     const coach = activeCoach
     if (!coach || !userKey) throw new Error("Your coaching profile is not loaded.")
-    const history = (threadsRef.current[coach] ?? []).filter((message) => !message.failed).slice(-12).map(({ role, content }) => ({ role, content }))
-    const userMessage: Message = { id: newId(), role: "user", content: text, timestamp: new Date() }
-    setThreads((prev) => ({ ...prev, [coach]: [...(prev[coach] ?? []), userMessage] }))
+    const thread = threadsRef.current[coach] ?? []
+    // Asking again after the coach couldn't answer: the same message, not a second copy of it.
+    const last = thread[thread.length - 1]
+    const again = last?.role === "user" && last.failed && last.content === text ? last : null
+    const history = thread.filter((message) => !message.failed).slice(-12).map(({ role, content }) => ({ role, content }))
+    const userMessage: Message = again ? { ...again, failed: false } : { id: newId(), role: "user", content: text, timestamp: new Date() }
+    setThreads((prev) => ({
+      ...prev,
+      [coach]: again ? (prev[coach] ?? []).map((message) => (message.id === again.id ? userMessage : message)) : [...(prev[coach] ?? []), userMessage],
+    }))
     try {
-      const { data: { session }, error } = await supabase.auth.getSession()
-      if (error) throw error
-      if (!session) throw new Error("Sign in again to talk with your coach.")
-      const response = await fetch(`${apiUrl()}/api/coach-chat`, {
-        method: "POST",
-        signal,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ user_key: userKey, selected_coaches: [coach], active_coach: coach, message: text, history, mode: "conversation" }),
-      })
-      if (!response.ok) throw new Error("The coach couldn't answer just now. Please try again.")
-      const result = await response.json()
+      const result = await askCoachLive({ user_key: userKey, selected_coaches: [coach], active_coach: coach, message: text, history, mode: "conversation" }, signal, onText)
       const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, voice: true }
       setThreads((prev) => ({ ...prev, [coach]: [...(prev[coach] ?? []), reply] }))
       if (reply.plan) {
         setCallPlan({ id: reply.id, kind: reply.plan })
         prefetchPlan(coach, reply, text)
       }
-      return result.content as string
+      return result.content
     } catch (problem) {
-      if (!signal.aborted) {
+      if (signal.aborted && signal.reason === CONTINUED) {
+        // The athlete went on talking: that wasn't the end of what they were saying, which comes as one message next.
+        setThreads((prev) => ({ ...prev, [coach]: (prev[coach] ?? []).filter((message) => message.id !== userMessage.id) }))
+      } else if (!signal.aborted) {
         setThreads((prev) => ({ ...prev, [coach]: (prev[coach] ?? []).map((message) => (message.id === userMessage.id ? { ...message, failed: true } : message)) }))
       }
       throw problem

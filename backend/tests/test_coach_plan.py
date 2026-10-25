@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import json
 import re
 from types import SimpleNamespace
 import unittest
@@ -206,6 +207,135 @@ class CoachChatPlanTests(unittest.TestCase):
         # Any other model answers at its temperature, as before.
         self.chat(ADVICE)
         self.assertEqual(self.openai.chat.completions.create.call_args.kwargs["temperature"], 0.2)
+
+
+class _ReplyStream:
+    """A streamed chat completion: the reply in pieces, then (optionally) a failure partway."""
+
+    def __init__(self, pieces, failure=None):
+        self.pieces, self.failure, self.closed = pieces, failure, False
+
+    def __iter__(self):
+        for piece in self.pieces:
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))])
+        yield SimpleNamespace(choices=[])  # the closing usage chunk has no choices
+        if self.failure:
+            raise self.failure
+
+    def close(self):
+        self.closed = True
+
+
+class CoachChatLiveTests(unittest.TestCase):
+    """A voice call's reply streams as it is written: the same prompt as the chat's, a line of JSON per piece, then the
+    whole reply with its sources and the kinds of session it prescribes."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self.openai = MagicMock()
+        for name, value in [("get_authenticated_profile", {**PROFILE, "user_key": "key-1"}), ("recent_athlete_feedback", []),
+                            ("chat_context", ("PROGRAM", [{"source_file": "Power 1", "coach_name": "Coach Brad", "similarity": 3.0}], ["Coach Brad"])),
+                            ("recent_race_results", []), ("pacing_context", {}), ("coach_line", ""),
+                            ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_reasoning_effort="low"))]:
+            patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
+            self.addCleanup(patcher.stop)
+            patcher.start()
+        patcher = patch.object(main, "OpenAI", return_value=self.openai)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+        patcher = patch.dict(main._call_context, clear=True)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    def live(self, stream, user_key="key-1"):
+        self.openai.chat.completions.create.return_value = stream
+        response = self.client.post("/api/coach-chat/live", headers=HEADERS, json={
+            "user_key": user_key, "selected_coaches": ["Coach Brad"], "message": "Give me a sprint set", "mode": "conversation"})
+        lines = [json.loads(line) for line in response.text.splitlines() if line.strip()] if response.status_code == 200 else []
+        return response, lines
+
+    def test_the_reply_streams_then_comes_whole_with_its_plan(self):
+        pieces = [SPOKEN_SWIM[:40], SPOKEN_SWIM[40:120], SPOKEN_SWIM[120:]]
+        stream = _ReplyStream(pieces)
+        response, lines = self.live(stream)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/x-ndjson")
+        self.assertEqual([line["delta"] for line in lines[:-1]], pieces)
+        self.assertEqual(lines[-1], {"done": True, "content": SPOKEN_SWIM, "plan": "swim",
+                                     "sources": [{"source_file": "Power 1", "coach_name": "Coach Brad", "similarity": 3.0}]})
+        options = self.openai.chat.completions.create.call_args.kwargs
+        self.assertTrue(options["stream"])
+        self.assertEqual((options["model"], options["reasoning_effort"]), ("gpt-5.5", "none"))
+        self.assertIn("never as a list", options["messages"][1]["content"])
+        self.assertTrue(stream.closed)
+
+    def test_it_asks_exactly_what_the_chat_endpoint_asks(self):
+        self.live(_ReplyStream(["Fine."]))
+        live = self.openai.chat.completions.create.call_args.kwargs
+        self.openai.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Fine."))])
+        self.client.post("/api/coach-chat", headers=HEADERS, json={
+            "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Give me a sprint set", "mode": "conversation"})
+        chat = self.openai.chat.completions.create.call_args.kwargs
+        self.assertEqual(live["messages"], chat["messages"])
+        self.assertEqual({key: value for key, value in live.items() if key != "stream"}, chat)
+
+    def test_a_reply_that_breaks_off_ends_with_an_error(self):
+        stream = _ReplyStream(["Start with a 300 loosen"], failure=RuntimeError("connection reset"))
+        with self.assertLogs("app.main", level="ERROR"):
+            _, lines = self.live(stream)
+        self.assertEqual(lines[0], {"delta": "Start with a 300 loosen"})
+        self.assertIn("try again", lines[-1]["error"])
+        self.assertTrue(stream.closed)
+
+    def test_an_empty_reply_is_an_error(self):
+        _, lines = self.live(_ReplyStream([]))
+        self.assertEqual(lines, [{"error": "The coach returned an empty response."}])
+
+    def test_someone_elses_profile_is_refused_before_anything_streams(self):
+        response, _ = self.live(_ReplyStream(["Hi."]), user_key="key-2")
+        self.assertEqual(response.status_code, 403)
+        self.openai.chat.completions.create.assert_not_called()
+
+    def test_a_reply_that_cannot_start_is_an_ordinary_error(self):
+        self.openai.chat.completions.create.side_effect = RuntimeError("model unavailable")
+        response = self.client.post("/api/coach-chat/live", headers=HEADERS, json={
+            "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
+        self.assertEqual(response.status_code, 502)
+
+    def test_a_calls_turns_reuse_the_athletes_records_for_a_minute(self):
+        lookups = [main.get_authenticated_profile, main.recent_athlete_feedback, main.recent_race_results, main.pacing_context, main.coach_line]
+        for _ in range(3):
+            self.live(_ReplyStream(["Fine."]))
+        self.assertEqual([lookup.call_count for lookup in lookups], [1] * 5)
+        prompts = [call.kwargs["messages"][1]["content"] for call in self.openai.chat.completions.create.call_args_list]
+        self.assertEqual(len(set(prompts)), 1)
+        # Another session's call is its own, and so is this one's once the minute is up.
+        self.openai.chat.completions.create.return_value = _ReplyStream(["Fine."])
+        self.client.post("/api/coach-chat/live", headers={"Authorization": "Bearer other"}, json={
+            "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
+        self.assertEqual(main.get_authenticated_profile.call_count, 2)
+        for key, (_, profile, looked_up) in list(main._call_context.items()):
+            main._call_context[key] = (0.0, profile, looked_up)
+        self.live(_ReplyStream(["Fine."]))
+        self.assertEqual(main.get_authenticated_profile.call_count, 3)
+
+    def test_the_typed_chat_always_looks_everything_up(self):
+        self.live(_ReplyStream(["Fine."]))
+        self.openai.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Fine."))])
+        for _ in range(2):
+            self.client.post("/api/coach-chat", headers=HEADERS, json={"user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi"})
+        self.assertEqual(main.get_authenticated_profile.call_count, 3)
+        self.assertEqual(main.recent_athlete_feedback.call_count, 3)
+
+    def test_a_remembered_call_is_still_checked_against_its_profile(self):
+        self.live(_ReplyStream(["Fine."]))
+        response, _ = self.live(_ReplyStream(["Fine."]), user_key="key-2")
+        self.assertEqual(response.status_code, 403)
+
+    def test_the_openai_client_is_kept_between_replies(self):
+        for _ in range(3):
+            self.live(_ReplyStream(["Fine."]))
+        self.assertEqual(main.OpenAI.call_count, 1)
 
 
 class ReadPlanTests(unittest.TestCase):

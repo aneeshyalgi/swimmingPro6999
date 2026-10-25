@@ -1,14 +1,21 @@
 """Authenticated chat audio: bounded microphone uploads and per-coach OpenAI voices.
 
 Audio is processed in memory, never stored. Speech requests use at most 3,000 characters;
-the browser plays longer answers in successive chunks. All voices are synthetic.
+the browser plays longer answers in successive chunks. All voices are synthetic. A voice call
+asks for raw PCM, streamed as it is synthesised, so the coach starts talking before a piece's
+audio is complete.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
+import time
+from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -37,20 +44,53 @@ COACH_VOICES = {
 }
 
 
+# A voice call's speech: 16-bit mono PCM at 24 kHz, as OpenAI streams it.
+PCM_MEDIA_TYPE = "audio/L16;rate=24000;channels=1"
+# A voice call makes several audio requests a turn, so whose coach a session may use is remembered for a minute
+# instead of being looked up in the database every time.
+ASSIGNED_SECONDS = 60.0
+_assigned: dict[str, tuple[float, frozenset[str]]] = {}
+_client: tuple[str, Any, Any, AsyncOpenAI] | None = None
+
+
 class CoachSpeechRequest(BaseModel):
     coach: str = Field(min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=3000)
+    # "pcm": streamed as it is synthesised, for a voice call; "mp3": one file, for the chat's Listen button.
+    format: Literal["mp3", "pcm"] = "mp3"
 
 
 class TranscriptionResponse(BaseModel):
     text: str
 
 
+def _openai(api_key: str) -> AsyncOpenAI:
+    """The OpenAI client, kept while the server runs so each request reuses its connections (a client per request
+    paid for a new TLS connection to OpenAI every time). One per event loop, as its connections belong to one."""
+    global _client
+    loop = asyncio.get_running_loop()
+    if _client is None or _client[:3] != (api_key, loop, AsyncOpenAI):
+        _client = (api_key, loop, AsyncOpenAI, AsyncOpenAI(api_key=api_key, timeout=60, max_retries=1))
+    return _client[3]
+
+
 async def _require_coach(authorization: str | None, coach: str) -> None:
-    profile = await run_in_threadpool(get_authenticated_profile, authorization)
+    key = hashlib.sha256(authorization.encode()).hexdigest() if authorization else None
+    now = time.monotonic()
+    cached = _assigned.get(key) if key else None
+    if cached and cached[0] > now:
+        coaches = cached[1]
+    else:
+        profile = await run_in_threadpool(get_authenticated_profile, authorization)
+        coaches = frozenset(profile.get("recommended_coaches") or [])
+        if key:
+            if len(_assigned) >= 1000:
+                for stale in [item for item, (expires, _) in _assigned.items() if expires <= now] or list(_assigned):
+                    del _assigned[stale]
+            _assigned[key] = (now + ASSIGNED_SECONDS, coaches)
     if coach not in COACH_VOICES:
         raise HTTPException(status_code=400, detail="Unknown coach voice.")
-    if coach not in (profile.get("recommended_coaches") or []):
+    if coach not in coaches:
         raise HTTPException(status_code=403, detail="This coach is not assigned to your athlete profile.")
 
 
@@ -72,12 +112,11 @@ async def transcribe_audio(request: Request, coach: str, authorization: str | No
     if not content:
         raise HTTPException(status_code=400, detail="No audio was recorded. Please try again.")
     try:
-        async with AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1) as client:
-            transcript = await client.audio.transcriptions.create(
-                model=settings.openai_transcription_model,
-                file=(f"dictation.{extension}", bytes(content), content_type),
-                response_format="json",
-            )
+        transcript = await _openai(settings.openai_api_key).audio.transcriptions.create(
+            model=settings.openai_transcription_model,
+            file=(f"dictation.{extension}", bytes(content), content_type),
+            response_format="json",
+        )
     except OpenAIError as exc:
         logger.exception("OpenAI coach transcription failed")
         raise HTTPException(status_code=502, detail="Could not transcribe your recording. Please try again.") from exc
@@ -97,20 +136,43 @@ async def coach_speech(request: CoachSpeechRequest, authorization: str | None = 
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="Voice coaching is not configured.")
     voice, delivery = COACH_VOICES[request.coach]
+    options = {
+        "model": settings.openai_speech_model,
+        "voice": voice,
+        "input": text,
+        "instructions": f"{delivery} Speak as a male swimming coach, naturally and clearly. "
+        "Read the supplied text faithfully; do not add or omit advice.",
+    }
+    client = _openai(settings.openai_api_key)
+    if request.format == "pcm":
+        return await _streamed_speech(client, options)
     try:
-        async with AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1) as client:
-            audio = await client.audio.speech.create(
-                model=settings.openai_speech_model,
-                voice=voice,
-                input=text,
-                instructions=f"{delivery} Speak as a male swimming coach, naturally and clearly. "
-                "Read the supplied text faithfully; do not add or omit advice.",
-                response_format="mp3",
-            )
-            content = audio.content
+        content = (await client.audio.speech.create(**options, response_format="mp3")).content
     except OpenAIError as exc:
         logger.exception("OpenAI coach speech failed")
         raise HTTPException(status_code=502, detail="Could not generate the coach's voice. Please try again.") from exc
     if not content:
         raise HTTPException(status_code=502, detail="The voice service returned empty audio. Please try again.")
     return Response(content=content, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+
+async def _streamed_speech(client: AsyncOpenAI, options: dict[str, Any]) -> StreamingResponse:
+    """The speech as raw PCM, sent on as OpenAI synthesises it. A failure to start is an ordinary error response; if
+    the audio breaks off partway, what arrived is still played."""
+    stream = client.audio.speech.with_streaming_response.create(**options, response_format="pcm")
+    try:
+        response = await stream.__aenter__()
+    except OpenAIError as exc:
+        logger.exception("OpenAI coach speech failed")
+        raise HTTPException(status_code=502, detail="Could not generate the coach's voice. Please try again.") from exc
+
+    async def audio():
+        try:
+            async for chunk in response.iter_bytes():
+                yield chunk
+        except (OpenAIError, httpx.HTTPError):
+            logger.exception("OpenAI coach speech broke off")
+        finally:
+            await stream.__aexit__(None, None, None)
+
+    return StreamingResponse(audio(), media_type=PCM_MEDIA_TYPE, headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})

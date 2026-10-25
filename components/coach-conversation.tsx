@@ -1,21 +1,25 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
 import { ArrowRight, CalendarPlus, Captions, CaptionsOff, Hand, Loader2, Mic, MicOff, PhoneOff, RotateCcw, Send } from "lucide-react"
 import { CoachAvatar, coachLookKey } from "@/components/coach-avatar"
 import { CallScene, ScenePicker, SceneTitle } from "@/components/call-scenes"
 import { CoachLiveAvatar } from "@/components/coach-live-avatar"
 import { DEFAULT_SCENE, drawnScene, saveScene, savedScene, sceneById, type SceneId } from "@/lib/call-scenes"
-import { generateCoachSpeech, speechChunks, transcribeRecording } from "@/lib/coach-audio"
+import { NoSpeechError, streamCoachSpeech, transcribeRecording } from "@/lib/coach-audio"
+import { echoOf, Resampler, soundsFinished, TURN, TurnTaker, VoiceDetector, VoiceRecording, type TurnEvent } from "@/lib/voice-turns"
+import { LONGEST_PIECE, SpeechPlayer, SpokenText, type SpeechPart } from "@/lib/voice-speech"
 import { playHangUpSound } from "@/lib/call-sounds"
 import { cn } from "@/lib/utils"
 
 /*
  * Conversation mode: a hands-free voice call with a coach.
- * listen (voice-activity detection ends the turn) → transcribe → coach reply (short, spoken style) → speak it
- * sentence by sentence (the next sentence is synthesised while the current one plays) → listen again.
- * Every turn is also written to the normal chat thread by the page's `ask`.
+ * The microphone is heard all the time (lib/voice-turns). When the athlete pauses, what they've said is already being
+ * transcribed in case they've finished; a longer pause ends their turn, and if they carry on before the coach answers,
+ * their turn simply goes on. The coach's reply streams in and is spoken as it's written (lib/voice-speech), so they
+ * start talking within a sentence. The athlete can interrupt by tapping the coach, or by talking over them when the
+ * device keeps the coach's voice out of the microphone. Every turn is also written to the chat thread by `ask`.
  */
 
 type Phase = "connecting" | "listening" | "transcribing" | "thinking" | "speaking" | "muted" | "error"
@@ -28,11 +32,24 @@ const LISTEN_TONE: [string, string] = ["#e0f2fe", "#57e5ea"]
 /** The coach's two colours (their orb on a call, and the scenes that take on their colours). */
 export const coachTone = (coach: string): [string, string] => TONES[coachLookKey(coach)] ?? TONES.brad
 
-const SILENCE_MS = 1150        // pause that ends the athlete's turn
-const MIN_SPEECH_MS = 280      // ignore coughs and clicks
-const IDLE_RESET_MS = 20_000   // restart an empty recording so it never grows large
-const MAX_TURN_MS = 45_000
+/** Why a reply is abandoned when the athlete goes on talking: their turn wasn't over, so nothing of it is kept. */
+export const CONTINUED = "continued"
 const OPENER_MS = 3_200        // how long each "Try …" line shows on the athlete's first turn
+const SHORTEST_TURN = 0.3      // seconds: anything shorter sent on its own has no words in it
+// While the coach talks, their voice comes back into the microphone, less what the device's echo cancellation takes
+// out. How much comes back is measured over the first 1.5 s of each reply; to interrupt, the athlete must be this much
+// louder than that. Until it's measured, talking over the coach doesn't interrupt (tapping always does). The coach's
+// level is held as it dies away (by this much each 20 ms), so the room's echo of their last words is covered too.
+const ECHO_MARGIN_DB = 10
+const ECHO_FRAMES = 75
+const ECHO_DECAY_DB = 0.6
+// Talking over the coach for this long interrupts them; anything shorter ("mm-hmm", "okay", a laugh) doesn't. The
+// coach's voice drops as soon as it's clearly the athlete talking, so they hear at once that they've been heard.
+const BARGE_IN_S = 0.5
+// The Interrupt button takes Send now's place when a turn is sent: a tap meant for Send now that lands just after
+// (the call ended the turn itself a moment before) isn't taken as interrupting the coach.
+const SWAP_GUARD_MS = 700
+const NOT_CAUGHT = "Sorry, I didn't catch that. Could you say it again?"
 
 /** Things to open with: the call waits for the athlete to speak first, so show what they could say. */
 const openers = (first: string) => [
@@ -42,41 +59,7 @@ const openers = (first: string) => [
   "I'm feeling tired. Should I go easier today?",
 ]
 
-// The longest piece of a reply spoken at once (the speech endpoint takes at most 3,000 characters).
-const PIECE_LIMIT = 400
-
-/** `text` in pieces of at most `limit` characters, cut at a comma, a semicolon or a space. */
-function pieces(text: string, limit: number): string[] {
-  const result: string[] = []
-  let rest = text.trim()
-  while (rest.length > limit) {
-    const window = rest.slice(0, limit)
-    const cut = [window.lastIndexOf(", "), window.lastIndexOf("; "), window.lastIndexOf(" ")].find((index) => index > limit / 3) ?? -1
-    const end = cut > 0 ? cut + 1 : limit
-    result.push(rest.slice(0, end).trim())
-    rest = rest.slice(end).trim()
-  }
-  if (rest) result.push(rest)
-  return result
-}
-
-/** Spoken parts: a short opening sentence so the coach starts talking quickly, then groups of up to ~360 characters. A
- *  line ends a sentence too (a list of sets has no full stops), and a sentence longer than a part is cut into pieces. */
-function spokenParts(text: string) {
-  const plain = speechChunks(text).join(" ")
-  const sentences = plain.split(/\n+/)
-    .flatMap((line) => line.match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g) ?? [])
-    .map((part) => part.trim()).filter(Boolean)
-    .flatMap((sentence) => pieces(sentence, PIECE_LIMIT))
-  const parts: string[] = []
-  for (const sentence of sentences) {
-    const last = parts[parts.length - 1]
-    const opening = parts.length === 1 && last.length < 40
-    if (last && (opening || (parts.length > 1 && last.length + sentence.length < 360))) parts[parts.length - 1] = `${last} ${sentence}`
-    else parts.push(sentence)
-  }
-  return parts.length ? parts : [plain]
-}
+type Hearing = { resampler: Resampler; recording: VoiceRecording; detector: VoiceDetector; turns: TurnTaker }
 
 /**
  * `planOffer`: what the coach just prescribed on the call ("Swim session ready"), offered for the athlete's training;
@@ -86,13 +69,17 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
   coach: string
   coachName: string
   origin: { x: number; y: number } | null
-  ask: (text: string, signal: AbortSignal) => Promise<string>
+  /** Asks the coach and writes the turn to the chat: `onText` gets the reply as it's written, and it resolves with all
+   *  of it. Aborted with the reason CONTINUED when the athlete goes on talking. */
+  ask: (text: string, signal: AbortSignal, onText: (text: string) => void) => Promise<string>
   onClose: () => void
   planOffer?: { id: string; label: string } | null
   onAddPlan?: () => void
 }) {
   const [phase, setPhase] = useState<Phase>("connecting")
   const [error, setError] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
+  const [stalled, setStalled] = useState(false)
   const [userCaption, setUserCaption] = useState("")
   const [coachCaption, setCoachCaption] = useState("")
   const [revealed, setRevealed] = useState(0)
@@ -111,16 +98,36 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
   const [titled, setTitled] = useState(0)
 
   const phaseRef = useRef<Phase>("connecting")
-  const levelRef = useRef(0)
   const streamRef = useRef<MediaStream | null>(null)
   const contextRef = useRef<AudioContext | null>(null)
   const micAnalyser = useRef<AnalyserNode | null>(null)
   const outAnalyser = useRef<AnalyserNode | null>(null)
-  const recorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
-  const turnRef = useRef({ started: 0, voiceAt: 0, speechMs: 0, speaking: false, floor: 0.01 })
-  const abortRef = useRef<AbortController | null>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const tapRef = useRef<(() => void) | null>(null)
+  const playerRef = useRef<SpeechPlayer | null>(null)
+  const hearingRef = useRef<Hearing | null>(null)
+  // The athlete's turn under way: where its audio starts (kept when they go on after the call thought they'd finished).
+  const turnRef = useRef<{ from: number; carried: boolean } | null>(null)
+  // Where the latest speech heard began, in whatever phase: the start of an interruption.
+  const lastStart = useRef(0)
+  // When the coach's voice started (on the recording's clock), whether their reply has been written in full, whether
+  // the athlete is talking over them, when the athlete's last turn was sent (performance.now()), and whether they sent
+  // it themselves (Send now: their turn is over, whatever else is heard before the coach answers, such as a TV).
+  const speakingSince = useRef(Infinity)
+  const replyWritten = useRef(false)
+  const overCoach = useRef(false)
+  const sentAt = useRef(-Infinity)
+  const sentByHand = useRef(false)
+  // A pause's transcription, started in case the turn is over.
+  const guessRef = useRef<{ from: number; to: number; controller: AbortController; text: Promise<string> } | null>(null)
+  const replyRef = useRef<AbortController | null>(null)
+  const retryRef = useRef<(() => void) | null>(null)
+  // The coach's voice coming back (see ECHO_MARGIN_DB): how loud it comes back relative to them (dB), its measurement,
+  // the coach's held level (dBFS), and whether it's been set for good (their voice was once taken for the athlete's).
+  const echoRef = useRef({ gain: 0, differences: [] as number[], measured: false, level: -120, fixed: false })
+  const captionRef = useRef("")
+  const stalledRef = useRef(false)
+  const revealedRef = useRef(0)
+  const sessionRef = useRef({ closed: false })
   const aliveRef = useRef(true)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const askRef = useRef(ask)
@@ -134,198 +141,425 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
   const tone = coachTone(coach)
   const go = (next: Phase) => { phaseRef.current = next; setPhase(next) }
 
-  // ---------------------------------------------------------------- audio graph
-  const level = (analyser: AnalyserNode | null) => {
-    if (!analyser) return 0
-    const data = new Float32Array(analyser.fftSize)
-    analyser.getFloatTimeDomainData(data)
-    let sum = 0
-    for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
-    return Math.sqrt(sum / data.length)
+  // ---------------------------------------------------------------- the athlete's turn
+  const dropGuess = () => {
+    guessRef.current?.controller.abort()
+    guessRef.current = null
   }
 
-  const stopPlayback = () => {
-    abortRef.current?.abort()
-    abortRef.current = null
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
+  /** Abandons the reply under way: its requests and its voice. */
+  const stopReply = (reason: string) => {
+    replyRef.current?.abort(reason)
+    replyRef.current = null
+    playerRef.current?.stop()
   }
 
-  const discardRecording = () => {
-    const recorder = recorderRef.current
-    recorderRef.current = null
-    if (recorder && recorder.state !== "inactive") { recorder.onstop = null; recorder.stop() }
-    chunksRef.current = []
-  }
-
-  // ---------------------------------------------------------------- one listening turn
-  const listen = useCallback(() => {
-    if (!aliveRef.current || !streamRef.current) return
-    stopPlayback()
-    discardRecording()
-    const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type))
-    if (!mimeType) { setError("Your browser can't record audio. Try Chrome, Edge or Safari."); go("error"); return }
-    const recorder = new MediaRecorder(streamRef.current, { mimeType })
-    chunksRef.current = []
-    recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data) }
-    recorder.start(250)
-    recorderRef.current = recorder
-    turnRef.current = { ...turnRef.current, started: performance.now(), voiceAt: 0, speechMs: 0, speaking: false }
-    setHeard(false)
+  /** The athlete's turn, from now. `keep`: if they're already talking (as the coach finishes), that's their turn. */
+  const listen = (keep = false) => {
+    const hearing = hearingRef.current
+    if (!aliveRef.current || !hearing) return
+    stopReply("interrupted")
+    dropGuess()
+    overCoach.current = false
+    if (keep && hearing.turns.talking) {
+      turnRef.current = { from: lastStart.current, carried: false }
+      setHeard(true)
+    } else {
+      hearing.turns.reset(hearing.recording.seconds)
+      turnRef.current = null
+      setHeard(false)
+    }
     go("listening")
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }
 
-  const finishTurn = useCallback(async () => {
-    const recorder = recorderRef.current
-    if (!recorder || phaseRef.current !== "listening") return
-    recorderRef.current = null
-    go("transcribing")
-    const blob = await new Promise<Blob>((resolve) => {
-      recorder.onstop = () => resolve(new Blob(chunksRef.current, { type: recorder.mimeType }))
-      recorder.stop()
-    })
-    if (!aliveRef.current) return
+  const transcribe = (from: number, to: number, signal: AbortSignal) => {
+    if (to - from < SHORTEST_TURN) return Promise.reject(new NoSpeechError(NOT_CAUGHT))
+    const audio = hearingRef.current!.recording.wav(from, to)
+    return transcribeRecording(coach, new Blob([audio], { type: "audio/wav" }), signal)
+  }
+
+  /** A pause: what the athlete has said so far starts being transcribed, in case it's the end of their turn. Once it's
+   *  known what they said, their turn ends sooner if it sounds finished, or later if it leads on ("and…", "so…"). */
+  const guess = (from: number, to: number) => {
+    dropGuess()
     const controller = new AbortController()
-    abortRef.current = controller
+    const text = transcribe(from, to, controller.signal)
+    guessRef.current = { from, to, controller, text }
+    text.then((said) => {
+      const hearing = hearingRef.current
+      if (guessRef.current?.text === text && hearing) hearing.turns.endAfter = soundsFinished(said) ? 0.6 : 1.5
+    }, () => undefined)
+  }
+
+  const fail = (problem: unknown, retry: () => void) => {
+    stopReply("failed")
+    retryRef.current = retry
+    setError(problem instanceof Error ? problem.message : "Something went wrong.")
+    go("error")
+  }
+
+  /** The athlete's turn is over: what they said, `from` to `to` on the recording, becomes the coach's spoken reply. */
+  const respond = async (from: number, to: number, byHand = false) => {
+    const controller = new AbortController()
+    replyRef.current = controller
+    turnRef.current = { from, carried: turnRef.current?.carried ?? false }
+    sentAt.current = performance.now()
+    sentByHand.current = byHand
+    setHint(null)
+    go("transcribing")
+    const earlier = guessRef.current
+    guessRef.current = null
+    // The pause's transcription is this turn's when nothing has been said since; a failed request is tried once more.
+    const again = (problem: unknown) => {
+      if (problem instanceof NoSpeechError || controller.signal.aborted) throw problem
+      return transcribe(from, to, controller.signal)
+    }
+    let text: string
     try {
-      const text = await transcribeRecording(coach, blob, controller.signal)
-      if (!aliveRef.current || controller.signal.aborted) return
-      setUserCaption(text)
-      setCoachCaption("")
-      setRevealed(0)
-      go("thinking")
-      const reply = await askRef.current(text, controller.signal)
-      if (!aliveRef.current || controller.signal.aborted) return
-      await speak(reply, controller)
-      if (aliveRef.current && !controller.signal.aborted && (phaseRef.current as Phase) === "speaking") listen()
+      if (earlier && earlier.from === from && Math.abs(earlier.to - to) < 0.03) {
+        controller.signal.addEventListener("abort", () => earlier.controller.abort(), { once: true })
+        text = await earlier.text.catch(again)
+      } else {
+        earlier?.controller.abort()
+        text = await transcribe(from, to, controller.signal).catch(again)
+      }
     } catch (problem) {
-      if (!aliveRef.current || controller.signal.aborted) return
-      const message = problem instanceof Error ? problem.message : "Something went wrong."
-      // Nothing intelligible: just keep listening.
-      if (/no speech|detected/i.test(message)) { listen(); return }
-      setError(message)
+      if (controller.signal.aborted || !aliveRef.current) return
+      if (problem instanceof NoSpeechError) {
+        setHint(NOT_CAUGHT)
+        listen()
+      } else fail(problem, () => void respond(from, to))
+      return
+    }
+    if (controller.signal.aborted || !aliveRef.current) return
+    if (echoOf(text, captionRef.current)) {
+      // The coach's own voice came back loud enough to pass for the athlete's (a device with no echo cancellation):
+      // it isn't answered, and from now on only a tap interrupts the coach.
+      Object.assign(echoRef.current, { gain: Math.max(echoRef.current.gain, 6), fixed: true })
+      listen()
+      return
+    }
+    setUserCaption(text)
+    await reply(text, controller)
+  }
+
+  /** Asks the coach, and speaks the reply while it's being written: its first piece as soon as there is one. */
+  const reply = async (text: string, controller: AbortController) => {
+    const player = playerRef.current
+    if (!player) return
+    const { signal } = controller
+    const pieces = new SpokenText()
+    const queue: string[] = []
+    let written = false
+    let wake = () => {}
+    signal.addEventListener("abort", () => wake(), { once: true })
+    let caption = ""
+    let spoken = 0
+    let silent = 0
+    captionRef.current = ""
+    revealedRef.current = 0
+    replyWritten.current = false
+    speakingSince.current = Infinity
+    setCoachCaption("")
+    setRevealed(0)
+    go("thinking")
+    player.onstart = () => {
+      if (signal.aborted) return
+      if (!echoRef.current.fixed) Object.assign(echoRef.current, { differences: [], measured: false })
+      speakingSince.current = hearingRef.current?.recording.seconds ?? 0
+      go("speaking")
+    }
+
+    // Each piece is synthesised as soon as it's written (two at most at once: the one playing and the next), and
+    // everything written by the time a piece is started goes in it, as fewer, longer pieces sound most natural.
+    const speaking = (async () => {
+      const working: Promise<void>[] = []
+      for (;;) {
+        if (signal.aborted) return
+        if (!queue.length) {
+          if (written) break
+          await new Promise<void>((resolve) => { wake = resolve })
+          continue
+        }
+        let piece = queue.shift()!
+        if (caption) while (queue.length && piece.length + queue[0].length < LONGEST_PIECE) piece += ` ${queue.shift()}`
+        caption = caption ? `${caption} ${piece}` : piece
+        captionRef.current = caption
+        setCoachCaption(caption)
+        spoken++
+        const part = player.part(piece.length + 1)
+        working.push(voice(part, piece, signal).catch(() => { if (!signal.aborted) silent++ }).finally(() => part.end()))
+        if (working.length >= 2) await working.shift()
+      }
+      await Promise.all(working)
+    })()
+
+    try {
+      await askRef.current(text, signal, (delta) => {
+        queue.push(...pieces.push(delta))
+        wake()
+      })
+    } catch (problem) {
+      written = true
+      wake()
+      if (signal.aborted || !aliveRef.current) return
+      fail(problem, () => {
+        const retried = new AbortController()
+        replyRef.current = retried
+        void reply(text, retried)
+      })
+      return
+    }
+    queue.push(...pieces.finish())
+    written = true
+    replyWritten.current = true
+    wake()
+    await speaking
+    if (!signal.aborted) await player.whenDrained()
+    if (signal.aborted || !aliveRef.current) return
+    revealedRef.current = caption.length
+    setRevealed(caption.length)
+    if (silent) setHint(silent === spoken ? "The coach's voice couldn't play, so their reply is in the captions." : null)
+    replyRef.current = null
+    listen(true)
+  }
+
+  /** One piece of the reply, played as it streams in. */
+  const voice = async (part: SpeechPart, text: string, signal: AbortSignal) => {
+    const response = await streamCoachSpeech(coach, text, signal)
+    if (response.body && /audio\/(l16|pcm)/i.test(response.headers.get("content-type") ?? "")) {
+      const reader = response.body.getReader()
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        if (value?.length) part.write(value)
+      }
+    } else {
+      // A server that doesn't stream speech sends an MP3.
+      part.decoded(await contextRef.current!.decodeAudioData(await response.arrayBuffer()))
+    }
+  }
+
+  /** They went on talking before the coach answered: their turn wasn't over, so it carries on from where it began. */
+  const carryOn = () => {
+    stopReply(CONTINUED)
+    dropGuess()
+    turnRef.current = { from: turnRef.current?.from ?? lastStart.current, carried: true }
+    setHeard(true)
+    setHint(null)
+    go("listening")
+  }
+
+  /** They talked over the coach: the coach stops, and it's their turn from where they started. */
+  const interruptedBy = (from: number) => {
+    stopReply("interrupted")
+    dropGuess()
+    turnRef.current = { from, carried: false }
+    setHeard(true)
+    setHint(null)
+    go("listening")
+  }
+
+  const onTurn = (event: TurnEvent) => {
+    if (event.type === "start") lastStart.current = event.from
+    const turn = turnRef.current
+    switch (phaseRef.current) {
+      case "listening":
+        if (event.type === "start") {
+          if (!turn) turnRef.current = { from: event.from, carried: false }
+          setHeard(true)
+          setHint(null)
+        } else if (event.type === "noise" && !turn?.carried) {
+          turnRef.current = null
+          setHeard(false)
+        } else if (event.type === "pause") guess(turn?.from ?? event.from, event.to)
+        else if (event.type === "resume") dropGuess()
+        else if (event.type === "end") void respond(turn?.from ?? event.from, event.to)
+        return
+      case "transcribing":
+      case "thinking":
+        // A sound from the athlete: the coach doesn't start talking over it. If it's them talking, their turn carries on;
+        // if it was only a sound, the coach goes ahead. Unless they pressed Send: then their turn is over.
+        if (sentByHand.current) return
+        if (event.type === "start") playerRef.current?.hold(true)
+        else if (event.type === "speech") carryOn()
+        else if (event.type === "noise") playerRef.current?.hold(false)
+        return
+      case "speaking":
+        if (event.type === "speech") {
+          // Already talking when the coach began (they hadn't finished, and hadn't heard the coach yet): their turn
+          // carries on, unless the reply is already written (and in the chat), when it's a new turn.
+          if (lastStart.current + TURN.preroll < speakingSince.current + 0.2) {
+            if (replyWritten.current) interruptedBy(lastStart.current)
+            else carryOn()
+          } else {
+            overCoach.current = true
+            playerRef.current?.duck(true)
+          }
+        } else if ((event.type === "end" || event.type === "noise") && overCoach.current) {
+          overCoach.current = false
+          playerRef.current?.duck(false)
+        }
+        return
+    }
+  }
+
+  // ---------------------------------------------------------------- the microphone
+  /** What the microphone heard in the last 20 ms, with the coach's voice at that moment (`coach`). */
+  const hear = (block: Float32Array, coach: Float32Array | null) => {
+    const hearing = hearingRef.current
+    if (!hearing || !aliveRef.current) return
+    const samples = hearing.resampler.push(block)
+    hearing.recording.push(samples)
+    // While the coach talks (and while their voice dies away in the room), the athlete counts as talking only when
+    // clearly louder than the coach's voice coming back.
+    const echo = echoRef.current
+    let level = -120
+    if (coach?.length) {
+      let sum = 0
+      for (const sample of coach) sum += sample * sample
+      level = 10 * Math.log10(sum / coach.length + 1e-12)
+    }
+    echo.level = Math.max(level, echo.level - ECHO_DECAY_DB)
+    const out = echo.level
+    const gate = out > -90 ? out + echo.gain + ECHO_MARGIN_DB : -Infinity
+    const talking = !!playerRef.current?.busy
+    for (const frame of hearing.detector.push(samples, gate)) {
+      if (talking && !echo.measured && !echo.fixed && out > -50) {
+        echo.differences.push(frame.db - out)
+        if (echo.differences.length >= ECHO_FRAMES) {
+          const sorted = [...echo.differences].sort((a, b) => a - b)
+          echo.gain = sorted[Math.floor(sorted.length * 0.75)]
+          echo.measured = true
+        }
+      }
+      const event = hearing.turns.push(frame)
+      if (event) onTurn(event)
+    }
+    if (overCoach.current && phaseRef.current === "speaking" && hearing.turns.spoken >= BARGE_IN_S) {
+      overCoach.current = false
+      interruptedBy(lastStart.current)
+    }
+  }
+  const hearRef = useRef(hear)
+  hearRef.current = hear
+
+  const release = () => {
+    tapRef.current?.()
+    tapRef.current = null
+    streamRef.current?.getTracks().forEach((track) => { track.onended = null; track.stop() })
+    streamRef.current = null
+  }
+
+  const micLost = () => {
+    if (!aliveRef.current) return
+    stopReply("interrupted")
+    dropGuess()
+    release()
+    setError("Your microphone stopped. Check it's connected, then try again.")
+    retryRef.current = () => { go("connecting"); void connect(sessionRef.current) }
+    go("error")
+  }
+
+  const connect = async (session: { closed: boolean }) => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === "undefined") throw new Error("Voice conversation needs a browser with microphone support (HTTPS or localhost).")
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      if (session.closed) { stream.getTracks().forEach((track) => track.stop()); return }
+      streamRef.current = stream
+      const context = contextRef.current ?? new AudioContext()
+      contextRef.current = context
+      // A context that can't start yet (some browsers want a tap first) starts on the next tap; the call doesn't wait.
+      await Promise.race([context.resume(), new Promise((resolve) => window.setTimeout(resolve, 1500))])
+      if (session.closed) return
+      const source = context.createMediaStreamSource(stream)
+      const mic = context.createAnalyser()
+      mic.fftSize = 1024
+      source.connect(mic)
+      micAnalyser.current = mic
+      if (!outAnalyser.current) {
+        const out = context.createAnalyser()
+        out.fftSize = 1024
+        out.connect(context.destination)
+        outAnalyser.current = out
+        playerRef.current = new SpeechPlayer(context, out)
+      }
+      hearingRef.current = { resampler: new Resampler(context.sampleRate), recording: new VoiceRecording(), detector: new VoiceDetector(), turns: new TurnTaker() }
+      const stop = await tap(context, source, outAnalyser.current, (block, coach) => hearRef.current(block, coach))
+      if (session.closed) { stop(); return }
+      tapRef.current = stop
+      stream.getAudioTracks().forEach((track) => { track.onended = micLost })
+      listen()
+    } catch (problem) {
+      if (session.closed) return
+      const denied = problem instanceof DOMException && (problem.name === "NotAllowedError" || problem.name === "SecurityError")
+      setError(denied ? "Microphone access was blocked. Allow the microphone for this site and try again." : problem instanceof Error ? problem.message : "Couldn't start the microphone.")
+      retryRef.current = () => { go("connecting"); void connect(sessionRef.current) }
       go("error")
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coach, listen])
-
-  // ---------------------------------------------------------------- speaking, with the next part prefetched
-  const speak = async (reply: string, controller: AbortController) => {
-    const parts = spokenParts(reply)
-    const caption = parts.join(" ")
-    setCoachCaption(caption)
-    setRevealed(0)
-    go("speaking")
-    const context = contextRef.current
-    let offset = 0
-    // The next part is synthesised while the current one plays. When the call ends or the athlete interrupts, that
-    // request is cancelled with nothing left awaiting it; the no-op catch keeps its cancellation from surfacing as an
-    // unhandled AbortError. A part that is awaited still rejects normally, so real failures reach finishTurn's catch.
-    const synthesise = (text: string) => {
-      const request = generateCoachSpeech(coach, text, controller.signal)
-      request.catch(() => undefined)
-      return request
-    }
-    let next = synthesise(parts[0])
-    for (let index = 0; index < parts.length; index++) {
-      const blob = await next
-      if (controller.signal.aborted) return
-      if (index + 1 < parts.length) next = synthesise(parts[index + 1])
-      const url = URL.createObjectURL(blob)
-      const audio = new Audio(url)
-      audioRef.current = audio
-      if (context && outAnalyser.current) {
-        try { context.createMediaElementSource(audio).connect(outAnalyser.current) } catch { /* plays without the visualiser */ }
-      }
-      const start = offset
-      const length = parts[index].length + 1
-      await new Promise<void>((resolve, reject) => {
-        const tick = () => {
-          if (audio.duration && Number.isFinite(audio.duration)) setRevealed(start + Math.round(length * Math.min(1, audio.currentTime / audio.duration)))
-        }
-        audio.ontimeupdate = tick
-        audio.onended = () => { setRevealed(start + length); resolve() }
-        audio.onerror = () => reject(new Error("Could not play the coach's voice."))
-        controller.signal.addEventListener("abort", () => { audio.pause(); resolve() }, { once: true })
-        audio.play().catch(reject)
-      }).finally(() => URL.revokeObjectURL(url))
-      offset += length
-      if (controller.signal.aborted) return
-    }
-    setRevealed(caption.length)
   }
 
   // ---------------------------------------------------------------- start, end
   useEffect(() => {
     aliveRef.current = true
-    const start = async () => {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") throw new Error("Voice conversation needs a browser with microphone support (HTTPS or localhost).")
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
-        if (!aliveRef.current) { stream.getTracks().forEach((track) => track.stop()); return }
-        streamRef.current = stream
-        const context = new AudioContext()
-        await context.resume()
-        contextRef.current = context
-        const mic = context.createAnalyser()
-        mic.fftSize = 1024
-        context.createMediaStreamSource(stream).connect(mic)
-        micAnalyser.current = mic
-        const out = context.createAnalyser()
-        out.fftSize = 1024
-        out.connect(context.destination)
-        outAnalyser.current = out
-        listen()
-      } catch (problem) {
-        const denied = problem instanceof DOMException && (problem.name === "NotAllowedError" || problem.name === "SecurityError")
-        setError(denied ? "Microphone access was blocked. Allow the microphone for this site and try again." : problem instanceof Error ? problem.message : "Couldn't start the microphone.")
-        go("error")
-      }
-    }
-    void start()
+    const session = { closed: false }
+    sessionRef.current = session
+    void connect(session)
     const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000)
+    // An audio context the browser suspended (another app took the audio, or the page was hidden) resumes when the
+    // athlete is back.
+    const wake = () => {
+      const context = contextRef.current
+      if (context && context.state !== "running" && context.state !== "closed") void context.resume().catch(() => undefined)
+    }
+    document.addEventListener("visibilitychange", wake)
+    window.addEventListener("pointerdown", wake)
     return () => {
+      session.closed = true
       aliveRef.current = false
       window.clearInterval(timer)
-      stopPlayback()
-      discardRecording()
-      streamRef.current?.getTracks().forEach((track) => track.stop())
+      document.removeEventListener("visibilitychange", wake)
+      window.removeEventListener("pointerdown", wake)
+      stopReply("interrupted")
+      dropGuess()
+      release()
       void contextRef.current?.close()
+      contextRef.current = null
+      outAnalyser.current = null
+      playerRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------------------------------------------------------------- voice activity + orb, one frame loop
+  // ---------------------------------------------------------------- orb, captions, one frame loop
   useEffect(() => {
     let frame = 0
     let smooth = 0
     let time = 0
     let last = performance.now()
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    const buffer = new Float32Array(1024)
+    const level = (analyser: AnalyserNode | null) => {
+      if (!analyser) return 0
+      analyser.getFloatTimeDomainData(buffer)
+      let sum = 0
+      for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i]
+      return Math.sqrt(sum / buffer.length)
+    }
     const draw = (now: number) => {
       const dt = Math.min(64, now - last)
       last = now
       const current = phaseRef.current
       const raw = current === "speaking" ? level(outAnalyser.current) : current === "listening" ? level(micAnalyser.current) : 0
-      levelRef.current = raw
-
-      // End the athlete's turn after a pause that follows real speech.
-      if (current === "listening") {
-        const turn = turnRef.current
-        const threshold = Math.max(0.018, turn.floor * 3.2)
-        if (raw > threshold) {
-          if (!turn.speaking) { turn.speaking = true; setHeard(true) }
-          turn.voiceAt = now
-          turn.speechMs += dt
-        } else if (!turn.speaking) {
-          turn.floor = turn.floor * 0.97 + raw * 0.03
-        }
-        if (turn.speaking && turn.speechMs > MIN_SPEECH_MS && now - turn.voiceAt > SILENCE_MS) void finishTurn()
-        else if (!turn.speaking && now - turn.started > IDLE_RESET_MS) listen()
-        else if (now - turn.started > MAX_TURN_MS) void finishTurn()
-        if (turn.speaking && turn.speechMs <= MIN_SPEECH_MS && now - turn.voiceAt > SILENCE_MS) { turn.speaking = false; turn.speechMs = 0; setHeard(false) }
+      // An audio context the browser keeps suspended hears nothing: the athlete is asked to tap (which resumes it).
+      const context = contextRef.current
+      const stalled = !!context && context.state !== "running" && context.state !== "closed" && current !== "connecting" && current !== "error"
+      if (stalled !== stalledRef.current) { stalledRef.current = stalled; setStalled(stalled) }
+      // Captions follow the coach's voice.
+      if ((current === "speaking" || current === "thinking") && playerRef.current) {
+        const spoken = Math.min(captionRef.current.length, playerRef.current.spoken())
+        if (spoken > revealedRef.current) { revealedRef.current = spoken; setRevealed(spoken) }
       }
-
       const target = current === "thinking" || current === "transcribing" ? 0.18 : Math.min(1, raw * 7)
       smooth += (target - smooth) * (target > smooth ? 0.35 : 0.08)
       glowRef.current = smooth
@@ -336,39 +570,57 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
     }
     frame = requestAnimationFrame(draw)
     return () => { cancelAnimationFrame(frame); document.documentElement.style.removeProperty("--cv-level") }
-  }, [finishTurn, listen, tone])
+  }, [tone])
 
   // ---------------------------------------------------------------- controls
-  const interrupt = () => { if (phaseRef.current === "speaking" || phaseRef.current === "thinking") { stopPlayback(); listen() } }
+  const interrupt = () => {
+    if (performance.now() - sentAt.current < SWAP_GUARD_MS) return
+    if (phaseRef.current === "speaking" || phaseRef.current === "thinking") listen()
+  }
+  /** Ends the athlete's turn now: what they've said, or (if nothing was noticed) the last few seconds heard. */
+  const sendNow = () => {
+    const hearing = hearingRef.current
+    if (phaseRef.current !== "listening" || !hearing) return
+    const range = hearing.turns.finish(hearing.recording.seconds)
+    void respond(turnRef.current?.from ?? range.from, range.to, true)
+  }
   const toggleMute = () => {
     if (phaseRef.current === "muted") { streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = true }); listen(); return }
     if (phaseRef.current === "listening") {
-      discardRecording()
+      dropGuess()
       streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = false })
       go("muted")
     }
   }
-  const retry = () => { setError(null); if (streamRef.current) listen(); else onClose() }
+  const retry = () => {
+    setError(null)
+    const again = retryRef.current
+    retryRef.current = null
+    if (again) again()
+    else if (streamRef.current) listen()
+    else onClose()
+  }
   const end = () => {
     // Once only: a second press (or Esc) while the call is closing shouldn't chime again.
     if (!aliveRef.current) return
     playHangUpSound()
     aliveRef.current = false
-    stopPlayback()
-    discardRecording()
+    stopReply("interrupted")
+    dropGuess()
     setClosing(true)
     window.setTimeout(onClose, 420)
   }
+  const keys = useRef<(event: KeyboardEvent) => void>(() => {})
+  keys.current = (event) => {
+    // Esc closes the scene picker first; with it closed, Esc ends the call.
+    if (event.key === "Escape") { if (scenesOpenRef.current) setScenesOpen(false); else end() }
+    if (event.key === " " && event.target === document.body) { event.preventDefault(); if (phaseRef.current === "listening") sendNow(); else interrupt() }
+  }
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      // Esc closes the scene picker first; with it closed, Esc ends the call.
-      if (event.key === "Escape") { if (scenesOpenRef.current) setScenesOpen(false); else end() }
-      if (event.key === " " && event.target === document.body) { event.preventDefault(); if (phaseRef.current === "listening") void finishTurn(); else interrupt() }
-    }
+    const onKey = (event: KeyboardEvent) => keys.current(event)
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [finishTurn])
+  }, [])
 
   // The call opens on the athlete's turn. Until they've said something, a "You speak first" cue replaces the label.
   const yourTurn = phase === "listening" && !userCaption
@@ -387,10 +639,11 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
     thinking: `${first} is thinking`, speaking: `${first} is speaking`, muted: "Microphone muted", error: "Conversation paused",
   }[phase]
   const words = coachCaption.slice(0, revealed)
+  const notice = stalled ? "Tap anywhere so I can hear you." : hint
   const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
 
   return createPortal(
-    <div role="dialog" aria-modal="true" aria-label={`Voice conversation with ${coachName}`}
+    <div role="dialog" aria-modal="true" aria-label={`Voice conversation with ${coachName}`} data-phase={phase}
       className={cn("cv-root fixed inset-0 z-[100] flex flex-col overflow-hidden text-white", closing && "cv-closing")}
       style={{ "--cv-x": `${origin?.x ?? window.innerWidth / 2}px`, "--cv-y": `${origin?.y ?? window.innerHeight / 2}px`, "--cv-a": tone[0], "--cv-b": tone[1] } as CSSProperties}>
       <div aria-hidden className={cn("cv-backdrop absolute inset-0", drawnScene(settled) && settled === scene && "vs-covered")}>
@@ -481,8 +734,8 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
                 className="cv-turn-title mt-1 text-2xl font-semibold tracking-tight sm:text-3xl [@media(max-height:760px)]:text-xl">
                 {heard ? "I can hear you" : "You speak first"}
               </p>
-              <p className="mt-1.5 max-w-xs text-sm leading-6 text-slate-300">
-                {heard ? `Keep going. Pause when you're done and ${first} will answer.` : `${first} is listening and waiting for you. Say hello or ask a question to start.`}
+              <p aria-live="polite" className="mt-1.5 max-w-xs text-sm leading-6 text-slate-300">
+                {heard ? `Keep going. Pause when you're done and ${first} will answer.` : notice ?? `${first} is listening and waiting for you. Say hello or ask a question to start.`}
               </p>
               {heard ? (
                 <div aria-hidden className="mt-3 flex h-7 items-center gap-1 [@media(max-height:760px)]:hidden">
@@ -508,8 +761,8 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
                 {Array.from({ length: 13 }, (_, index) => <span key={index} className="cv-bar w-1 rounded-full bg-cyan-200" style={{ "--i": index } as CSSProperties} />)}
               </div>
             )}
-            <p className="mt-3 h-5 text-center text-xs text-slate-500">
-              {phase === "connecting" ? "You'll speak first once the call connects." : phase === "listening" ? "Pause when you're done and I'll answer. Space to send now." : phase === "speaking" ? "Tap the coach or press Space to interrupt." : phase === "muted" ? "Unmute when you're ready to talk." : ""}
+            <p aria-live="polite" className={cn("mt-3 min-h-5 text-center text-xs", stalled || (notice && phase === "listening") ? "text-amber-200/90" : "text-slate-500")}>
+              {stalled ? notice : phase === "connecting" ? "You'll speak first once the call connects." : phase === "listening" ? notice ?? "Pause when you're done and I'll answer. Space to send now." : phase === "speaking" ? "Tap the coach or press Space to interrupt." : phase === "muted" ? "Unmute when you're ready to talk." : ""}
             </p>
           </>
         )}
@@ -549,7 +802,7 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
         {phase === "speaking" || phase === "thinking" ? (
           <ControlButton label="Interrupt" onClick={interrupt}><Hand className="h-6 w-6" /></ControlButton>
         ) : (
-          <ControlButton label="Send now" onClick={() => void finishTurn()} disabled={phase !== "listening" || !heard}><Send className="h-6 w-6" /></ControlButton>
+          <ControlButton label="Send now" onClick={sendNow} disabled={phase !== "listening"}><Send className="h-6 w-6" /></ControlButton>
         )}
       </footer>
       <p className="relative z-10 pb-4 text-center text-[11px] text-slate-600">AI-generated coach voice · Your speech is sent to OpenAI for transcription</p>
@@ -562,6 +815,44 @@ export function CoachConversation({ coach, coachName, origin, ask, onClose, plan
     </div>,
     document.body,
   )
+}
+
+/**
+ * Hands the microphone to `hear` in 20 ms blocks, each with the coach's voice (`coach`, what's going to the speakers)
+ * from the same moment: the two go in side by side as one input's channels, so they stay together however late the
+ * page gets them. From the audio thread (an AudioWorklet), so listening carries on in a background tab; where there is
+ * none, from a ScriptProcessor on the page. Returns what stops it.
+ */
+async function tap(context: AudioContext, mic: AudioNode, coach: AudioNode | null, hear: (block: Float32Array, coach: Float32Array | null) => void): Promise<() => void> {
+  const both = context.createChannelMerger(2)
+  mic.connect(both, 0, 0)
+  coach?.connect(both, 0, 1)
+  // A node only runs when its output leads somewhere: into silence here.
+  const silent = context.createGain()
+  silent.gain.value = 0
+  silent.connect(context.destination)
+  const options = { channelCount: 2, channelCountMode: "explicit", channelInterpretation: "discrete" } as const
+  let node: AudioWorkletNode | ScriptProcessorNode
+  try {
+    await context.audioWorklet.addModule("/coach-voice-worklet.js")
+    const worklet = new AudioWorkletNode(context, "coach-mic-tap", { numberOfInputs: 1, numberOfOutputs: 1, ...options })
+    worklet.port.onmessage = (event: MessageEvent<{ mic: Float32Array; coach: Float32Array }>) => hear(event.data.mic, event.data.coach)
+    node = worklet
+  } catch {
+    const processor = context.createScriptProcessor(1024, 2, 1)
+    Object.assign(processor, options)
+    processor.onaudioprocess = (event) => hear(event.inputBuffer.getChannelData(0).slice(), event.inputBuffer.getChannelData(1).slice())
+    node = processor
+  }
+  both.connect(node)
+  node.connect(silent)
+  return () => {
+    if (node instanceof ScriptProcessorNode) node.onaudioprocess = null
+    else node.port.onmessage = null
+    for (const [from, to] of [[mic, both], [coach, both], [both, node], [node, silent], [silent, context.destination]] as const) {
+      try { from?.disconnect(to) } catch { /* not connected */ }
+    }
+  }
 }
 
 function ControlButton({ label, onClick, disabled, active, children }: { label: string; onClick: () => void; disabled?: boolean; active?: boolean; children: React.ReactNode }) {

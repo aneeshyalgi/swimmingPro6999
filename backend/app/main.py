@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
@@ -11,7 +14,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 from postgrest.exceptions import APIError
 from pydantic import ValidationError
@@ -242,38 +245,69 @@ def switch_coach(request: CoachSwitchRequest, authorization: str | None = Header
     return {"coach": coach, "changed": True, "coach_profile": coach_recommendation(profile, coach)}
 
 
-@app.post("/api/coach-chat", response_model=CoachChatResponse)
-def coach_chat(request: CoachChatRequest, authorization: str | None = Header(default=None)) -> CoachChatResponse:
-    if not settings.openai_api_key:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="OPENAI_API_KEY_BOSS is not configured.")
+# The athlete's check-ins, chosen days, race results and pacing, looked up side by side for a coach reply. The threads
+# are kept, so each keeps its database client (and its open connection) from one reply to the next.
+_coach_lookups = ThreadPoolExecutor(max_workers=4, thread_name_prefix="coach-chat")
+_chat_clients: dict[tuple[str, Any], OpenAI] = {}
+_chat_clients_lock = threading.Lock()
+# A voice call asks the coach every few seconds: its turns reuse the athlete's profile and records (check-ins, chosen
+# days, race results, pacing) for a minute, so each turn after the first goes straight to the coach.
+CALL_CONTEXT_SECONDS = 60.0
+_call_context: dict[str, tuple[float, dict[str, Any], tuple[Any, ...]]] = {}
 
-    try:
-        profile = get_authenticated_profile(authorization)
-        if profile["user_key"] != request.user_key:
-            raise HTTPException(status_code=403, detail="This profile does not belong to your account.")
-        athlete_feedback = recent_athlete_feedback(profile["id"])
-        days = coach_line(profile)
-        stored_coaches = set(profile.get("recommended_coaches") or [])
-        requested_coaches = set(request.selected_coaches)
-        if stored_coaches and not requested_coaches.issubset(stored_coaches):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Coach context does not match this athlete profile.")
-        if request.active_coach and request.active_coach not in requested_coaches:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Active coach must belong to the requested coach context.")
 
-        client = OpenAI(api_key=settings.openai_api_key)
-        context, sources, resolved_coaches = chat_context(request.selected_coaches, request.message)
-        history = [
-            {"role": item.role if item.role in {"user", "assistant"} else "user", "content": item.content}
-            for item in request.history[-12:]
-        ]
-        active_coach = request.active_coach or request.selected_coaches[0]
-        voice_rules = """
+def _chat_openai() -> OpenAI:
+    """The OpenAI client for coach replies, kept while the server runs so each reply reuses its connections (a new
+    client per reply paid for a new TLS connection to OpenAI every time)."""
+    key = (settings.openai_api_key, OpenAI)
+    with _chat_clients_lock:
+        if key not in _chat_clients:
+            _chat_clients[key] = OpenAI(api_key=settings.openai_api_key)
+        return _chat_clients[key]
+
+
+def _coach_messages(request: CoachChatRequest, authorization: str | None, on_call: bool = False) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """The messages for the coach's reply to the athlete's latest message, and the program sessions they draw on, after
+    checking the athlete and their coach. Raises HTTPException, or APIError when the database can't be read. `on_call`:
+    a voice call's turn, which reuses what the call's last turn looked up (CALL_CONTEXT_SECONDS)."""
+    key = hashlib.sha256(authorization.encode()).hexdigest() if on_call and authorization else None
+    now = time.monotonic()
+    remembered = _call_context.get(key) if key else None
+    if remembered and remembered[0] <= now:
+        remembered = None
+    profile = remembered[1] if remembered else get_authenticated_profile(authorization)
+    if profile["user_key"] != request.user_key:
+        raise HTTPException(status_code=403, detail="This profile does not belong to your account.")
+    lookups = None if remembered else [
+        _coach_lookups.submit(recent_athlete_feedback, profile["id"]), _coach_lookups.submit(coach_line, profile),
+        _coach_lookups.submit(recent_race_results, profile["id"]), _coach_lookups.submit(pacing_context, profile["id"])]
+    stored_coaches = set(profile.get("recommended_coaches") or [])
+    requested_coaches = set(request.selected_coaches)
+    if stored_coaches and not requested_coaches.issubset(stored_coaches):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Coach context does not match this athlete profile.")
+    if request.active_coach and request.active_coach not in requested_coaches:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Active coach must belong to the requested coach context.")
+    looked_up = remembered[2] if remembered else tuple(lookup.result() for lookup in lookups)
+    if key and not remembered:
+        if len(_call_context) >= 500:
+            for stale in [item for item, (expires, _, _) in _call_context.items() if expires <= now] or list(_call_context):
+                _call_context.pop(stale, None)
+        _call_context[key] = (now + CALL_CONTEXT_SECONDS, profile, looked_up)
+    athlete_feedback, days, race_results, pacing = looked_up
+
+    context, sources, resolved_coaches = chat_context(request.selected_coaches, request.message)
+    history = [
+        {"role": item.role if item.role in {"user", "assistant"} else "user", "content": item.content}
+        for item in request.history[-12:]
+    ]
+    active_coach = request.active_coach or request.selected_coaches[0]
+    voice_rules = """
 - LIVE VOICE CONVERSATION: this reply is spoken aloud by your synthetic voice in a real-time call. Talk like a coach on pool deck:
   one to four short sentences (under about 70 words) unless the athlete explicitly asks for a full set or session.
 - When you do give a set, say it compactly the way a coach would say it out loud (for example "eight twenty-fives at race pace, on two minutes").
 - Plain spoken English only: no markdown, bullet points, headings, tables, emoji, symbols or URLs.
 - When it helps, end with one brief follow-up question to keep the conversation going.""" if request.mode == "conversation" else ""
-        prompt = f"""You are the coach intelligence layer for SwimGPT. Answer the athlete's latest question using ONLY the coach programs and the athlete profile below.
+    prompt = f"""You are the coach intelligence layer for SwimGPT. Answer the athlete's latest question using ONLY the coach programs and the athlete profile below.
 
 Hard rules:
 - The selected coach context is restricted to: {json.dumps(resolved_coaches)}.
@@ -295,9 +329,9 @@ ACTIVE COACH LENS: {active_coach}
 RECENT ATHLETE CHECK-INS:
 {json.dumps(athlete_feedback, ensure_ascii=False)}
 RECENT ACTUAL RACE RESULTS:
-{json.dumps(recent_race_results(profile["id"]), ensure_ascii=False)}
+{json.dumps(race_results, ensure_ascii=False)}
 SHARED PACING METHODOLOGY:
-{json.dumps(pacing_context(profile["id"]), ensure_ascii=False)}
+{json.dumps(pacing, ensure_ascii=False)}
 Use this formula/settings for PB-derived zone estimates, label them as estimates,
 and do not invent physiological thresholds or silently convert pool formats.
 
@@ -310,18 +344,29 @@ LATEST ATHLETE MESSAGE:
 COACH PROGRAM (the coach's own session types, weekly orders, rules and the sessions most relevant to this message):
 {context}
 """
-        response = client.chat.completions.create(
-            model=settings.openai_model,
-            # A voice call's reply is spoken the moment it's ready, so it doesn't reason first.
-            **sampling(settings.openai_model, "none" if request.mode == "conversation" else settings.openai_reasoning_effort, 0.2),
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a precise, source-grounded high-performance swim coach. Never present unsupported claims as coach doctrine.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-        )
+    return [
+        {
+            "role": "system",
+            "content": "You are a precise, source-grounded high-performance swim coach. Never present unsupported claims as coach doctrine.",
+        },
+        {"role": "user", "content": prompt},
+    ], sources
+
+
+def _reply_options(request: CoachChatRequest) -> dict[str, Any]:
+    # A voice call's reply is spoken the moment it's ready, so it doesn't reason first.
+    return {"model": settings.openai_model,
+            **sampling(settings.openai_model, "none" if request.mode == "conversation" else settings.openai_reasoning_effort, 0.2)}
+
+
+@app.post("/api/coach-chat", response_model=CoachChatResponse)
+def coach_chat(request: CoachChatRequest, authorization: str | None = Header(default=None)) -> CoachChatResponse:
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="OPENAI_API_KEY_BOSS is not configured.")
+
+    try:
+        messages, sources = _coach_messages(request, authorization)
+        response = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages)
         content = response.choices[0].message.content
         if not content:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The coach returned an empty response.")
@@ -333,6 +378,45 @@ COACH PROGRAM (the coach's own session types, weekly orders, rules and the sessi
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Coach context query failed: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Coach response failed: {exc}") from exc
+
+
+@app.post("/api/coach-chat/live")
+def coach_chat_live(request: CoachChatRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:
+    """A voice call's reply as it is written, so the call can speak its first sentence while the rest is still coming:
+    lines of JSON, {"delta": text} as the reply grows, then {"done": true, "content", "sources", "plan"} (what POST
+    /api/coach-chat returns), or {"error": detail} if it breaks off. A failure before it starts is an error response."""
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="OPENAI_API_KEY_BOSS is not configured.")
+    try:
+        messages, sources = _coach_messages(request, authorization, on_call=True)
+        stream = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages, stream=True)
+    except HTTPException:
+        raise
+    except APIError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Coach context query failed: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Coach response failed: {exc}") from exc
+
+    def events():
+        written: list[str] = []
+        try:
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    written.append(delta)
+                    yield json.dumps({"delta": delta}) + "\n"
+            content = "".join(written)
+            if content.strip():
+                yield json.dumps({"done": True, "content": content, "sources": sources, "plan": plan_kinds(content)}) + "\n"
+            else:
+                yield json.dumps({"error": "The coach returned an empty response."}) + "\n"
+        except Exception:
+            logger.exception("Coach reply broke off on a voice call")
+            yield json.dumps({"error": "The coach couldn't finish answering. Please try again."}) + "\n"
+        finally:
+            stream.close()
+
+    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/payments/checkout", response_model=CheckoutSessionResponse)
