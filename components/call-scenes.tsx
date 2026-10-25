@@ -218,8 +218,8 @@ export function SceneTitle({ scene, className, boxed = false }: { scene: SceneId
 
 /**
  * The scenes to pick from, each a live picture of itself. Picking one sweeps it in behind the chat or the call
- * (`place`; `onPick`, with the tile's middle as the point it starts from); the panel fades back meanwhile so the sweep
- * can be seen.
+ * (`place`; `onPick`, with the tile's middle as the point it starts from) and closes the picker (`onClose`), as
+ * tapping the scene in use does: another pick means opening it again.
  */
 export function ScenePicker({ open, place, current, tone, coachFirstName, returnFocus, onPick, onClose }: {
   open: boolean
@@ -233,7 +233,6 @@ export function ScenePicker({ open, place, current, tone, coachFirstName, return
 }) {
   const [mounted, setMounted] = useState(open)
   const [leaving, setLeaving] = useState(false)
-  const [watching, setWatching] = useState(false)
   const [failed, setFailed] = useState<SceneId[]>([])
   const canvases = useRef<Partial<Record<SceneId, HTMLCanvasElement | null>>>({})
   const panelRef = useRef<HTMLDivElement>(null)
@@ -264,11 +263,6 @@ export function ScenePicker({ open, place, current, tone, coachFirstName, return
       if (top + chosen.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top - (list.clientHeight - chosen.offsetHeight) / 2
     }
   }, [mounted, leaving])
-  useEffect(() => {
-    if (!watching) return
-    const timer = window.setTimeout(() => setWatching(false), REVEAL_MS)
-    return () => window.clearTimeout(timer)
-  }, [watching])
 
   // The tiles: one hidden WebGL canvas draws each scene and copies it into its tile, 30 times a second.
   useEffect(() => {
@@ -332,11 +326,10 @@ export function ScenePicker({ open, place, current, tone, coachFirstName, return
   }
 
   return (
-    <div className={cn("vs-picker absolute inset-0 z-30", leaving && "vs-leaving", watching && "vs-watch")}>
+    <div className={cn("vs-picker absolute inset-0 z-30", leaving && "vs-leaving")}>
       <button type="button" tabIndex={-1} aria-label="Close scenes" onClick={onClose} className="vs-picker-backdrop absolute inset-0 cursor-default" />
       <div ref={panelRef} role="dialog" aria-modal="false" aria-labelledby="vs-title"
-        className={cn("vs-panel absolute inset-x-0 bottom-0 flex max-h-[78dvh] flex-col overflow-hidden rounded-t-[28px] sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[68px] sm:max-h-[calc(100dvh-84px)] sm:w-[min(560px,calc(100vw-2rem))] sm:rounded-[28px]",
-          watching && "vs-panel-watch")}>
+        className="vs-panel absolute inset-x-0 bottom-0 flex max-h-[78dvh] flex-col overflow-hidden rounded-t-[28px] sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[68px] sm:max-h-[calc(100dvh-84px)] sm:w-[min(560px,calc(100vw-2rem))] sm:rounded-[28px]">
         <span aria-hidden className="vs-panel-ring" />
         {/* Only the inside scrolls: the light round the edge stays on the panel. */}
         <div ref={scrollRef} className="relative min-h-0 overflow-y-auto overscroll-contain p-4 pb-6 sm:p-5" style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
@@ -364,10 +357,11 @@ export function ScenePicker({ open, place, current, tone, coachFirstName, return
                   aria-label={`${item.name}: ${unavailable ? "not available on this device" : item.mood}`}
                   onPointerMove={tilt} onPointerLeave={untilt}
                   onClick={(event) => {
-                    if (selected) return
-                    const rect = event.currentTarget.getBoundingClientRect()
-                    setWatching(true)
-                    onPick(item.id, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+                    if (!selected) {
+                      const rect = event.currentTarget.getBoundingClientRect()
+                      onPick(item.id, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+                    }
+                    onClose()
                   }}
                   className={cn("vs-tile group relative aspect-[3/4] overflow-hidden rounded-2xl text-left outline-none disabled:opacity-40 sm:aspect-[4/3]", selected && "vs-tile-on")}
                   style={{ "--i": index, "--vs-swatch": item.swatch } as CSSProperties}>

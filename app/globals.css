@@ -1730,7 +1730,6 @@ html.gx-docked body { padding-bottom: 12rem; }
   box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   transform-origin: 92% 0;
   animation: vs-panel-in 0.6s cubic-bezier(0.2, 1, 0.3, 1) backwards;
-  transition: opacity 0.5s ease 0.15s, scale 0.5s ease 0.15s;
 }
 /* A light running round the panel's edge. */
 .vs-panel-ring {
@@ -1744,16 +1743,10 @@ html.gx-docked body { padding-bottom: 12rem; }
   background: radial-gradient(circle at 30% 25%, #ecfeff, #57e5ea 50%, #a78bfa);
   box-shadow: 0 8px 24px -8px rgba(87, 229, 234, 0.8);
 }
-/* While a new scene sweeps in, the panel steps back so it can be seen (on a phone, the sheet slides nearly away and
-   comes back up). */
-.vs-panel-watch { opacity: 0.16; scale: 0.985; transition: opacity 0.3s ease, scale 0.3s ease; }
-.vs-picker-backdrop { transition: opacity 0.4s ease; }
-.vs-watch .vs-picker-backdrop { opacity: 0; }
 .vs-leaving .vs-panel { animation: vs-panel-out 0.26s cubic-bezier(0.4, 0, 1, 1) forwards; }
 .vs-leaving .vs-picker-backdrop { animation: vs-fade-out 0.26s ease-in forwards; }
 @media (max-width: 639px) {
-  .vs-panel { transform-origin: 50% 100%; animation-name: vs-sheet-in; transition: translate 0.6s cubic-bezier(0.2, 1, 0.3, 1) 0.1s; }
-  .vs-panel-watch { opacity: 1; scale: 1; translate: 0 calc(100% - 56px); transition: translate 0.45s cubic-bezier(0.4, 0, 0.2, 1); }
+  .vs-panel { transform-origin: 50% 100%; animation-name: vs-sheet-in; }
   .vs-leaving .vs-panel { animation-name: vs-sheet-out; }
 }
 
