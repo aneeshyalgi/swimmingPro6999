@@ -80,7 +80,7 @@ const sections: LegalSection[] = [
           <li>your sign-in session, so you stay signed in;</li>
           <li>your unfinished onboarding answers, so you can continue later;</li>
           <li>your unfinished survey answers, so you can continue later (see <a href="#survey">Feedback survey</a>);</li>
-          <li>your coach chat history (your conversations are saved on your device, not on our servers);</li>
+          <li>your coach chat history (it is also saved with your account on our servers, see <a href="#ai">AI coaching</a>);</li>
           <li>your chosen coach and a few app settings, and a note of checkouts in progress;</li>
           <li>a random visitor ID and whether you&apos;ve used the free video analysis (see <a href="#video-limit">Free video analysis</a>).</li>
         </ul>
@@ -139,7 +139,7 @@ const sections: LegalSection[] = [
         <p>SwimGPT&apos;s coaches are AI. You are always talking to an AI system, never to a person. To create your content, we send the necessary data to <strong>OpenAI</strong> (OpenAI Ireland Ltd., Ireland, and OpenAI, L.L.C., USA), which processes it for us as our processor:</p>
         <ul>
           <li><strong>Plans, weeks and workouts:</strong> your swimming profile and training data, and your daily session check-ins if you agreed to their use.</li>
-          <li><strong>Coach chat:</strong> your message, your recent conversation (up to 20 messages) and your profile and training context. Chats are saved on your device, not on our servers.</li>
+          <li><strong>Coach chat:</strong> your message, your recent conversation (up to 50 messages) and your profile and training context. Your chats, including what you say on voice calls as text, are saved on your device and with your account on our servers, so your coach remembers them on all your devices. Starting a new chat or clearing your history deletes them.</li>
           <li><strong>Voice conversations:</strong> your recorded speech, so OpenAI can turn it into text, and your coach&apos;s reply, which OpenAI turns into an AI voice. We don&apos;t keep the recordings.</li>
           <li><strong>Video analysis:</strong> your clip stays on your device. Body tracking runs in your browser, and only a few still frames and the tracking measurements are sent to recognise your stroke. We don&apos;t keep the clip or the frames.</li>
         </ul>
@@ -261,6 +261,7 @@ const sections: LegalSection[] = [
             <tr><td>Payment and invoice records</td><td>10 years (§ 147 AO, § 257 HGB)</td></tr>
             <tr><td>Emails with us</td><td>Until your request is dealt with, unless we must keep them by law</td></tr>
             <tr><td>Chats and data in your browser</td><td>On your device until you delete them</td></tr>
+            <tr><td>Coach chats saved with your account</td><td>The latest 50 messages with your coach, until you start a new chat, clear your history or delete your account</td></tr>
           </tbody>
         </table>
       </div>
