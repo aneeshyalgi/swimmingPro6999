@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase"
 import type { ChatSource } from "@/components/chat-markdown"
 import type { PlanKind } from "@/lib/coach-plan"
+import { EARLIER_CONTEXT } from "@/lib/coach-history"
 
 const apiUrl = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 export const MAX_RECORDING_BYTES = 24 * 1024 * 1024
@@ -80,6 +81,10 @@ export async function askCoachLive(body: Record<string, unknown>, signal: AbortS
   const failed = "The coach couldn't answer just now. Please try again."
   const request = { method: "POST", signal, headers: { "Content-Type": "application/json", Authorization: await authorization() }, body: JSON.stringify(body) }
   const response = await fetch(`${apiUrl()}/api/coach-chat/live`, request)
+  // Refused by a backend from before it took the longer conversation (while it's being updated): as it was given.
+  if (response.status === 422 && Array.isArray(body.history) && body.history.length > EARLIER_CONTEXT) {
+    return askCoachLive({ ...body, history: body.history.slice(-EARLIER_CONTEXT) }, signal, onText)
+  }
   if (response.status === 404 || response.status === 405) {
     const whole = await fetch(`${apiUrl()}/api/coach-chat`, request)
     if (!whole.ok) throw new Error(failed)

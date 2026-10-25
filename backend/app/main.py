@@ -37,6 +37,7 @@ from app.nutrition import router as nutrition_router
 from app.mental import router as mental_router
 from app.plan_store import router as plan_store_router
 from app.coach_audio import router as coach_audio_router
+from app.coach_history import conversation_history, router as coach_history_router
 from app.coach_plan import PLAN_RULES, SPOKEN_PLAN_RULES, plan_kinds, router as coach_plan_router
 from app.week_coach import router as week_coach_router
 from app.stroke_detection import router as stroke_detection_router
@@ -109,6 +110,7 @@ app.include_router(nutrition_router)
 app.include_router(mental_router)
 app.include_router(plan_store_router)
 app.include_router(coach_audio_router)
+app.include_router(coach_history_router)
 app.include_router(coach_plan_router)
 app.include_router(week_coach_router)
 app.include_router(stroke_detection_router)
@@ -296,10 +298,7 @@ def _coach_messages(request: CoachChatRequest, authorization: str | None, on_cal
     athlete_feedback, days, race_results, pacing = looked_up
 
     context, sources, resolved_coaches = chat_context(request.selected_coaches, request.message)
-    history = [
-        {"role": item.role if item.role in {"user", "assistant"} else "user", "content": item.content}
-        for item in request.history[-12:]
-    ]
+    history = conversation_history(request.history)
     # The athlete is talking to their coach (a chat has exactly one), who answers as themselves: "my program", never
     # "a Coach Brad plan".
     coach = resolved_coaches[0]

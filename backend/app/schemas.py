@@ -207,12 +207,17 @@ class CoachChatMessage(BaseModel):
     content: str
 
 
+# How much of the conversation the coach is given with each message, typed or said on a voice call: its last 50
+# messages (the chat sends them; app.coach_history.conversation_history shortens the older ones).
+HISTORY_MESSAGES = 50
+
+
 class CoachChatRequest(BaseModel):
     user_key: str
     selected_coaches: list[str] = Field(min_length=1, max_length=1)
     active_coach: str | None = None
     message: str = Field(min_length=1, max_length=4000)
-    history: list[CoachChatMessage] = Field(default_factory=list, max_length=20)
+    history: list[CoachChatMessage] = Field(default_factory=list, max_length=HISTORY_MESSAGES)
     # "conversation": a live voice call; the reply is spoken aloud, so it must be short and plain speech.
     mode: Literal["chat", "conversation"] = "chat"
 

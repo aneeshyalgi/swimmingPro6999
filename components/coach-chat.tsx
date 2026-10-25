@@ -29,6 +29,8 @@ import { Reveal } from "@/components/dashboard-ui"
 import { WaterBubbles } from "@/components/water-bubbles"
 import { CoachAvatar as CoachPortrait } from "@/components/coach-avatar"
 import { useCoachAudio } from "@/hooks/use-coach-audio"
+import { useCoachHistory } from "@/hooks/use-coach-history"
+import { EARLIER_CONTEXT, type SavedMessage } from "@/lib/coach-history"
 import { CallScene, ScenePicker, SceneTitle } from "@/components/call-scenes"
 import { CONTINUED, CoachConversation, coachTone } from "@/components/coach-conversation"
 import { askCoachLive } from "@/lib/coach-audio"
@@ -56,6 +58,10 @@ type Message = {
   planDraft?: CoachPlan
   /** How many of its sessions were added to the athlete's training. */
   planAdded?: { count: number; at: string; kinds?: ("swim" | "gym")[] }
+  /** Saved chats (lib/coach-history.ts): written since they began, "pending" until saved. Older messages have none. */
+  sync?: "pending" | "saved"
+  /** The coach's welcome a conversation opens with (never saved). */
+  greeting?: boolean
 }
 
 // Public coach profile from GET /api/coaches (backend/app/coach_catalog.py).
@@ -108,6 +114,14 @@ const greetingFor = (coach: string): Message => ({
   role: "assistant",
   content: `Hello! I'm ${getCoachDisplayName(coach)}. I'm here to help you with your training, technique, and performance goals. What would you like to work on today?`,
   timestamp: new Date(),
+  greeting: true,
+})
+
+/** A message of the saved conversation that this device doesn't have (written on another one, or before its storage
+ *  was cleared). */
+const restoreMessage = (message: SavedMessage): Message => ({
+  id: message.id, role: message.role, content: message.content, timestamp: new Date(message.at), sync: "saved",
+  ...(message.voice && { voice: true }), ...(message.plan && { plan: message.plan }),
 })
 
 const suggestionsFor = (info?: CoachInfo) => {
@@ -126,6 +140,8 @@ const TRAINING_WORDS = /\d+\s*[x×]\s*\d+|\b\d{2,4}\s*(?:m|meters|metres)?\s+(?:
 const planLabel = (kind: PlanKind) => (kind === "swim" ? "Swim session ready" : kind === "gym" ? "Gym session ready" : "Training plan ready")
 /** A plan's sessions as new ones (same training, new ids): added again, they're new sessions, not the earlier ones moved. */
 const withNewIds = (plan: CoachPlan): CoachPlan => ({ ...plan, sessions: plan.sessions.map((session) => ({ ...session, id: randomId() })) })
+/** The athlete's message `id`, answered: saved with the reply (useCoachHistory), now that the exchange is whole. */
+const answered = (thread: Message[], id: string) => thread.map((message) => (message.id === id ? { ...message, sync: "pending" as const } : message))
 
 const thinkingStages = (coach: string) => [
   `Recalling ${coach}'s coaching methods`,
@@ -226,6 +242,8 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
   const sceneCue = useRef({ thinking: false, voice: false, dictating: false, swell: 0, swellAt: 0, coachSwell: false })
   const threadsRef = useRef(threads)
   threadsRef.current = threads
+  // The conversations saved for the athlete: back as the chat opens, each exchange saved as it happens.
+  const savedChats = useCoachHistory({ userKey, coaches, threads, threadsRef, setThreads, restore: restoreMessage, greeting: greetingFor })
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const dictated = useRef(false)
@@ -327,8 +345,12 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
     if (el) el.scrollTo({ top: el.scrollHeight, behavior })
   }
 
+  // A saved conversation coming back arrives all at once: the chat goes straight to its end instead of scrolling through.
+  const shownCount = useRef(messages.length)
   useEffect(() => {
-    if (nearBottom) scrollToBottom()
+    const arrived = messages.length - shownCount.current > 2
+    shownCount.current = messages.length
+    if (nearBottom || arrived) scrollToBottom(arrived ? "auto" : "smooth")
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, isThinking])
 
@@ -380,25 +402,29 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
 
     const thread = threads[coach] ?? []
     const retryIndex = retryId ? thread.findIndex((message) => message.id === retryId) : -1
-    const prior = retryIndex >= 0 ? thread.slice(0, retryIndex) : thread
-    const history = prior.filter((message) => !message.failed).slice(-12).map(({ role, content }) => ({ role, content }))
-
-    if (retryIndex >= 0) {
-      setThreads((prev) => ({ ...prev, [coach]: prev[coach].map((message) => (message.id === retryId ? { ...message, failed: false } : message)) }))
+    let sentId: string
+    if (retryIndex >= 0 && retryId) {
+      sentId = retryId
+      setThreads((prev) => ({ ...prev, [coach]: prev[coach].map((message) => (message.id === sentId ? { ...message, failed: false } : message)) }))
     } else {
       const userMessage: Message = { id: newId(), role: "user", content: text, timestamp: new Date() }
       setThreads((prev) => ({ ...prev, [coach]: [...(prev[coach] ?? []), userMessage] }))
       setInput("")
-      retryId = userMessage.id
+      sentId = userMessage.id
     }
     setPendingCoach(coach)
     setNearBottom(true)
 
     try {
+      // The conversation so far goes with the message, once the saved one is back (it usually is, long before).
+      await savedChats.ready()
+      const latest = threadsRef.current[coach] ?? []
+      const at = latest.findIndex((message) => message.id === sentId)
+      const history = savedChats.context(at >= 0 ? latest.slice(0, at) : latest)
       const { data: { session }, error } = await supabase.auth.getSession()
       if (error) throw error
       if (!session) throw new Error("Sign in again to chat with your coach.")
-      const response = await fetch(`${apiUrl()}/api/coach-chat`, {
+      const ask = (sent: typeof history) => fetch(`${apiUrl()}/api/coach-chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
@@ -406,20 +432,22 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
           selected_coaches: [coach],
           active_coach: coach,
           message: text,
-          history,
+          history: sent,
         }),
       })
+      let response = await ask(history)
+      // Refused by a backend from before it took the longer conversation (while it's being updated): as it was given.
+      if (response.status === 422 && history.length > EARLIER_CONTEXT) response = await ask(history.slice(-EARLIER_CONTEXT))
       if (!response.ok) throw new Error(await response.text())
       const result = await response.json()
-      const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined }
-      setThreads((prev) => ({ ...prev, [coach]: [...(prev[coach] ?? []), reply] }))
+      const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, sync: "pending" }
+      setThreads((prev) => ({ ...prev, [coach]: [...answered(prev[coach] ?? [], sentId), reply] }))
       if (reply.plan) prefetchPlan(coach, reply, text)
     } catch (error) {
       console.error("Coach chat failed:", error)
-      const failedId = retryId
       setThreads((prev) => ({
         ...prev,
-        [coach]: (prev[coach] ?? []).map((message) => (message.id === failedId ? { ...message, failed: true } : message)),
+        [coach]: (prev[coach] ?? []).map((message) => (message.id === sentId ? { ...message, failed: true } : message)),
       }))
     } finally {
       setPendingCoach(null)
@@ -432,11 +460,13 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
   const converse = async (text: string, signal: AbortSignal, onText: (text: string) => void): Promise<string> => {
     const coach = activeCoach
     if (!coach || !userKey) throw new Error("Your coaching profile is not loaded.")
+    // Once the saved conversation is back: a call opened from the dashboard starts as the chat opens.
+    await savedChats.ready()
     const thread = threadsRef.current[coach] ?? []
     // Asking again after the coach couldn't answer: the same message, not a second copy of it.
     const last = thread[thread.length - 1]
     const again = last?.role === "user" && last.failed && last.content === text ? last : null
-    const history = thread.filter((message) => !message.failed).slice(-12).map(({ role, content }) => ({ role, content }))
+    const history = savedChats.context(thread)
     const userMessage: Message = again ? { ...again, failed: false } : { id: newId(), role: "user", content: text, timestamp: new Date() }
     setThreads((prev) => ({
       ...prev,
@@ -444,8 +474,8 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
     }))
     try {
       const result = await askCoachLive({ user_key: userKey, selected_coaches: [coach], active_coach: coach, message: text, history, mode: "conversation" }, signal, onText)
-      const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, voice: true }
-      setThreads((prev) => ({ ...prev, [coach]: [...(prev[coach] ?? []), reply] }))
+      const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, voice: true, sync: "pending" }
+      setThreads((prev) => ({ ...prev, [coach]: [...answered(prev[coach] ?? [], userMessage.id), reply] }))
       if (reply.plan) {
         setCallPlan({ id: reply.id, kind: reply.plan })
         prefetchPlan(coach, reply, text)
@@ -517,17 +547,20 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
     }
     cancelAudio()
     setThreads((prev) => ({ ...prev, [activeCoach]: [greetingFor(activeCoach)] }))
+    // The saved conversation starts over too, so the athlete's other devices do.
+    savedChats.startOver(activeCoach)
     setClearArmed(false)
   }
 
   /**
-   * Deletes the athlete's entire conversation history on this device: every coach's thread, typed and voice-call
-   * messages alike, and the saved copy in browser storage (the only place chat history is kept). Each coach starts
-   * again from their greeting.
+   * Deletes the athlete's entire conversation history: every coach's thread, typed and voice-call messages alike, on
+   * this device (and its copy in browser storage) and in their saved chats, so their other devices start over too.
+   * Each coach starts again from their greeting.
    */
   const clearAllHistory = () => {
     cancelAudio()
     setThreads(Object.fromEntries(coaches.map((coach) => [coach, [greetingFor(coach)]])))
+    savedChats.clearAll(coaches)
     try {
       localStorage.removeItem(STORAGE_PREFIX + userKey)
     } catch {
@@ -987,7 +1020,8 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
             <AlertDialogTitle className="text-white">Clear your conversation history?</AlertDialogTitle>
             <AlertDialogDescription className="text-slate-400">
               Every message with {coachName}, including voice conversation transcripts, will be permanently deleted from
-              this device. Your training plan and profile aren&apos;t affected. This can&apos;t be undone.
+              this device and from your saved chats, so your other devices start fresh too. Your training plan and
+              profile aren&apos;t affected. This can&apos;t be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
