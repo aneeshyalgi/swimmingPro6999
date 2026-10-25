@@ -111,8 +111,10 @@ export function speechChunks(markdown: string): string[] {
   const text = markdown
     .replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, "")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/^[-*•]\s+/gm, "")
+    // Dividers, headings' #s and list markers (indented ones under an item too) aren't read out.
+    .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, "")
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*[-*+•][ \t]+/gm, "")
     .replace(/\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|`([^`]+)`/g, (_, bold: string, italic: string, code: string) => bold || italic || code)
     .trim()
   const chunks: string[] = []
