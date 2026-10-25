@@ -312,7 +312,44 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
   useEffect(() => { threads.set(thread, messages) }, [thread, messages])
   useEffect(() => { drafts.set(thread, input) }, [thread, input])
   useEffect(() => () => request.current?.abort(), [])
-  useEffect(() => { if (mounted) window.setTimeout(() => field.current?.focus({ preventScroll: true }), 350) }, [mounted])
+  // The field is ready to type in, except on a touch screen: there the keyboard would come up over the sheet before the
+  // athlete has read it, so the field waits for a tap.
+  useEffect(() => {
+    if (mounted && !window.matchMedia("(pointer: coarse)").matches) window.setTimeout(() => field.current?.focus({ preventScroll: true }), 350)
+  }, [mounted])
+
+  // On a phone the keyboard comes up over the page without making it any smaller, so the sheet, which sits on the
+  // bottom of the screen, would be under it. While the field is typed in, the sheet sits on the keyboard instead and
+  // fits the screen that's left (`lift`: how far up the page the keyboard reaches; `room`: the height still seen).
+  const [keyboard, setKeyboard] = useState<{ lift: number; room: number } | null>(null)
+  useEffect(() => {
+    const view = window.visualViewport
+    const element = field.current
+    if (!mounted || !view || !element) return
+    let frame = 0
+    const measure = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        // Zoomed in, less of the page is seen too, but that isn't the keyboard.
+        const up = document.activeElement === element && view.scale < 1.01 && window.innerHeight - view.height > 80
+          && window.matchMedia("(max-width: 639px)").matches
+        const lift = Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop))
+        const room = Math.round(view.height)
+        setKeyboard((current) => (!up ? null : current?.lift === lift && current.room === room ? current : { lift, room }))
+      })
+    }
+    view.addEventListener("resize", measure)
+    view.addEventListener("scroll", measure)
+    element.addEventListener("focus", measure)
+    element.addEventListener("blur", measure)
+    return () => {
+      cancelAnimationFrame(frame)
+      view.removeEventListener("resize", measure)
+      view.removeEventListener("scroll", measure)
+      element.removeEventListener("focus", measure)
+      element.removeEventListener("blur", measure)
+    }
+  }, [mounted])
 
   // What the week shows of the panel: the days being read, the changes waiting to be applied, the one looked at.
   const link = useMemo<WeekLink>(() => {
@@ -392,6 +429,11 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
     const element = body.current
     if (element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
   }
+  // With the keyboard up less of the chat is seen: its latest part stays in view.
+  useLayoutEffect(() => {
+    const element = body.current
+    if (keyboard && element && pinned.current) element.scrollTop = element.scrollHeight
+  }, [keyboard])
 
   const update = (id: string, change: (message: CoachMessage) => CoachMessage) =>
     setMessages((list) => list.map((item) => (item.id === id && item.role === "coach" ? change(item) : item)))
@@ -526,7 +568,8 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
       <div aria-hidden className="wc-backdrop fixed inset-0 z-[45] sm:hidden" onClick={close} />
       <aside ref={panel} role="dialog" aria-modal="false" aria-labelledby="wc-title"
         className={cn("wc-panel fixed z-[46] flex flex-col overflow-hidden border border-white/10 bg-[#091017]/95 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.75)] backdrop-blur-2xl",
-          "max-sm:inset-x-0 max-sm:bottom-0 max-sm:h-[88dvh] max-sm:rounded-t-[28px] sm:bottom-3 sm:right-3 sm:top-3 sm:w-[440px] sm:rounded-[28px]", tone.tone)}>
+          "max-sm:inset-x-0 max-sm:bottom-0 max-sm:h-[88dvh] max-sm:rounded-t-[28px] sm:bottom-3 sm:right-3 sm:top-3 sm:w-[440px] sm:rounded-[28px]", tone.tone)}
+        style={keyboard ? { bottom: keyboard.lift, height: `min(88dvh, ${keyboard.room - 12}px)` } : undefined}>
         <span aria-hidden className="wc-aura" />
         <header className="relative border-b border-white/[0.07] px-4 pb-3 pt-4 sm:px-5">
           <span aria-hidden className="absolute left-1/2 top-1.5 h-1 w-10 -translate-x-1/2 rounded-full bg-white/15 sm:hidden" />
@@ -576,7 +619,7 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
           )}
         </div>
 
-        <form onSubmit={submit} className="relative border-t border-white/[0.07] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
+        <form onSubmit={submit} className={cn("relative border-t border-white/[0.07] px-3 pt-3 sm:px-4", keyboard ? "pb-3" : "pb-[max(0.75rem,env(safe-area-inset-bottom))]")}>
           <div className={cn("flex items-end gap-2 rounded-[22px] border border-white/10 bg-white/[0.04] p-1.5 pl-4 transition-all duration-300", tone.focus)}>
             <textarea ref={field} rows={1} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onKeyDown} maxLength={2000} disabled={over}
               aria-label={`Tell ${coach} what to change in this ${tone.name.toLowerCase()}`} placeholder={over ? "This week is over" : `What should change this week, ${name}?`}
