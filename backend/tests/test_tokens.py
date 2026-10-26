@@ -805,12 +805,12 @@ class StoreTests(TokensCase):
         options = self.create.call_args.kwargs
         self.assertEqual((options["mode"], options["customer"], options["payment_method_types"]), ("payment", "cus_1", ["card"]))
         self.assertEqual(options["line_items"][0]["price_data"]["unit_amount"], 2599)
-        self.assertEqual(options["line_items"][0]["price_data"]["product_data"]["name"], "90 SwimGPT tokens")
+        self.assertEqual(options["line_items"][0]["price_data"]["product_data"]["name"], "150 SwimGPT tokens")
         self.assertEqual(options["success_url"], "https://swimgpt.test/dashboard?tokens=paid&session_id={CHECKOUT_SESSION_ID}")
         self.assertEqual({key: options["metadata"][key] for key in ("kind", "pack", "tokens", "user_id")},
-                         {"kind": "tokens", "pack": "plus", "tokens": "90", "user_id": "row-1"})
+                         {"kind": "tokens", "pack": "plus", "tokens": "150", "user_id": "row-1"})
         self.assertIn("start_now", options["metadata"])
-        self.assertEqual(self.db.purchases, [{"user_id": "row-1", "stripe_checkout_session_id": "cs_1", "pack": "plus", "tokens": 90,
+        self.assertEqual(self.db.purchases, [{"user_id": "row-1", "stripe_checkout_session_id": "cs_1", "pack": "plus", "tokens": 150,
                                               "amount": 2599, "currency": "usd", "status": "pending"}])
 
     def test_an_older_account_has_no_store_and_cant_buy_tokens(self):

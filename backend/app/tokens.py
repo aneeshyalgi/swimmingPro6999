@@ -42,7 +42,7 @@ from app.withdrawal import start_now_metadata
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tokens", tags=["Tokens"])
 
-MONTHLY_TOKENS = 75
+MONTHLY_TOKENS = 100
 BOUGHT_MONTHS = 2
 # The accounts that use tokens: those made from TOKENS_FROM, when the Terms that brought them in (TOKENS_TERMS) began.
 # In the CHANGEOVER after that, an account that signed up under earlier Terms (its sign-up page was opened before the
@@ -69,9 +69,9 @@ LABELS = {
 }
 # The token store, in cents of CURRENCY.
 PACKS = {
-    "starter": {"tokens": 30, "amount": 999},
-    "plus": {"tokens": 90, "amount": 2599},
-    "pro": {"tokens": 240, "amount": 5999},
+    "starter": {"tokens": 50, "amount": 999},
+    "plus": {"tokens": 150, "amount": 2599},
+    "pro": {"tokens": 400, "amount": 5999},
 }
 CURRENCY = "usd"
 
