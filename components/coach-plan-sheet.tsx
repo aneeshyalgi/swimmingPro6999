@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react"
 import { createPortal } from "react-dom"
 import {
-  AlertTriangle, ArrowRight, CalendarCheck2, CalendarPlus, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, Dumbbell, Flag,
-  Info, Loader2, RotateCcw, Sparkles, Waves, X,
+  AlertTriangle, ArrowRight, CalendarCheck2, CalendarPlus, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Coins, Copy, Dumbbell,
+  Flag, Info, Loader2, RotateCcw, Sparkles, Waves, X,
 } from "lucide-react"
 import { CoachAvatar } from "@/components/coach-avatar"
 import { DoseChip, GymWorkoutDetails } from "@/components/gym-workout"
@@ -12,6 +12,8 @@ import { SwimWorkoutDetails } from "@/components/swim-workout"
 import { ZoneChip, shortDate, todayISO } from "@/components/training-ui"
 import { compactMeters } from "@/components/calendar-day"
 import { mondayISO, shiftWeek } from "@/lib/training"
+import { TokensNeeded, openTokenStore } from "@/lib/token-events"
+import { tokenCount } from "@/lib/tokens"
 import {
   addCoachPlan, alreadyIn, asGymItem, dayProblem, hintedDate, loadWeek, placeSessions, placedWeekdays, startingWeek, swimMeters,
   type AddedSession, type CoachPlan, type DayLoad, type PlanKind, type PlanSession, type TrainingTarget, type WeekLoad,
@@ -46,10 +48,12 @@ const longDay = (iso: string) => shortDate(iso, { weekday: "long", day: "numeric
  * Under a coach's reply that prescribes sessions: the way to add them to the athlete's weeks (or, once added, a note that
  * they were, with a way to add them again).
  */
-export function PlanCallout({ kind, added, onOpen }: {
+export function PlanCallout({ kind, added, cost = null, onOpen }: {
   kind: PlanKind
   /** What was added: how many sessions, and of which kinds (where they went). */
   added?: { count: number; kinds?: ("swim" | "gym")[] } | null
+  /** Tokens a session costs to read into the athlete's weeks (lib/tokens.ts); null when the athlete doesn't use tokens. */
+  cost?: number | null
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void
 }) {
   const where = added?.kinds?.length ? weeksFor(added.kinds) : kind === "both" ? "Swim & Gym weeks" : kind === "gym" ? "Gym week" : "Swim week"
@@ -76,7 +80,9 @@ export function PlanCallout({ kind, added, onOpen }: {
         <CalendarPlus className="h-5 w-5" />
       </span>
       <span className="relative min-w-0 flex-1">
-        <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200/90">Training plan</span>
+        <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200/90">
+          Training plan{cost ? ` · ${tokenCount(cost)} a session` : ""}
+        </span>
         <span className="block truncate text-sm font-semibold text-white">Add it to your {where}</span>
       </span>
       <span className="relative inline-flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition-colors group-hover:bg-white/[0.16]">
@@ -94,7 +100,7 @@ export function PlanCallout({ kind, added, onOpen }: {
 export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, onRead, onAdded, onOpenTraining, onClose }: {
   coach: string
   coachName: string
-  /** The reply read into sessions: a read already under way (started when the reply came) or a new one. */
+  /** The reply read into sessions: a new read, or one already under way (this was opened before). */
   read: () => Promise<CoachPlan>
   cached: CoachPlan | null
   /** The athlete's swims a week: generating a week waits until it has no more swims than this. */
@@ -110,6 +116,8 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
   const first = coachName.replace(/^Coach\s+/i, "")
   const [plan, setPlan] = useState<CoachPlan | null>(cached)
   const [readError, setReadError] = useState<string | null>(null)
+  // The read was refused for want of tokens (reading a plan costs a token a session): the way on is the token store.
+  const [outOfTokens, setOutOfTokens] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [step, setStep] = useState(0)
   const [weekStart, setWeekStart] = useState<string | null>(() => (cached ? startingWeek(cached.sessions, today) : null))
@@ -135,12 +143,12 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
   const movedOn = useRef(false)
   const panel = useRef<HTMLDivElement>(null)
 
-  // The reply's sessions: a read usually already under way since the reply came (it's kept going if this closes, so
-  // opening it again is instant).
+  // The reply's sessions, read as this opens (it's kept going if this closes, so opening it again is instant).
   useEffect(() => {
     if (plan) return
     let live = true
     setReadError(null)
+    setOutOfTokens(false)
     setStep(0)
     read().then((result) => {
       if (!live) return
@@ -148,7 +156,9 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
       setWeekStart(startingWeek(result.sessions, todayISO()))
       onRead(result)
     }).catch((failure: unknown) => {
-      if (live) setReadError(failure instanceof Error ? failure.message : `${first}'s plan couldn't be read just now. Please try again.`)
+      if (!live) return
+      setOutOfTokens(failure instanceof TokensNeeded)
+      setReadError(failure instanceof Error ? failure.message : `${first}'s plan couldn't be read just now. Please try again.`)
     })
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -351,14 +361,23 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
 
           {readError && (
             <div role="alert" className="flex flex-col items-center px-6 py-16 text-center">
-              <span className="grid h-14 w-14 place-items-center rounded-2xl border border-amber-300/25 bg-amber-300/10"><AlertTriangle className="h-7 w-7 text-amber-200" /></span>
-              <p className="mt-4 text-lg font-semibold text-white">This plan couldn&apos;t be added</p>
+              <span className="grid h-14 w-14 place-items-center rounded-2xl border border-amber-300/25 bg-amber-300/10">
+                {outOfTokens ? <Coins className="h-7 w-7 text-amber-200" /> : <AlertTriangle className="h-7 w-7 text-amber-200" />}
+              </span>
+              <p className="mt-4 text-lg font-semibold text-white">{outOfTokens ? "Not enough tokens for this plan" : "This plan couldn't be added"}</p>
               <p className="mt-2 max-w-md text-sm leading-6 text-slate-300">{readError}</p>
               <div className="mt-6 flex flex-wrap justify-center gap-2">
-                <button type="button" onClick={() => { setReadError(null); setAttempt((value) => value + 1) }}
-                  className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100">
-                  <RotateCcw className="h-4 w-4" />Try again
-                </button>
+                {outOfTokens ? (
+                  <button type="button" onClick={openTokenStore}
+                    className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100">
+                    <Coins className="h-4 w-4" />Get tokens
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => { setReadError(null); setAttempt((value) => value + 1) }}
+                    className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-100">
+                    <RotateCcw className="h-4 w-4" />Try again
+                  </button>
+                )}
                 <button type="button" onClick={close} className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/[0.06]">
                   Back to chat
                 </button>

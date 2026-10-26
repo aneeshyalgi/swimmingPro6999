@@ -822,7 +822,8 @@ export default function DashboardPage() {
           onChat={() => { setCoachSwitcherOpen(false); setSwitchReturn(null); openCoachChat(false) }} />
       )}
       {chatOpen && (
-        <CoachChat userKey={userKey} coaches={coaches} call={coachChat.call} origin={coachChat.origin} draft={coachChat.draft} swimsPerWeek={userData.swimSessionsPerWeek} onClose={closeCoachChat}
+        <CoachChat userKey={userKey} coaches={coaches} call={coachChat.call} origin={coachChat.origin} draft={coachChat.draft} swimsPerWeek={userData.swimSessionsPerWeek}
+          planCost={tokens?.available ? tokens.costs.find((cost) => cost.action === "coach_plan")?.tokens ?? null : null} onClose={closeCoachChat}
           onTrainingAdded={trainingAdded} onOpenTraining={openTraining} />
       )}
       {userKey && (

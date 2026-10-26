@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject } from "react"
 import {
-  ArrowDown, AudioLines, CalendarClock, Check, ChevronRight, Coins, CreditCard, Dumbbell, Flag, Gift, History, Info,
+  ArrowDown, AudioLines, CalendarClock, CalendarPlus, Check, ChevronRight, Coins, CreditCard, Dumbbell, Flag, Gift, History, Info,
   Loader2, MessageCircle, RefreshCw, ShieldCheck, Sparkles, Undo2, Video, Wand2, Waves, Zap, type LucideIcon,
 } from "lucide-react"
 import { Reveal, useTween } from "@/components/dashboard-ui"
@@ -24,6 +24,7 @@ type Spend = TokenBalance["recent"][number]
 const FEATURES: Record<string, { does: string; many: string; icon: LucideIcon; color: string }> = {
   coach_chat: { does: "A message to your coach", many: "coach messages", icon: MessageCircle, color: "#57e5ea" },
   voice_reply: { does: "Each reply on a voice call", many: "call replies", icon: AudioLines, color: "#a78bfa" },
+  coach_plan: { does: "Adding a session from your coach's plan", many: "plan sessions", icon: CalendarPlus, color: "#67e8f9" },
   swim_week: { does: "Generating a swim week", many: "swim weeks", icon: Waves, color: "#38bdf8" },
   swim_replan: { does: "Re-planning a swim week", many: "re-plans", icon: RefreshCw, color: "#2dd4bf" },
   gym_week: { does: "Planning a gym week", many: "gym weeks", icon: Dumbbell, color: "#fb923c" },

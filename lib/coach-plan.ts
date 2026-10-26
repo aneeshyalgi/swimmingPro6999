@@ -49,8 +49,9 @@ export type TrainingTarget = { tab: "week" | "library"; weekStart: string }
 export const readCoachPlan = (body: { reply: string; request: string; spoken: boolean }, signal?: AbortSignal) =>
   trainingRequest("/coach-plan/read", coachPlanSchema, { body, signal })
 
-// Reads by reply (the chat message's id), started as soon as the reply arrives: opening it then shows the plan straight
-// away, or waits on the read already under way. A failed read is forgotten, so opening it again tries again.
+// Reads by reply (the chat message's id), started when the athlete opens it to add (reading costs a token a session,
+// app/tokens.py, so nothing is read they didn't ask for): opening it again shows the plan straight away, or waits on the
+// read already under way. A failed read is forgotten, so opening it again tries again.
 const reads = new Map<string, Promise<CoachPlan>>()
 export function readPlanFor(id: string, body: { reply: string; request: string; spoken: boolean }): Promise<CoachPlan> {
   let read = reads.get(id)

@@ -398,6 +398,11 @@ class ReadPlanTests(unittest.TestCase):
         self.patch(training, "best_pace", return_value=None)
         self.patch(training, "generate_structured", side_effect=self.generate)
         self.save = self.patch(training, "save_record")
+        # The athlete's tokens (tests/test_tokens.py tests what reading a plan costs), and no reply read before.
+        self.patch(tokens, "require", return_value=None)
+        self.patch(tokens, "charge", return_value=None)
+        coach_plan._reads.clear()
+        self.addCleanup(coach_plan._reads.clear)
 
     def patch(self, target, name, **options):
         patcher = patch.object(target, name, **options)

@@ -723,6 +723,97 @@ class RacePlanTests(TokensCase):
         self.save.assert_not_called()
 
 
+class CoachPlanTests(TokensCase):
+    """A coach's plan from the chat, read into sessions for the athlete's weeks: a token a session, paid once."""
+
+    def setUp(self):
+        super().setUp()
+        from app import coach_plan
+        from tests.test_coach_plan import GYM, OUTLINE, REPLY, SWIM
+        self.client = TestClient(app)
+        self.reply = REPLY
+        self.copies = {coach_plan.PlanOutline: OUTLINE, coach_plan.CoachSwim: SWIM, coach_plan.CoachGym: GYM}
+        self.failing: set = set()
+        self.calls = []
+        self.patch(coach_plan, "get_authenticated_profile", return_value=dict(PROFILE))
+        self.patch(training, "athlete_brief", return_value={"main_events": PROFILE["main_events"]})
+        self.patch(training, "best_pace", return_value=None)
+        self.patch(training, "generate_structured", side_effect=self.generate)
+        coach_plan._reads.clear()
+        self.addCleanup(coach_plan._reads.clear)
+        self.reads = coach_plan._reads
+
+    def generate(self, profile, schema, objective, check=None, **options):
+        self.calls.append(schema.__name__)
+        if schema in self.failing:
+            raise HTTPException(status_code=502, detail=training.GENERATION_FAILED)
+        return schema.model_validate(self.copies[schema]), []
+
+    def read(self):
+        return self.client.post("/api/training/coach-plan/read", headers=HEADERS, json={"reply": self.reply, "request": "Plan my week"})
+
+    def test_a_plan_costs_a_token_a_session_and_is_paid_for_once(self):
+        response = self.read()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["sessions"]), 2)
+        self.assertEqual((self.db.spent(), self.db.balance()), ([("coach_plan", 2)], tokens.MONTHLY_TOKENS - 2))
+        calls = len(self.calls)
+        # Opened again: the same sessions at once, with no tokens or AI work.
+        again = self.read()
+        self.assertEqual(again.json(), response.json())
+        self.assertEqual((len(self.calls), self.db.spent()), (calls, [("coach_plan", 2)]))
+        # Read again after the server forgot it (a restart): the work is done again, but it's never paid for twice.
+        self.reads.clear()
+        self.assertEqual(self.read().status_code, 200)
+        self.assertGreater(len(self.calls), calls)
+        self.assertEqual((self.db.spent(), self.db.balance()), ([("coach_plan", 2)], tokens.MONTHLY_TOKENS - 2))
+        # Another reply is another plan.
+        self.reply += "\nKeep it relaxed."
+        self.assertEqual(self.read().status_code, 200)
+        self.assertEqual(self.db.spent(), [("coach_plan", 2), ("coach_plan", 2)])
+
+    def test_without_a_token_nothing_is_read(self):
+        self.patch(tokens, "MONTHLY_TOKENS", new=0)
+        response = self.read()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["tokens"], {"needed": 1, "balance": 0, "renews_at": RENEWS})
+        self.assertEqual((self.calls, self.db.spent()), ([], []))
+
+    def test_without_enough_for_every_session_none_is_copied_or_paid_for(self):
+        self.patch(tokens, "MONTHLY_TOKENS", new=1)
+        response = self.read()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["tokens"]["needed"], 2)
+        self.assertEqual(self.calls, ["PlanOutline"])                  # the split found them; nothing was copied
+        self.assertEqual((self.db.spent(), self.db.balance()), ([], 1))
+
+    def test_a_session_that_cant_be_copied_isnt_paid_for(self):
+        from app import coach_plan
+        self.failing = {coach_plan.CoachGym}
+        response = self.read()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([item["reason"] for item in response.json()["skipped"]], ["unreadable"])
+        self.assertEqual((self.db.spent(), self.db.balance()), ([("coach_plan", 1)], tokens.MONTHLY_TOKENS - 1))
+
+    def test_a_plan_that_cant_be_read_costs_nothing(self):
+        from app import coach_plan
+        self.failing = {coach_plan.CoachSwim, coach_plan.CoachGym}
+        self.assertEqual(self.read().status_code, 502)
+        self.assertEqual((self.db.spent(), self.db.balance()), ([], tokens.MONTHLY_TOKENS))
+        self.assertEqual(self.reads, {})
+
+    def test_a_reply_with_no_sessions_costs_nothing(self):
+        from app import coach_plan
+        self.copies[coach_plan.PlanOutline] = {"title": "Advice", "sessions": []}
+        self.assertEqual(self.read().status_code, 422)
+        self.assertEqual(self.db.spent(), [])
+
+    def test_an_account_without_tokens_reads_plans_free(self):
+        self.db.account = SimpleNamespace(created_at=OLDER_ACCOUNT, user_metadata={})
+        self.assertEqual(self.read().status_code, 200)
+        self.assertEqual(self.db.calls, [])
+
+
 class VideoAnalysisTests(TokensCase):
     def setUp(self):
         super().setUp()

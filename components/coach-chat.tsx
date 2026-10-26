@@ -44,6 +44,7 @@ import {
 import { randomId } from "@/lib/training"
 import { readPlanFor, type AddedSession, type CoachPlan, type PlanKind, type TrainingTarget } from "@/lib/coach-plan"
 import { TokensNeeded, openTokenStore, tokensChanged, tokensNeededIn } from "@/lib/token-events"
+import { tokenCount } from "@/lib/tokens"
 
 type Message = {
   id: string
@@ -195,7 +196,7 @@ function CoachAvatar({ name, size = "md", live }: { name: string; size?: "sm" | 
  * A reply that prescribes sessions, typed or said on a call, can be added to the athlete's swim and gym weeks
  * (CoachPlanSheet): `onTrainingAdded` says what was added, and `onOpenTraining` takes the athlete to where it went.
  */
-export function CoachChat({ userKey, coaches, call = false, origin, draft, swimsPerWeek, onClose, onTrainingAdded, onOpenTraining }: {
+export function CoachChat({ userKey, coaches, call = false, origin, draft, swimsPerWeek, planCost = null, onClose, onTrainingAdded, onOpenTraining }: {
   userKey: string
   coaches: string[]
   call?: boolean
@@ -204,6 +205,8 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
   draft?: string
   /** The athlete's swims a week (from onboarding). */
   swimsPerWeek: number
+  /** Tokens a session of the coach's plan costs to add to the athlete's weeks; null when they don't use tokens. */
+  planCost?: number | null
   onClose: () => void
   onTrainingAdded: (added: AddedSession[]) => void
   onOpenTraining: (target: TrainingTarget) => void
@@ -450,7 +453,6 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
       const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, sync: "pending" }
       setThreads((prev) => ({ ...prev, [coach]: [...answered(prev[coach] ?? [], sentId), reply] }))
       tokensChanged()
-      if (reply.plan) prefetchPlan(coach, reply, text)
     } catch (error) {
       const outOfTokens = error instanceof TokensNeeded
       if (!outOfTokens) console.error("Coach chat failed:", error)
@@ -486,10 +488,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
       const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, voice: true, sync: "pending" }
       setThreads((prev) => ({ ...prev, [coach]: [...answered(prev[coach] ?? [], userMessage.id), reply] }))
       tokensChanged()
-      if (reply.plan) {
-        setCallPlan({ id: reply.id, kind: reply.plan })
-        prefetchPlan(coach, reply, text)
-      }
+      if (reply.plan) setCallPlan({ id: reply.id, kind: reply.plan })
       return result.content
     } catch (problem) {
       if (signal.aborted && signal.reason === CONTINUED) {
@@ -517,13 +516,6 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
   }
   const updateMessage = (coach: string, id: string, change: Partial<Message>) =>
     setThreads((prev) => ({ ...prev, [coach]: (prev[coach] ?? []).map((message) => (message.id === id ? { ...message, ...change } : message)) }))
-  /** A reply that prescribes sessions is read into them as soon as it arrives, so adding it opens straight away; the
-   *  sessions are kept on the reply. A failed read is simply tried again when the athlete opens it. */
-  function prefetchPlan(coach: string, reply: Message, request: string) {
-    readPlanFor(reply.id, { reply: reply.content, request, spoken: !!reply.voice })
-      .then((plan) => updateMessage(coach, reply.id, { planDraft: plan }))
-      .catch(() => { /* read again when it's opened */ })
-  }
   const planThread = planFor ? threads[planFor.coach] ?? [] : []
   const planIndex = planFor ? planThread.findIndex((message) => message.id === planFor.messageId) : -1
   const planMessage = planIndex >= 0 ? planThread[planIndex] : null
@@ -838,7 +830,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
                           <div className="rounded-2xl rounded-tl-md border border-white/[0.08] bg-[linear-gradient(160deg,rgba(24,36,46,0.85),rgba(12,18,25,0.9))] px-4 py-3.5 shadow-[0_10px_30px_rgba(0,0,0,0.25)] backdrop-blur-md">
                             <ChatMarkdown content={message.content} />
                           </div>
-                          {message.plan && <PlanCallout kind={message.plan} added={message.planAdded} onOpen={() => openPlan(message)} />}
+                          {message.plan && <PlanCallout kind={message.plan} added={message.planAdded} cost={planCost} onOpen={() => openPlan(message)} />}
                           <div className="vs-meta mt-2 flex flex-wrap items-center gap-1">
                             <button
                               type="button"
@@ -864,6 +856,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
                               <button
                                 type="button"
                                 onClick={() => openPlan(message)}
+                                title={planCost && !message.planAdded ? `${tokenCount(planCost)} a session` : undefined}
                                 className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-white/[0.05] hover:text-slate-200"
                               >
                                 <CalendarPlus className="h-3.5 w-3.5" />
@@ -1056,7 +1049,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
       </AlertDialog>
       {conversation && (
         <CoachConversation key={activeCoach} coach={activeCoach} coachName={coachName} origin={conversation.origin} ask={converse}
-          planOffer={callPlan && { id: callPlan.id, label: planLabel(callPlan.kind) }}
+          planOffer={callPlan && { id: callPlan.id, label: `${planLabel(callPlan.kind)}${planCost ? ` · ${tokenCount(planCost)} a session` : ""}` }}
           onAddPlan={() => {
             planAfterCall.current = callPlan?.id ?? null
             // The call closes into the chat, which the plan opens over.
@@ -1084,7 +1077,10 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
       {planFor && planMessage && (
         <CoachPlanSheet key={`${planFor.messageId}:${planFor.fresh}`} coach={planFor.coach} coachName={getCoachDisplayName(planFor.coach)}
           read={() => readPlanFor(planFor.messageId, { reply: planMessage.content, request: planRequest, spoken: !!planMessage.voice })
-            .then((plan) => (planFor.fresh ? withNewIds(plan) : plan))}
+            .then((plan) => {
+              tokensChanged()   // reading it costs a token a session (once per reply)
+              return planFor.fresh ? withNewIds(plan) : plan
+            })}
           cached={planCached} swimsPerWeek={swimsPerWeek}
           onRead={(plan) => updateMessage(planFor.coach, planFor.messageId, { planDraft: plan })}
           onAdded={(added) => {

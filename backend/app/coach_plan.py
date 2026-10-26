@@ -13,10 +13,13 @@ and generating or re-planning a week works around it instead of replacing it.
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import logging
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
@@ -25,7 +28,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from app import gym, training
+from app import gym, tokens, training
 from app.auth import get_authenticated_profile
 from app.coach_programs import EFFORT_WORDS, INTENSITY_COLOURS, program_for
 from app.context import athlete_coach
@@ -581,6 +584,32 @@ def single_session(reply: str) -> Literal["swim", "gym"] | None:
     return kind
 
 
+# A reply read into sessions, kept READS_KEPT seconds by athlete and reply: opening it again (another tap, a reload)
+# shows it straight away, without its tokens or AI work again. At most KEPT_READS of them, the oldest let go first.
+READS_KEPT = 24 * 3600
+KEPT_READS = 300
+_reads: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_reads_lock = threading.Lock()
+
+
+def _read_before(key: tuple[str, str]) -> dict[str, Any] | None:
+    with _reads_lock:
+        kept = _reads.get(key)
+    if kept is None or kept[0] <= time.monotonic():
+        return None
+    return json.loads(json.dumps(kept[1]))
+
+
+def _remember_read(key: tuple[str, str], plan: dict[str, Any]) -> None:
+    now = time.monotonic()
+    with _reads_lock:
+        for stale in [item for item, (expires, _) in _reads.items() if expires <= now]:
+            del _reads[stale]
+        while len(_reads) >= KEPT_READS:
+            del _reads[min(_reads, key=lambda item: _reads[item][0])]
+        _reads[key] = (now + READS_KEPT, json.loads(json.dumps(plan)))
+
+
 @router.post("/read")
 def read_plan(request: PlanRead, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """The sessions in a coach's reply, each in the app's own format and with any day the reply gives it, ready to put on
@@ -588,8 +617,18 @@ def read_plan(request: PlanRead, authorization: str | None = Header(default=None
 
     The reply is split into its sessions while (for a reply that most likely holds one) that session is already being
     copied out whole: the split confirms it, so one session is ready about as soon as its copy. Sessions are copied at
-    the same time, and one that can't be is listed in `skipped` (with any the coach only named) rather than failing the rest."""
+    the same time, and one that can't be is listed in `skipped` (with any the coach only named) rather than failing the rest.
+
+    It costs a token a session (app/tokens.py), charged once the split has found them and given back for any that can't
+    be copied; an athlete without a token isn't read for at all. A reply read before comes back as it was read, with no
+    tokens or AI work (READS_KEPT), and its tokens are never charged twice, even when it has to be read again."""
     profile = get_authenticated_profile(authorization)
+    read_key = hashlib.sha256(f"{int(request.spoken)}\n{request.reply}".encode()).hexdigest()[:40]
+    remembered = (str(profile["id"]), read_key)
+    earlier = _read_before(remembered)
+    if earlier is not None:
+        return earlier
+    tokens.require(profile, "coach_plan")
     coach = athlete_coach(profile)
     pieces = reply_pieces(request.reply)
     main_events = profile.get("main_events") or []
@@ -732,35 +771,50 @@ When the reply has no complete session, return no sessions.""",
         kept = [session for session in outline.sessions if prescribed(session.kind, _excerpt(pieces, session.pieces))]
         if not kept:
             raise HTTPException(status_code=422, detail=NO_SESSION)
+        # A token for each session, as their copying starts (app/tokens.py); given back for the ones that can't be copied.
+        receipt = tokens.charge(profile, "coach_plan", len(kept), ref=read_key)
 
         def copy(session: OutlineSession) -> dict[str, Any]:
             # A title that only says the kind of session ("Swim Session") is left for the copy to give, from the sets it sees.
             title = None if generic_title(session.title) else session.title
             return write(session.kind, title, session.day, _excerpt(pieces, session.pieces), len(kept) == 1)
 
-        # The split agrees the reply is one session of the kind guessed: its early copy is it.
-        futures = ([early] if early is not None and len(kept) == 1 and kept[0].kind == guess
-                   else [executor.submit(copy, session) for session in kept])
         sessions, failures = [], []
-        for session, future in zip(kept, futures):
-            try:
+        try:
+            # The split agrees the reply is one session of the kind guessed: its early copy is it.
+            futures = ([early] if early is not None and len(kept) == 1 and kept[0].kind == guess
+                       else [executor.submit(copy, session) for session in kept])
+            for session, future in zip(kept, futures):
                 try:
-                    result = future.result()
-                except HTTPException:
-                    if future is not early:
+                    try:
+                        result = future.result()
+                    except HTTPException:
+                        if future is not early:
+                            raise
+                        result = copy(session)    # the early copy failed: copied again from the split's own pieces
+                    # An early copy takes the split's title, unless that only says the kind of session: its own then stays.
+                    sessions.append((_titled(result, session.title, session.day) if not generic_title(session.title)
+                                     else {**result, "day": session.day}) if future is early else result)
+                except HTTPException as exc:
+                    if exc.status_code not in (502, 503):
                         raise
-                    result = copy(session)    # the early copy failed: copied again from the split's own pieces
-                # An early copy takes the split's title, unless that only says the kind of session: its own then stays.
-                sessions.append((_titled(result, session.title, session.day) if not generic_title(session.title)
-                                 else {**result, "day": session.day}) if future is early else result)
-            except HTTPException as exc:
-                if exc.status_code not in (502, 503):
-                    raise
-                failures.append(exc)
-                skipped.append({"kind": session.kind, "title": session.title, "day": session.day, "reason": "unreadable"})
-        if not sessions:
-            raise failures[0]
-        return {"title": outline.title, "coach": coach, "sessions": sessions, "skipped": skipped}
+                    failures.append(exc)
+                    skipped.append({"kind": session.kind, "title": session.title, "day": session.day, "reason": "unreadable"})
+            if not sessions:
+                raise failures[0]
+        except BaseException:
+            tokens.give_back(receipt)
+            raise
+        if failures and receipt is not None:
+            # Only the sessions copied are paid for.
+            tokens.give_back(receipt)
+            try:
+                tokens.charge(profile, "coach_plan", len(sessions), ref=f"{read_key}:{len(sessions)}")
+            except tokens.OutOfTokens:
+                logger.warning("A coach's plan's copied sessions couldn't be charged after a part failed; they're free")
+        plan = {"title": outline.title, "coach": coach, "sessions": sessions, "skipped": skipped}
+        _remember_read(remembered, plan)
+        return plan
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 

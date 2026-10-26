@@ -8,11 +8,12 @@ everyone; what's left of a month's tokens ends with it, never carried over. Toke
 last BOUGHT_MONTHS months from purchase and aren't refundable. Spending takes the tokens that run out first.
 
 Each AI feature costs COSTS[action] tokens, charged as its AI work starts (charge), never for a request refused before
-then: a reply from the coach (typed, or said on a voice call), generating or re-planning a week, a week coach message,
-race plans, a video analysis. If the work then fails (an error, running out of time, the athlete leaving before their
-week is saved), the tokens go back (give_back). Every charge has its own id, made here and never taken from the
-browser (one reused there would get AI work for free), so the database client's retry of a dropped call can't charge
-twice.
+then: a reply from the coach (typed, or said on a voice call), a coach's plan from the chat read into sessions for the
+athlete's weeks (a token a session), generating or re-planning a week, a week coach message, race plans, a video
+analysis. If the work then fails (an error, running out of time, the athlete leaving before their week is saved), the
+tokens go back (give_back). Every charge has its own id, made here and never taken from the browser (one reused there
+would get AI work for free), so the database client's retry of a dropped call can't charge twice; a coach's plan is the
+one charge whose id comes from what it is (the reply), so reading the same reply again is never paid for twice.
 
 The balance lives in the database, where one call checks and spends it, so two tabs can't spend the same tokens. Until
 the migration has run, or with TOKENS_ENABLED off, every feature is free, exactly as before; and a moment when the token
@@ -53,12 +54,13 @@ TOKENS_TERMS = "2026-10-26"
 CHANGEOVER = timedelta(days=7)
 # What each AI feature costs, and what the athlete's token history calls it.
 COSTS = {
-    "coach_chat": 1, "voice_reply": 1, "swim_week": 10, "swim_replan": 6, "gym_week": 4, "week_coach": 3,
+    "coach_chat": 1, "voice_reply": 1, "coach_plan": 1, "swim_week": 10, "swim_replan": 6, "gym_week": 4, "week_coach": 3,
     "race_plan": 4, "video_analysis": 5, "daily_plan": 3,
 }
 LABELS = {
     "coach_chat": "Message to your coach",
     "voice_reply": "Coach's reply on a call",
+    "coach_plan": "Coach's plan for your weeks",
     "swim_week": "Swim week generated",
     "swim_replan": "Swim week re-planned",
     "gym_week": "Gym week planned",
@@ -240,14 +242,16 @@ def _rpc(name: str, params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def charge(profile: dict[str, Any], action: str) -> Receipt | None:
-    """Spends `action`'s tokens for the athlete (`profile`: a paid one) as its AI work starts. Returns a receipt, to
-    give_back() if the work then fails, or None when tokens are off or the athlete's account doesn't use them (the
-    request is free). Raises OutOfTokens, with nothing spent, when the athlete doesn't have enough."""
+def charge(profile: dict[str, Any], action: str, count: int = 1, ref: str | None = None) -> Receipt | None:
+    """Spends `count` times `action`'s tokens for the athlete (`profile`: a paid one) as its AI work starts. Returns a
+    receipt, to give_back() if the work then fails, or None when tokens are off or the athlete's account doesn't use them
+    (the request is free). Raises OutOfTokens, with nothing spent, when the athlete doesn't have enough. `ref`: what the
+    request is, for one that may come again and is paid for once (a coach's plan, by its reply); otherwise each charge
+    gets a new id."""
     if not available() or not uses_tokens(profile):
         return None
-    tokens = COSTS[action]
-    ref = f"{action}:{uuid4()}"
+    tokens = COSTS[action] * count
+    ref = f"{action}:{ref or uuid4()}"
     user_id = str(profile["id"])
     try:
         result = _rpc("swimgpt_spend_tokens", {"p_user": user_id, "p_ref": ref, "p_action": action, "p_amount": tokens,
@@ -257,6 +261,22 @@ def charge(profile: dict[str, Any], action: str) -> Receipt | None:
     if not result.get("ok"):
         raise OutOfTokens(tokens, int(result.get("balance") or 0), result.get("renews_at"))
     return Receipt(user_id, ref, action, tokens)
+
+
+def require(profile: dict[str, Any], action: str, count: int = 1) -> None:
+    """Raises OutOfTokens, spending nothing, when the athlete hasn't `count` times `action`'s tokens: checked before AI
+    work whose cost is known only once it has begun (a coach's plan, a token a session), so it doesn't run for someone
+    who can't pay for any of it. Free as charge() is: tokens off, an account that doesn't use them, or tokens that
+    can't be read just now."""
+    if not available() or not uses_tokens(profile):
+        return
+    try:
+        data = _rpc("swimgpt_tokens", {"p_user": str(profile["id"]), "p_monthly": MONTHLY_TOKENS})
+    except _Unavailable:
+        return
+    balance = sum(int(lot.get("remaining") or 0) for lot in data.get("lots") or [] if isinstance(lot, dict))
+    if balance < COSTS[action] * count:
+        raise OutOfTokens(COSTS[action] * count, balance, data.get("period_end"))
 
 
 def give_back(receipt: Receipt | None) -> None:
