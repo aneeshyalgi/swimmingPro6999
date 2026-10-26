@@ -8,7 +8,7 @@ from unittest.mock import patch
 from app.coach_catalog import COACHES
 from app.coach_programs import PROGRAMS, TOTAL_ERRATA, estimated_volume, session_volume, swim_order
 from app.context import chat_context
-from app.swim_planner import assign_week, main_strokes, taper_meet
+from app.swim_planner import assign_week, main_stroke, main_strokes, taper_meet, uses_main_stroke
 from app.today import SwimSession, SwimSet
 from app.training import template_swim_issues, template_volume_band
 
@@ -144,6 +144,32 @@ class SwimPlannerTests(unittest.TestCase):
         self.assertEqual(main_strokes(["100m Butterfly", "50m Freestyle"]), ["Butterfly", "Freestyle"])
         self.assertEqual(main_strokes(["400m IM"]), ["Butterfly", "Backstroke", "Breaststroke", "Freestyle"])
 
+    def test_a_race_pace_session_is_swum_in_the_stroke_of_the_athletes_event_at_its_distance(self):
+        events = ["50m Freestyle", "50m Backstroke", "100m Breaststroke"]
+        self.assertEqual(main_stroke("100 Race Pace", events, 0), ("Breaststroke", "100m Breaststroke"))
+        # Several events at the distance take turns, week by week; any other session is the first main stroke.
+        self.assertEqual([main_stroke("50 Race Pace", events, turn) for turn in (0, 1, 2)],
+                         [("Freestyle", "50m Freestyle"), ("Backstroke", "50m Backstroke"), ("Freestyle", "50m Freestyle")])
+        self.assertEqual(main_stroke("Power", events, 1), ("Freestyle", None))
+        self.assertEqual(main_stroke("50 Pace", ["100m Butterfly", "50m Breaststroke"], 0), ("Breaststroke", "50m Breaststroke"))
+        # No event at the distance, or only an IM there: the first main stroke.
+        self.assertEqual(main_stroke("100 Race Pace", ["50m Freestyle"], 0), ("Freestyle", None))
+        self.assertEqual(main_stroke("200 Pace", ["200m IM", "100m Backstroke"], 0), ("Butterfly", None))
+
+    def test_the_week_says_what_ms_is_in_each_session_that_uses_it(self):
+        events = ["50m Freestyle", "50m Backstroke", "100m Breaststroke"]
+        week = assign_week("Coach Brad", date(2026, 12, 7), 6, events=events)
+        hundred = next(item for item in week if item.session.type == "100 Race Pace")
+        self.assertEqual((hundred.stroke, hundred.event), ("Breaststroke", "100m Breaststroke"))
+        self.assertIn("For this athlete: MS is Breaststroke, for the 100m Breaststroke.", hundred.render())
+        self.assertTrue(all(item.stroke is None for item in week if not uses_main_stroke(item.session)))
+        self.assertEqual([item.label for item in week], [item.label for item in assign_week("Coach Brad", date(2026, 12, 7), 6)])
+        # Without the athlete's events nothing is said, and "MS" stays their first main stroke.
+        self.assertTrue(all(item.stroke is None and item.event is None for item in assign_week("Coach Brad", date(2026, 12, 7), 6)))
+        # "MS #1" names one of the athlete's strokes in order, not the session's main stroke.
+        self.assertFalse(uses_main_stroke(next(item for item in PROGRAMS["pete"].sessions if item.type == "100 Pace" and item.number == 1)))
+        self.assertTrue(uses_main_stroke(next(item for item in PROGRAMS["brad"].sessions if item.type == "100 Race Pace" and item.number == 3)))
+
 
 class AdaptedSessionCheckTests(unittest.TestCase):
     def swim(self, *sets):
@@ -247,6 +273,34 @@ class SwimWeekGenerationTests(unittest.TestCase):
         self.assertRegex(long_swim["title"], r"#\d \(Coach Robert\)$")
         self.assertEqual(long_swim["event"], "200m IM")
         self.assertEqual(long_swim["equipment"], ["Fins"])
+
+    def test_a_race_pace_swim_is_written_in_the_stroke_of_the_event_it_trains(self):
+        from app import training
+
+        self.profile = {**self.profile, "main_events": ["50m Freestyle", "50m Backstroke", "100m Breaststroke"], "swimmer_type": "sprinter",
+                        "swim_sessions_per_week": 6, "session_duration": "60", "recommended_coaches": ["Coach Brad"]}
+        calls, saved = self.run_week()
+        hundred = next(item for item in assign_week("Coach Brad", self.monday, 6, events=self.profile["main_events"])
+                       if item.session.type == "100 Race Pace")
+        self.assertEqual(hundred.event, "100m Breaststroke")
+        writing = [(schema, prompt) for schema, prompt in calls if hundred.render() in prompt
+                   and schema in (training.PlannedSwim, training.SwimHeader, training.SwimPart)]
+        self.assertTrue(writing)
+        for schema, prompt in writing:
+            if schema is not training.SwimHeader:
+                self.assertIn("\"MS\" means the athlete's main stroke for this session (Breaststroke)", prompt)
+            if schema is not training.SwimPart:
+                self.assertRegex(prompt, r"[Ee]vent`? (?:to )?\"100m Breaststroke\"|- event: \"100m Breaststroke\"")
+        # Saved with that event, whatever the writing gave (the stub gives none).
+        on = re.search(r"for \w+ (\d{4}-\d{2}-\d{2})", writing[0][1]).group(1)
+        [swim] = next(day["swims"] for day in saved["plan"]["days"] if day["date"] == on)
+        self.assertEqual(swim["event"], "100m Breaststroke")
+        self.assertEqual({swim["event"] for day in saved["plan"]["days"] for swim in day["swims"]} - {None},
+                         {"50m Freestyle", "100m Breaststroke"})
+        # The day it's on is planned knowing it, and every call of the week has it in the week's layout.
+        day = next(prompt for schema, prompt in calls if schema is training.DayPlan and hundred.render() in prompt)
+        self.assertIn("For this athlete: MS is Breaststroke, for the 100m Breaststroke.", day)
+        self.assertTrue(all(f"{hundred.label} (MS is Breaststroke, for the 100m Breaststroke)" in prompt for _, prompt in calls))
 
     def test_a_swim_whose_parts_dont_add_up_is_written_whole(self):
         from app import training

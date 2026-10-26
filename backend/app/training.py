@@ -530,8 +530,10 @@ def listed_lines(lines: list[Any], keep: dict[bool, float]) -> str:
     return "\n".join(rows)
 
 
-def adaptation_rules(strokes: list[str], pool: int) -> str:
-    """How a coach's lines become sets: the same for a swim written whole and one written in parts."""
+def adaptation_rules(strokes: list[str], pool: int, main: str | None = None) -> str:
+    """How a coach's lines become sets: the same for a swim written whole and one written in parts. `main`: what the
+    session's "MS" is for the athlete (SwimAssignment.stroke: a race-pace session's is the stroke of the event it
+    trains); their first main stroke without one."""
     return f"""- Keep every set as the coach wrote it: the same distances, repetitions, rounds, send-offs/rest, efforts and equipment.
   One line becomes one set (rounds x repetitions x distance_meters); split a line only when it mixes strokes or distances.
   A line inside a "N rounds:" block is repeated N times: give its set rounds = N. A line "Nx(A, B)" repeats the whole group
@@ -542,7 +544,7 @@ def adaptation_rules(strokes: list[str], pool: int) -> str:
   differ (1st round pull, 2nd kick), write the ladder once per round. A repetition written "A/B" swims both parts:
   "4x25 MAX/25 easy" is 4 x 50 m (25 MAX + 25 easy), 200 m.
 - name: the section and what the set is, e.g. "Warm-Up: Loosen", "Main-Set: 15 m dives".
-- "MS" means the athlete's main stroke ({strokes[0]}); "MS #1/#2/#3" are {", ".join(strokes[:3])} in that order (repeat the best stroke if
+- "MS" means the athlete's main stroke for this session ({main or strokes[0]}); "MS #1/#2/#3" are {", ".join(strokes[:3])} in that order (repeat the best stroke if
   they have fewer). Pull, IMO, FRIM, Dive, uw, FES, BES and the other terms mean exactly what the coach's explanations say.
 - Intensity: map each colour/effort word to a training zone from {json.dumps(ZONES)} (WHITE Aerobic, PINK Threshold, RED/ORANGE
   VO2 / high aerobic, BLUE Race pace, GREEN/PURPLE/MAX/BLAST Sprint, SUBMAX/FAST/STRONG Race pace, easy/Loosen/Choice Recovery);
@@ -1745,6 +1747,11 @@ def _session_title(assignment: SwimAssignment) -> str:
     return f"{assignment.session.type} #{assignment.session.number} ({assignment.coach.name})"
 
 
+def _described(assignment: SwimAssignment) -> str:
+    """A swim's coach session as the week's layout names it, with the stroke it's swum in for the athlete."""
+    return f"{assignment.label} ({assignment.focus})" if assignment.focus else assignment.label
+
+
 def build_week(profile, week_start: date) -> dict[str, Any]:
     """Generate and save the athlete's swim week (returns the saved week unchanged when it was already generated)."""
     existing = week_view(profile, week_start)
@@ -1812,7 +1819,8 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     # Which coach session each swim is: the coach's own weekly order and sessions (taper sessions near A/B meets).
     swim_slots = [(day, index) for day in week_days if day.isoformat() not in fixed_dates for index in range(swim_plan.get(day, 0))]
     tapering = taper_meet(competitions(profile), week_start)
-    assignments = dict(zip(swim_slots, assign_week(athlete_coach(profile), week_start, len(swim_slots), tapering is not None)))
+    assignments = dict(zip(swim_slots, assign_week(athlete_coach(profile), week_start, len(swim_slots), tapering is not None,
+                                                   profile.get("main_events") or [])))
 
     layout = []
     for day in week_days:
@@ -1820,7 +1828,7 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
         if day.isoformat() in fixed_dates:
             layout.append(label + "already planned; keep the preserved plan for this date unchanged.")
             continue
-        sessions_today = [assignments[(day, index)].label for index in range(swim_plan.get(day, 0)) if (day, index) in assignments]
+        sessions_today = [_described(assignments[(day, index)]) for index in range(swim_plan.get(day, 0)) if (day, index) in assignments]
         parts = [f"exactly {swim_plan[day]} generated swim{'s' if swim_plan[day] != 1 else ''} ({'; '.join(sessions_today)})" if swim_plan[day] else "no generated swim"]
         if day.isoformat() in own:
             parts.append(own[day.isoformat()])
@@ -1882,7 +1890,10 @@ def _write_week(profile, week_start: date, phase: str | None, layout: list[str],
     grounding = build_grounding(profile, f"{phase} weekly swim training plan for {', '.join(main_events)}", program=(
         f"=== {program.name} PROGRAM ===\n{render_overview(program)}",
         [item.label for item in week_sessions]) if program and week_sessions else None)
-    adapt = adaptation_rules(strokes, pool)
+
+    def event_rule(assignment: SwimAssignment) -> str:
+        """The swim's `event`: the one a race-pace session trains, otherwise the athlete's event the session targets."""
+        return f'"{assignment.event}"' if assignment.event else f"one of {json.dumps(main_events)} the session targets, otherwise null"
 
     job = week_jobs.current()
     week_jobs.checkpoint()
@@ -1929,7 +1940,7 @@ Plan {layout[week_days.index(day)]}
         if len(parts) > 1:
             swim = write_in_parts(day, assignment, parts, title, others, keep, check_swim)
             if swim is not None:
-                return SwimSession.model_validate(swim.model_dump())
+                return SwimSession.model_validate({**swim.model_dump(), "event": assignment.event or swim.event})
         cut = min(keep.values()) < 0.97
         swim, _ = generate_structured(profile, PlannedSwim, f"""{week_context}
 Write swim {index + 1} for {day:%A} {day} by adapting this exact session from the athlete's coach{f" (the day's other swim is {others[0]})" if others else ""}.
@@ -1941,14 +1952,14 @@ Its lines and what to do with each: keep it exactly as written (every round and 
 
 How to adapt it (keep the coach's session; never replace it with a different workout):
 - Keep the sections in order.
-{adapt}
+{adaptation_rules(strokes, pool, assignment.stroke)}
 - Fit the athlete: estimated_duration_minutes at most {max_minutes} and total distance {low}-{high} m. If the session is longer,
   shorten warm-up, pre-set and warm-down first, then reduce main-set rounds or repetitions; never change what the main set trains.
 - A Gym section belongs to the Gym week: leave it out of the sets and mention it in `notes`. Put the coach's rules that apply in `notes`
   (e.g. Pete's failure rule, Timothy's full-rest rule).
-- Title: "{title}". Set `event` to one of {json.dumps(main_events)} the session targets, otherwise null.""",
+- Title: "{title}". Set `event` to {event_rule(assignment)}.""",
             check=check_swim, attempts=3, grounding=grounding, max_tokens=5000, job=job)
-        return SwimSession.model_validate(swim.model_dump())
+        return SwimSession.model_validate({**swim.model_dump(), "event": assignment.event or swim.event})
 
     def write_in_parts(day: date, assignment, parts, title: str, others: list[str], keep: dict[bool, float],
                        check_swim) -> SwimSession | None:
@@ -1956,6 +1967,7 @@ How to adapt it (keep the coach's session; never replace it with a different wor
         session's cut decided (`keep`). None when the joined swim has a real problem: it's then written whole."""
         other_swim = f" (the day's other swim is {others[0]})" if others else ""
         intro = f"Swim for {day:%A} {day}: this exact session from the athlete's coach, adapted to them{other_swim}."
+        adapt = adaptation_rules(strokes, pool, assignment.stroke)
         targets = part_targets(parts, keep)
         # The athlete's time shared out by metres, so the parts' estimates add up to no more than it (as a whole swim's does).
         budgets = [max(2, int(max_minutes * target / sum(targets))) for target in targets]
@@ -2003,7 +2015,7 @@ lines, in order, and nothing else. {fit}
 Its sets are written separately, at the same time. Write only:
 - objective: 1-2 sentences on what this session trains for this athlete and their events.
 - notes: the coach's rules that apply to it (e.g. Pete's failure rule, Timothy's full-rest rule){"; say its Gym section is in the Gym week" if gym else ""}; empty when none apply.
-- event: one of {json.dumps(main_events)} the session targets, otherwise null."""
+- event: {event_rule(assignment)}."""
         with ThreadPoolExecutor(max_workers=len(parts) + 1) as part_pool:
             header_future = part_pool.submit(generate_structured, profile, SwimHeader, header_prompt, grounding=grounding,
                                              max_tokens=500, job=job)
@@ -2025,7 +2037,7 @@ Its sets are written separately, at the same time. Write only:
         # Each part's time is held to its share of the athlete's time, so the swim fits it as a whole one must.
         minutes = sum(min(piece.estimated_minutes, budget) for piece, budget in zip(pieces, budgets))
         try:
-            swim = SwimSession(title=title, objective=header.objective, event=header.event, notes=header.notes,
+            swim = SwimSession(title=title, objective=header.objective, event=assignment.event or header.event, notes=header.notes,
                                estimated_duration_minutes=max(10, min(180, minutes)),
                                main_training_zones=sorted(zones, key=lambda zone: zones[zone], reverse=True)[:3],
                                equipment=list(dict.fromkeys(gear for item in sets for gear in item.equipment)), sets=sets)
@@ -2160,7 +2172,8 @@ def replan_week(profile, week_start: date) -> dict[str, Any]:
     swim_slots = [(day, index) for day in planned for index in range(swim_plan[day])]
     tapering = taper_meet(competitions(profile), week_start)
     kept_sessions = [title for info in days for title in info["plan_kept"]]
-    order = assign_week(athlete_coach(profile), week_start, len(kept_sessions) + len(swim_slots), tapering is not None)
+    order = assign_week(athlete_coach(profile), week_start, len(kept_sessions) + len(swim_slots), tapering is not None,
+                        profile.get("main_events") or [])
     left = list(range(len(order)))
     unmatched = 0
     for title in kept_sessions:
@@ -2177,7 +2190,7 @@ def replan_week(profile, week_start: date) -> dict[str, Any]:
         if info["locked"]:
             layout.append(label + "already planned; keep the preserved plan for this date unchanged.")
             continue
-        sessions_today = [assignments[(day, index)].label for index in range(swim_plan[day]) if (day, index) in assignments]
+        sessions_today = [_described(assignments[(day, index)]) for index in range(swim_plan[day]) if (day, index) in assignments]
         kept = len(info["kept"])
         stays = [f"{kept} swim{'s' if kept != 1 else ''} already planned that stay{'s' if kept == 1 else ''} (do not duplicate {'it' if kept == 1 else 'them'})"] if kept else []
         parts = [f"exactly {swim_plan[day]} generated swim{'s' if swim_plan[day] != 1 else ''} ({'; '.join(sessions_today)})" if swim_plan[day] else "no generated swim"]

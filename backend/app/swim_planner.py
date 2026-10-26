@@ -7,6 +7,7 @@ The AI then adapts each chosen session to the athlete (main stroke, pace, pool, 
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
@@ -25,6 +26,8 @@ class SwimAssignment:
     coach: CoachProgram
     session: Session
     taper: bool
+    stroke: str | None = None    # what the session's "MS" (main stroke) is for the athlete; None when it doesn't use one
+    event: str | None = None     # the athlete's event a race-pace session trains
 
     @property
     def label(self) -> str:
@@ -34,8 +37,16 @@ class SwimAssignment:
     def volume(self) -> int:
         return session_volume(self.session)
 
+    @property
+    def focus(self) -> str:
+        """The stroke it's swum in for the athlete ("MS is Breaststroke, for the 100m Breaststroke"), or "" without one."""
+        if not self.stroke:
+            return ""
+        return f"MS is {self.stroke}{f', for the {self.event}' if self.event else ''}"
+
     def render(self) -> str:
-        return render_session(self.coach, self.session, self.taper)
+        session = render_session(self.coach, self.session, self.taper)
+        return f"{session}\n  For this athlete: {self.focus}." if self.stroke else session
 
 
 def taper_meet(competitions: list[dict[str, Any]], week_start: date) -> dict[str, Any] | None:
@@ -45,8 +56,10 @@ def taper_meet(competitions: list[dict[str, Any]], week_start: date) -> dict[str
     return min(meets, key=lambda meet: meet["date"]) if meets else None
 
 
-def assign_week(coach_name: str, week_start: date, swims: int, taper: bool = False) -> list[SwimAssignment]:
-    """The coach session for each of the week's swims, in the coach's weekly order."""
+def assign_week(coach_name: str, week_start: date, swims: int, taper: bool = False,
+                events: list[str] | None = None) -> list[SwimAssignment]:
+    """The coach session for each of the week's swims, in the coach's weekly order, with what its "MS" is for an athlete
+    with these main `events` (left to the athlete's first main stroke without them)."""
     coach = program_for(coach_name)
     if coach is None or swims <= 0:
         return []
@@ -59,8 +72,32 @@ def assign_week(coach_name: str, week_start: date, swims: int, taper: bool = Fal
         pool = coach.sessions_of(kind, taper)
         use_taper = taper and any(item.type == kind for item in coach.taper)
         session = pool[(week_number + occurrence) % len(pool)]
-        assignments.append(SwimAssignment(coach, session, use_taper))
+        stroke, event = main_stroke(kind, events, week_number + occurrence) if events and uses_main_stroke(session) else (None, None)
+        assignments.append(SwimAssignment(coach, session, use_taper, stroke, event))
     return assignments
+
+
+# A session type that trains one race distance ("50 Race Pace", "100 Pace"), and "MS" on its own: not "MS #1", which
+# names one of the athlete's strokes in order.
+_RACE_DISTANCE = re.compile(r"^(\d+)\s+(?:race\s+)?pace$", re.IGNORECASE)
+_MS = re.compile(r"\bMS\b(?!\s*#)")
+
+
+def uses_main_stroke(session: Session) -> bool:
+    return any(_MS.search(line) for section in session.sections for line in section.lines)
+
+
+def main_stroke(kind: str, events: list[str], turn: int) -> tuple[str, str | None]:
+    """What a session's "MS" is for the athlete, and the event it trains: a race-pace session is swum in the stroke of
+    the athlete's event at its distance ("100 Race Pace" for a 100m Breaststroke swimmer is breaststroke), taking turns
+    week by week (`turn`) between several; any other session in their first main stroke."""
+    race = _RACE_DISTANCE.match(kind.strip())
+    distance = f"{race.group(1)}m " if race else None
+    racing = [event for event in events if distance and event.startswith(distance) and not event.endswith(" IM")]
+    if racing:
+        event = racing[turn % len(racing)]
+        return event.split(" ", 1)[1], event
+    return main_strokes(events)[0], None
 
 
 def session_parts(session: Session, size: int = 5) -> list[tuple[SessionLine, ...]]:
