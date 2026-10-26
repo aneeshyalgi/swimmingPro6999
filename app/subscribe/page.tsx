@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { CoachAvatar } from "@/components/coach-avatar"
 import { StartNowConsent } from "@/components/legal/start-now-consent"
+import { TermsCheckbox } from "@/components/legal/terms-update"
 import { Tilt } from "@/components/plan-store/plan-cover"
 import { WaterBubbles } from "@/components/water-bubbles"
 import { supabase } from "@/lib/supabase"
@@ -28,6 +29,8 @@ type Screen = {
   offer: Offer
   // The tokens the subscription includes every month for the AI features (absent from a backend from before tokens).
   monthly_tokens?: number | null
+  // An account made before tokens agrees to the Terms with them before it subscribes (backend/app/consents.py).
+  terms_required?: boolean
   coach: { name: string; title: string; inspired_by: string | null } | null
   program: {
     headline: string | null
@@ -110,6 +113,9 @@ function SubscribeContent() {
   // The box to tick before paying, asking for the plan to start straight away; tries to pay without it point to it.
   const [startNow, setStartNow] = useState(false)
   const [startNowAttempt, setStartNowAttempt] = useState(0)
+  // And, for an account made before tokens, the box agreeing to the Terms with them.
+  const [termsAgreed, setTermsAgreed] = useState(false)
+  const [termsAttempt, setTermsAttempt] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -159,10 +165,10 @@ function SubscribeContent() {
 
   const startCheckout = async () => {
     if (!screen || starting) return
-    if (!startNow) {
-      setStartNowAttempt((count) => count + 1)
-      return
-    }
+    const termsMissing = screen.terms_required === true && !termsAgreed
+    if (termsMissing) setTermsAttempt((count) => count + 1)
+    if (!startNow) setStartNowAttempt((count) => count + 1)
+    if (termsMissing || !startNow) return
     setStarting(true)
     setCheckoutError("")
     try {
@@ -171,7 +177,8 @@ function SubscribeContent() {
       const response = await fetch(`${API_URL}/api/payments/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ auth_user_id: session.user.id, user_key: screen.user_key, plan_id: plansOf(screen, planId).chosen.id, start_now: true }),
+        body: JSON.stringify({ auth_user_id: session.user.id, user_key: screen.user_key, plan_id: plansOf(screen, planId).chosen.id, start_now: true,
+          accept_terms: termsAgreed }),
       })
       // Already paid (an earlier checkout went through, or this email already has a subscription): nothing to charge.
       if (response.status === 409) {
@@ -366,8 +373,12 @@ function SubscribeContent() {
                       ))}
                     </ul>
 
+                    {screen.terms_required && (
+                      <TermsCheckbox checked={termsAgreed} onChange={setTermsAgreed} attempt={termsAttempt} disabled={starting}
+                        className="mt-7 rounded-2xl border border-white/[0.08] bg-black/25 p-4" />
+                    )}
                     <StartNowConsent kind="subscription" checked={startNow} onChange={setStartNow} attempt={startNowAttempt} disabled={starting}
-                      className="mt-7 rounded-2xl border border-white/[0.08] bg-black/25 p-4" />
+                      className={cn("rounded-2xl border border-white/[0.08] bg-black/25 p-4", screen.terms_required ? "mt-3" : "mt-7")} />
 
                     {checkoutError && (
                       <div key={errorKey} role="alert" className="au-shake mt-4 flex items-start gap-2.5 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">

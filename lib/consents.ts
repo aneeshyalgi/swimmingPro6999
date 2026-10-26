@@ -14,3 +14,13 @@ export const loadConsents = (signal?: AbortSignal) => apiRequest("/consents", co
 export const agreeToHealthUse = () => apiRequest("/consents/health", consentsSchema, { method: "POST" })
 /** Withdrawing deletes the Mind and Nutrition answers, check-ins and water log. */
 export const withdrawHealthConsent = () => apiRequest("/consents/health", consentsSchema, { method: "DELETE" })
+
+// GET /api/consents/terms: an account made before tokens is asked to agree to the Terms with them (`required`), or, having
+// said no, has its subscription end at `ends_at`.
+const termsSchema = z.object({ required: z.boolean(), declined: z.boolean(), ends_at: z.string().nullable(), version: z.string() })
+export type TermsState = z.infer<typeof termsSchema>
+
+export const loadTermsState = (signal?: AbortSignal) => apiRequest("/consents/terms", termsSchema, { signal })
+/** Agreeing to the Terms shown (`version`) starts tokens; not agreeing ends the subscription at the end of its billing
+ *  period. Refused (409) if the Terms changed since. */
+export const answerTerms = (version: string, agree: boolean) => apiRequest("/consents/terms", termsSchema, { body: { version, agree } })

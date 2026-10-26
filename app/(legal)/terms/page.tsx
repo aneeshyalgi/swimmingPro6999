@@ -121,7 +121,7 @@ const sections: LegalSection[] = [
     body: (
       <>
         <p>SwimGPT&apos;s AI features use tokens: messages and voice calls with your coach, generating and re-planning your swim and gym weeks, the week re-planner, race plans and video analysis. How many tokens each one uses is shown in the Token store in your dashboard. Tokens are taken when the AI starts working. If it then fails, or you leave before a generated week is saved, they are given back automatically. When you don&apos;t have enough tokens for something, it doesn&apos;t run and nothing is taken.</p>
-        <p>Tokens apply to accounts created on or after 26 October 2026. If you created your account before then, your subscription includes the AI features without tokens, as before.</p>
+        <p>Tokens apply to accounts created on or after 26 October 2026, and to accounts created before then once their owner agrees to these Terms. If you created your account before then and don&apos;t agree, your subscription ends at the end of its current billing period; until then it includes the AI features without tokens, as before.</p>
         <h3>Monthly tokens</h3>
         <p>Your subscription includes tokens every month. How many is shown on the payment screen and in the Token store. They are added on the 26th of each month and can be used until the next 26th. Monthly tokens you haven&apos;t used by then expire; they don&apos;t carry over to the next month.</p>
         <h3>Buying tokens</h3>
@@ -131,7 +131,7 @@ const sections: LegalSection[] = [
           <li>Tokens can only be used for SwimGPT&apos;s AI features, and only while your subscription is active. Bought tokens still expire 2 months after you buy them.</li>
           <li>Tokens have no cash value. They can&apos;t be paid out, exchanged, sold or moved to another account.</li>
           <li>Bought tokens are not refunded, except under your statutory rights. Your right of withdrawal for them ends once they are added (see <a href="#withdrawal">Your right of withdrawal</a>). Unused tokens expire when your account is deleted.</li>
-          <li>We may change how many tokens a feature uses, how many tokens your subscription includes each month, or the token packs, where there is a valid reason, such as a change in the cost of the AI models we use. Tokens you&apos;ve already bought keep their 2 months. If a change affects your subscription more than slightly, we tell you in advance, and you can end your subscription free of charge as described under <a href="#availability">Availability and changes to SwimGPT</a>.</li>
+          <li>We may change how many tokens a feature uses, how many tokens your subscription includes each month, or the token packs, where there is a valid reason, such as a change in the cost of the AI models we use. Tokens you&apos;ve already bought keep their 2 months. If you are a consumer living in the European Union and a change affects your subscription more than slightly, we tell you in advance, and you can end your subscription free of charge as described under <a href="#availability">Availability and changes to SwimGPT</a>.</li>
         </ul>
       </>
     ),
@@ -143,7 +143,7 @@ const sections: LegalSection[] = [
       <>
         <p>You can cancel your subscription at any time in the app (Subscription → Cancel subscription), or by email{OPERATOR.email ? <> to <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a></> : <> (see our <Link href="/legal-notice">Legal notice</Link>)</>}. The cancellation takes effect at the end of the current billing period (for a yearly plan after its first term, see <a href="#subscriptions">Renewal</a>). Until then you keep full access, and you can change your mind. We confirm your cancellation in the app, or by reply if you cancelled by email.</p>
         <p>Payments already made are not refunded, except under your statutory rights (in particular your <a href="#withdrawal">right of withdrawal</a>) or as described for yearly plans above.</p>
-        <p>We may end a subscription with at least one month&apos;s notice to the end of a billing period, for example if we stop offering SwimGPT, and refund any amount you&apos;ve paid for the time after. Both of us may end the contract without notice for good cause (§ 314 BGB), for example if you seriously breach these Terms.</p>
+        <p>We may end a subscription at the end of any billing period by telling you at least 14 days before. Both of us may end the contract without notice for good cause (§ 314 BGB), for example if you seriously breach these Terms.</p>
       </>
     ),
   },
@@ -221,7 +221,7 @@ const sections: LegalSection[] = [
     body: (
       <>
         <p>We aim to keep SwimGPT available around the clock, but maintenance, updates and outages at our providers can cause interruptions. We provide the updates needed to keep SwimGPT working as agreed (§ 327f BGB).</p>
-        <p>We may change SwimGPT where there is a valid reason, such as technical development, new features, security or legal requirements, at no extra cost to you, and we will tell you clearly about the change. If a change affects your access or use more than slightly, we will tell you in advance, and you may end the contract free of charge within 30 days (§ 327r BGB).</p>
+        <p>We may change SwimGPT where there is a valid reason, such as technical development, new features, security or legal requirements, at no extra cost to you, and we will tell you clearly about the change. If you are a consumer living in the European Union and a change affects your access or use more than slightly, we will tell you in advance, and you may end the contract free of charge within 30 days (§ 327r BGB).</p>
       </>
     ),
   },
@@ -274,7 +274,7 @@ const sections: LegalSection[] = [
     body: (
       <>
         <p>German law applies, excluding the UN Convention on Contracts for the International Sale of Goods. If you are a consumer, you also keep the protection of the mandatory rules of the country where you normally live.</p>
-        <p>If you are a consumer living outside the European Union, the German statutory rules on the right of withdrawal (§§ 312g and 355 ff. BGB) do not apply to your contract; whether you can withdraw from it is governed solely by the law of the country where you live.</p>
+        <p>If you are a consumer living outside the European Union, the German statutory rules on the right of withdrawal (§§ 312g and 355 ff. BGB) and on ending the contract because SwimGPT changes (§ 327r BGB) do not apply to your contract; whether you can withdraw from it or end it because of a change is governed solely by the law of the country where you live.</p>
         <p>If you are a merchant, a legal entity under public law or a special fund under public law, the courts at our place of business have exclusive jurisdiction.</p>
         <p>We are neither obliged nor willing to take part in dispute resolution proceedings before a consumer arbitration board (§ 36 VSBG).</p>
       </>

@@ -189,6 +189,8 @@ class CheckoutSessionRequest(BaseModel):
     plan_id: str
     # The athlete ticked the box to have their plan start straight away (app/withdrawal.py).
     start_now: bool = False
+    # An account made before tokens ticked the box agreeing to the Terms that brought them in (app/consents.py).
+    accept_terms: bool = False
 
 
 class CheckoutSessionResponse(BaseModel):

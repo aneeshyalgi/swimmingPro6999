@@ -4,8 +4,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+import stripe
 
-from app import consents
+from app import consents, tokens
 from app.consents import LEGAL_VERSION, Guardian
 from app.main import app
 from app.schemas import OnboardingSubmission
@@ -76,6 +77,101 @@ class ConsentApiTests(unittest.TestCase):
         deletes.eq.assert_called_with("session_type", "athlete_feedback")
         self.assertIsNone(self.saved[-1]["health"]["given_at"])
         self.assertTrue(self.saved[-1]["health"]["withdrawn_at"])
+
+
+class TermsAnswerTests(unittest.TestCase):
+    """An account made before tokens is asked once to agree to the Terms with them: agreeing starts its tokens, not
+    agreeing ends its subscription at the end of the billing period."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self.terms = None
+        self.saved = []
+        self.new = False
+        self.subscription = {"manageable": True, "cancel_at_period_end": False, "period_end": "2026-11-20T09:00:00+00:00"}
+        self.stripe = MagicMock(side_effect=self.stripe_answer)
+        for target, options in [
+            ("app.consents.get_authenticated_profile", {"return_value": PROFILE}),
+            ("app.consents.terms_record", {"side_effect": lambda profile_id: self.terms}),
+            ("app.consents._save_terms", {"side_effect": lambda profile_id, details: self.saved.append(details)}),
+            ("app.tokens.available", {"return_value": True}),
+            ("app.tokens.account_is_new", {"side_effect": lambda profile: self.new}),
+            ("app.payments.subscription_summary", {"new": self.stripe}),
+        ]:
+            patcher = patch(target, **options)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        tokens._agreed.clear()
+        self.addCleanup(tokens._agreed.clear)
+
+    def stripe_answer(self, profile, cancel=None):
+        if cancel is not None:
+            self.subscription = {**self.subscription, "cancel_at_period_end": cancel}
+        return dict(self.subscription)
+
+    def state(self):
+        return self.client.get("/api/consents/terms", headers=HEADERS).json()
+
+    def answer(self, agree, version=LEGAL_VERSION):
+        return self.client.post("/api/consents/terms", headers=HEADERS, json={"version": version, "agree": agree})
+
+    def test_an_older_account_is_asked_and_a_new_one_isnt(self):
+        self.assertEqual(self.state(), {"required": True, "declined": False, "ends_at": None, "version": LEGAL_VERSION})
+        self.new = True
+        self.assertFalse(self.state()["required"])
+
+    def test_with_tokens_off_nobody_is_asked(self):
+        with patch("app.tokens.available", return_value=False):
+            self.assertFalse(self.state()["required"])
+
+    def test_agreeing_is_kept_and_starts_tokens_without_touching_the_subscription(self):
+        state = self.answer(True).json()
+        self.assertEqual((state["required"], state["declined"]), (False, False))
+        self.assertEqual((self.saved[-1]["version"], self.saved[-1]["via"]), (LEGAL_VERSION, "dashboard"))
+        self.assertIn("row-1", tokens._agreed)
+        self.stripe.assert_not_called()
+        self.terms = self.saved[-1]
+        self.answer(True)
+        self.assertEqual(len(self.saved), 1)  # agreeing again changes nothing
+
+    def test_not_agreeing_ends_the_subscription_at_the_end_of_its_billing_period(self):
+        state = self.answer(False).json()
+        self.assertEqual(state, {"required": False, "declined": True, "ends_at": "2026-11-20T09:00:00+00:00", "version": LEGAL_VERSION})
+        self.assertEqual(self.stripe.call_args.kwargs, {"cancel": True})
+        self.assertEqual((self.saved[-1]["cancelled"], self.saved[-1]["ends_at"]), (True, "2026-11-20T09:00:00+00:00"))
+        self.assertNotIn("row-1", tokens._agreed)
+
+    def test_agreeing_after_not_agreeing_keeps_the_subscription_going(self):
+        self.answer(False)
+        self.terms = self.saved[-1]
+        state = self.answer(True).json()
+        self.assertEqual((state["required"], state["declined"]), (False, False))
+        self.assertEqual(self.stripe.call_args.kwargs, {"cancel": False})
+        self.assertFalse(self.subscription["cancel_at_period_end"])
+        self.assertEqual((self.saved[-1]["version"], self.saved[-1]["declined_at"]), (LEGAL_VERSION, self.terms["declined_at"]))
+
+    def test_a_subscription_already_cancelled_stays_cancelled(self):
+        self.subscription["cancel_at_period_end"] = True
+        self.answer(False)
+        self.assertEqual(self.stripe.call_count, 1)  # only looked at
+        self.assertFalse(self.saved[-1]["cancelled"])
+        self.terms = self.saved[-1]
+        self.answer(True)
+        self.assertEqual(self.stripe.call_count, 1)  # agreeing doesn't renew what the athlete cancelled themselves
+        self.assertTrue(self.subscription["cancel_at_period_end"])
+
+    def test_an_answer_to_terms_that_changed_meanwhile_is_refused(self):
+        response = self.answer(True, version="2026-10-19")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.saved, [])
+
+    def test_when_stripe_cant_be_reached_nothing_changes(self):
+        self.stripe.side_effect = stripe.error.APIConnectionError("down")
+        with self.assertLogs("app.consents", level="WARNING"):
+            response = self.answer(False)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(self.saved, [])
+        self.assertTrue(self.state()["required"])
 
 
 class HealthFeaturesTests(unittest.TestCase):

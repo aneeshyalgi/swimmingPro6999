@@ -44,7 +44,7 @@ from app.coach_plan import PLAN_RULES, SPOKEN_PLAN_RULES, plan_kinds, router as 
 from app.week_coach import router as week_coach_router
 from app.stroke_detection import router as stroke_detection_router
 from app.gym import gym_week, router as gym_router
-from app.consents import PARENTAL_CONSENT_AGE, Guardian, record_new_athlete, router as consents_router
+from app.consents import PARENTAL_CONSENT_AGE, Guardian, agree_to_terms, record_new_athlete, router as consents_router, terms_record
 from app.survey import router as survey_router
 from app.tokens import OutOfTokens, router as tokens_router
 from app.payments import PAYMENT_PLANS, adopt_subscription, billing_account, is_paid, record_payment, subscription_summary
@@ -500,6 +500,12 @@ def create_checkout_session(request: CheckoutSessionRequest, authorization: str 
         adopt_subscription(rows[0], existing)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Your coaching plan is already active.")
 
+    # An account made before tokens subscribes only having agreed to the Terms that brought them in (app/consents.py).
+    if tokens.terms_required(user, rows[0]):
+        if not request.accept_terms:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Agree to the updated Terms of Service to start your plan.")
+        agree_to_terms(rows[0]["id"], terms_record(rows[0]["id"]), "checkout")
+
     stripe.api_key = settings.stripe_secret_key
     # One payable checkout per athlete: an earlier one left open (another tab, a double click, the Back button) could
     # otherwise be paid as a second subscription. is_paid() above has already ruled out that it was paid.
@@ -864,9 +870,10 @@ def get_subscription(authorization: str | None = Header(default=None)) -> dict[s
         "offers": offers,
         # The monthly plan alone, for a payment screen that was loaded before yearly billing existed.
         "offer": offers[0],
-        # The tokens a subscription includes every month for the AI features (app/tokens.py), said before paying: only to
-        # an account that uses them.
-        "monthly_tokens": tokens.MONTHLY_TOKENS if tokens.available() and tokens.account_uses_tokens(user) else None,
+        # The tokens a subscription includes every month for the AI features (app/tokens.py), said before paying.
+        "monthly_tokens": tokens.MONTHLY_TOKENS if tokens.available() else None,
+        # An account made before tokens agrees to the Terms that brought them in as it subscribes (app/consents.py).
+        "terms_required": tokens.terms_required(user, row),
         "coach": {"name": fit["name"], "title": fit["title"], "inspired_by": fit["inspired_by"]} if fit else None,
         "program": {
             "headline": (plan.get("coach_match") or {}).get("headline"),

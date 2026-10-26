@@ -1,9 +1,10 @@
 """Tokens: what each AI feature costs, and every athlete's balance (backend/migrations/2026-10-26_add_tokens.sql).
 
-Tokens are only for accounts made under the Terms that brought them in (26 October 2026, uses_tokens): an older
-account keeps every AI feature as part of its subscription, exactly as before, and never sees a token. For the others,
-a subscription comes with MONTHLY_TOKENS tokens a month, renewed on the 26th of each month for everyone; what's left of
-a month's tokens ends with it, never carried over. Tokens bought in the dashboard's token store (PACKS) come on top,
+Tokens are for accounts made under the Terms that brought them in (26 October 2026), and for older accounts once they
+agree to those Terms (uses_tokens; consents.py asks them). An older account that hasn't agreed keeps every AI feature as
+part of its subscription, exactly as before; one that doesn't agree has its subscription end at the end of its billing
+period. A subscription with tokens comes with MONTHLY_TOKENS tokens a month, renewed on the 26th of each month for
+everyone; what's left of a month's tokens ends with it, never carried over. Tokens bought in the dashboard's token store (PACKS) come on top,
 last BOUGHT_MONTHS months from purchase and aren't refundable. Spending takes the tokens that run out first.
 
 Each AI feature costs COSTS[action] tokens, charged as its AI work starts (charge), never for a request refused before
@@ -84,8 +85,13 @@ NOT_SAVED = "Your purchase couldn't be saved to your account just now, so checko
 _missing_until = 0.0
 _settled_at: dict[str, float] = {}
 _settled_lock = threading.Lock()
-# Whether each account (by its Supabase id) uses tokens: it never changes, so it's looked up once.
+# Whether each account (by its Supabase id) was made since tokens began: it never changes, so it's looked up once.
 _accounts: dict[str, bool] = {}
+# Older athletes (by profile id) who agreed to the Terms with tokens: an agreement is never taken back, so it's
+# remembered for good. Until there is one, it's looked up again after a minute (another server may have taken it).
+_agreed: set[str] = set()
+_not_agreed: dict[str, float] = {}
+AGREEMENT_RECHECK_SECONDS = 60.0
 
 
 class _Unavailable(Exception):
@@ -151,8 +157,52 @@ def account_uses_tokens(user: Any) -> bool:
 
 
 def uses_tokens(profile: dict[str, Any]) -> bool:
-    """Whether the athlete's account uses tokens (account_uses_tokens). While it can't be looked up, it doesn't: that
+    """Whether the athlete's account uses tokens: made since they began, or older and agreed to them."""
+    return account_is_new(profile) or has_agreed(profile)
+
+
+def terms_required(user: Any, profile: dict[str, Any]) -> bool:
+    """Whether an account made before tokens (`user`, get_authenticated_user) must agree to the Terms that brought them in
+    before it subscribes."""
+    return available() and not account_uses_tokens(user) and not has_agreed(profile)
+
+
+def has_agreed(profile: dict[str, Any]) -> bool:
+    """Whether the athlete agreed to the Terms with tokens (consents.py). While that can't be read, they haven't: that
     request is free."""
+    from app.consents import agreed_to_tokens, terms_record  # consents imports this module
+    profile_id = str(profile.get("id") or "")
+    if not profile_id:
+        return False
+    if profile_id in _agreed:
+        return True
+    if _not_agreed.get(profile_id, 0.0) > time.monotonic():
+        return False
+    try:
+        agreed = agreed_to_tokens(terms_record(profile_id))
+    except Exception as exc:
+        logger.warning("Tokens: an answer to the Terms couldn't be read (%s)", type(exc).__name__, exc_info=True)
+        return False
+    if agreed:
+        note_agreement(profile_id)
+    else:
+        if len(_not_agreed) > 20000:
+            _not_agreed.clear()
+        _not_agreed[profile_id] = time.monotonic() + AGREEMENT_RECHECK_SECONDS
+    return agreed
+
+
+def note_agreement(profile_id: str) -> None:
+    """The athlete has just agreed to the Terms with tokens (consents.py): theirs begin straight away."""
+    if len(_agreed) > 20000:
+        _agreed.clear()
+    _agreed.add(profile_id)
+    _not_agreed.pop(profile_id, None)
+
+
+def account_is_new(profile: dict[str, Any]) -> bool:
+    """Whether the athlete's account was made since tokens began (account_uses_tokens), looked up once per account. While
+    it can't be looked up, it isn't: that request is free."""
     account = str(profile.get("auth_user_id") or "")
     if not account:
         return False

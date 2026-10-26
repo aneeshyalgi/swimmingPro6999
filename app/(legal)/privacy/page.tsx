@@ -94,7 +94,7 @@ const sections: LegalSection[] = [
     title: "Your account",
     body: (
       <>
-        <p>When you sign up we process your name, email address and password (stored only as a secure hash), when you signed up and signed in, the IP address of sign-in requests, and the version of our Terms and this policy you accepted.</p>
+        <p>When you sign up we process your name, email address and password (stored only as a secure hash), when you signed up and signed in, the IP address of sign-in requests, and the version of our Terms and this policy you accepted (for an account created before 26 October 2026, also whether and when you agreed to the updated Terms).</p>
         <p>We use this to create and run your account, sign you in and send you account emails such as the email confirmation and password resets. The legal basis is our contract with you (Art. 6(1)(b) GDPR); keeping proof of what you accepted is based on our legal obligations and legitimate interest (Art. 6(1)(c) and (f) GDPR).</p>
         <p>Sign-in, the database and file storage are provided by <strong>Supabase, Inc.</strong> (USA) as our processor{OPERATOR.databaseRegion && <>; our database is located in {OPERATOR.databaseRegion}</>}. We keep your account data for as long as your account exists (see <a href="#retention">How long we keep data</a>).</p>
       </>
@@ -182,7 +182,7 @@ const sections: LegalSection[] = [
     title: "Tokens",
     body: (
       <>
-        <p>SwimGPT&apos;s AI features use tokens for accounts created on or after 26 October 2026 (see our <Link href="/terms#tokens">Terms</Link>). For those accounts we keep the tokens you have: each month&apos;s and those you buy, how many are left and until when. We also keep each AI request that used tokens: which feature, how many tokens, when, and whether they were given back. For tokens you buy we keep the pack, the number of tokens, the price, currency, date, payment status and Stripe&apos;s checkout reference.</p>
+        <p>SwimGPT&apos;s AI features use tokens for accounts created on or after 26 October 2026, and for older accounts once their owner agrees to the updated Terms (see our <Link href="/terms#tokens">Terms</Link>). For those accounts we keep the tokens you have: each month&apos;s and those you buy, how many are left and until when. We also keep each AI request that used tokens: which feature, how many tokens, when, and whether they were given back. For tokens you buy we keep the pack, the number of tokens, the price, currency, date, payment status and Stripe&apos;s checkout reference.</p>
         <p>We use this to keep your balance, take and give back tokens, and show you in the Token store where your tokens went. The legal bases are our contract with you (Art. 6(1)(b) GDPR) and, for purchases, our accounting duties (Art. 6(1)(c) GDPR). It is stored with Supabase. We keep each request for 180 days and your tokens until 180 days after they expire; purchase records for as long as your account exists, and the payment record for 10 years (see <a href="#payments">Payments</a>).</p>
       </>
     ),

@@ -45,11 +45,39 @@ class OnboardingPaymentTests(unittest.TestCase):
             ("app.main.get_authenticated_user", {"side_effect": lambda authorization: self.user}),
             # By default the athlete's email has no Stripe customer yet.
             ("app.main.billing_account", {"return_value": (None, None)}),
+            # And an account made before tokens has already agreed to the Terms with them (app/consents.py).
+            ("app.tokens.has_agreed", {"return_value": True}),
+            ("app.main.agree_to_terms", {}),
+            ("app.main.terms_record", {"return_value": None}),
         ]:
             patcher = patch(target, **options)
             mocks[target] = patcher.start()
             self.addCleanup(patcher.stop)
         self.billing = mocks["app.main.billing_account"]
+        self.agreed, self.agree = mocks["app.tokens.has_agreed"], mocks["app.main.agree_to_terms"]
+
+    @patch("app.tokens.available", return_value=True)
+    @patch("app.main.stripe.checkout.Session.create")
+    def test_an_account_made_before_tokens_agrees_to_the_terms_before_subscribing(self, create, available):
+        create.return_value = SimpleNamespace(url="https://checkout.stripe.com/c/pay/test", id="cs_test_1")
+        self.agreed.return_value = False
+        response = self.client.post("/api/payments/checkout", json=self.payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Terms", response.json()["detail"])
+        create.assert_not_called()
+        self.agree.assert_not_called()
+        response = self.client.post("/api/payments/checkout", json={**self.payload, "accept_terms": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.agree.call_args.args, ("row-1", None, "checkout"))
+
+    @patch("app.tokens.available", return_value=True)
+    @patch("app.main.stripe.checkout.Session.create")
+    def test_a_new_account_isnt_asked_again(self, create, available):
+        create.return_value = SimpleNamespace(url="https://checkout.stripe.com/c/pay/test", id="cs_test_1")
+        self.agreed.return_value = False
+        self.user.created_at = datetime(2026, 11, 20, tzinfo=timezone.utc)
+        self.assertEqual(self.client.post("/api/payments/checkout", json=self.payload).status_code, 200)
+        self.agree.assert_not_called()
 
     @patch("app.main.stripe.checkout.Session.create")
     def test_monthly_plan_checks_out_at_14_99_a_month(self, create):
@@ -246,7 +274,9 @@ class OnboardingAccessTests(unittest.TestCase):
                     "pbs_lcm": {}, "pbs_scm": {}, "one_year_goal_times": {}}
         self.plan = {"generation_version": 3, "coach_match": {"headline": "Built for speed"}}
         for target, value in [("app.main.latest_profile_row", lambda user_id: self.row),
-                              ("app.main._current_plan", lambda profile_id: self.plan)]:
+                              ("app.main._current_plan", lambda profile_id: self.plan),
+                              # Hasn't answered the Terms with tokens (app/consents.py).
+                              ("app.tokens.has_agreed", lambda profile: False)]:
             patcher = patch(target, side_effect=value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -286,11 +316,14 @@ class OnboardingAccessTests(unittest.TestCase):
         self.assertEqual(len(program["week"]), 4)
 
     @patch("app.tokens.available", return_value=True)
-    def test_payment_screen_names_the_monthly_tokens_only_to_an_account_that_uses_them(self, available, user):
+    def test_payment_screen_names_the_monthly_tokens_and_asks_an_older_account_to_agree(self, available, user):
+        # Every subscription bought now comes with tokens; an account made before them agrees to the Terms with them.
         user.return_value = SimpleNamespace(id="user-1", created_at=datetime(2025, 3, 1, tzinfo=timezone.utc), user_metadata={})
-        self.assertIsNone(self.get("/api/subscription")["monthly_tokens"])
+        screen = self.get("/api/subscription")
+        self.assertEqual((screen["monthly_tokens"], screen["terms_required"]), (tokens.MONTHLY_TOKENS, True))
         user.return_value = SimpleNamespace(id="user-1", created_at=datetime(2026, 11, 20, tzinfo=timezone.utc), user_metadata={})
-        self.assertEqual(self.get("/api/subscription")["monthly_tokens"], tokens.MONTHLY_TOKENS)
+        screen = self.get("/api/subscription")
+        self.assertEqual((screen["monthly_tokens"], screen["terms_required"]), (tokens.MONTHLY_TOKENS, False))
 
     def test_payment_screen_needs_a_finished_plan(self, user):
         headers = {"Authorization": "Bearer token"}

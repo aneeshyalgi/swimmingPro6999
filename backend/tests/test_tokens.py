@@ -192,12 +192,25 @@ class TokensCase(unittest.TestCase):
         tokens._missing_until = 0.0
         tokens._settled_at.clear()
         tokens._accounts.clear()
+        tokens._agreed.clear()
+        tokens._not_agreed.clear()
         self.addCleanup(setattr, tokens, "_missing_until", 0.0)
-        self.addCleanup(tokens._accounts.clear)
+        for cache in (tokens._accounts, tokens._agreed, tokens._not_agreed):
+            self.addCleanup(cache.clear)
+        # An older athlete's answer to the Terms with tokens (consents.py): none by default.
+        self.terms = None
+        self.terms_reads = 0
         for name, options in [("get_supabase_client", {"return_value": self.db}), ("get_settings", {"return_value": self.settings})]:
             patcher = patch.object(tokens, name, **options)
             patcher.start()
             self.addCleanup(patcher.stop)
+        patcher = patch("app.consents.terms_record", side_effect=self.read_terms)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def read_terms(self, profile_id):
+        self.terms_reads += 1
+        return self.terms
 
     def patch(self, target, name, **options):
         patcher = patch.object(target, name, **options)
@@ -315,6 +328,45 @@ class AccountTests(TokensCase):
         self.db.account_failure = None
         self.assertIsNotNone(tokens.charge(PROFILE, "coach_chat"))
         self.assertEqual(self.db.lookups, ["user-1", "user-1"])
+
+    def test_an_older_account_that_agreed_to_the_terms_uses_tokens(self):
+        self.db.account = self.account(OLDER_ACCOUNT)
+        self.terms = {"version": "2026-10-26", "accepted_at": "2026-10-27T09:00:00+00:00", "via": "dashboard"}
+        self.assertIsNotNone(tokens.charge(PROFILE, "swim_week"))
+        self.assertEqual(self.db.spent(), [("swim_week", 10)])
+        self.terms = {"declined_at": "2026-10-27T09:00:00+00:00", "ends_at": "2026-11-20T09:00:00+00:00", "cancelled": True}
+        tokens._agreed.clear()
+        self.assertIsNone(tokens.charge(PROFILE, "swim_week"))  # not agreeing keeps the AI features as they were
+
+    def test_an_agreement_is_looked_up_again_after_a_minute_and_is_kept_for_good(self):
+        self.db.account = self.account(OLDER_ACCOUNT)
+        self.assertIsNone(tokens.charge(PROFILE, "coach_chat"))
+        self.terms = {"version": "2026-10-26", "accepted_at": "2026-10-27T09:00:00+00:00", "via": "dashboard"}
+        self.assertIsNone(tokens.charge(PROFILE, "coach_chat"))   # this server still knows the athlete hadn't
+        self.assertEqual(self.terms_reads, 1)
+        tokens._not_agreed["row-1"] = 0.0                         # a minute later
+        self.assertIsNotNone(tokens.charge(PROFILE, "coach_chat"))
+        self.terms = None
+        self.assertIsNotNone(tokens.charge(PROFILE, "coach_chat"))
+        self.assertEqual(self.terms_reads, 2)
+
+    def test_agreeing_on_this_server_starts_tokens_at_once(self):
+        self.db.account = self.account(OLDER_ACCOUNT)
+        self.assertIsNone(tokens.charge(PROFILE, "coach_chat"))
+        tokens.note_agreement("row-1")
+        self.assertIsNotNone(tokens.charge(PROFILE, "coach_chat"))
+
+    def test_which_accounts_must_agree_before_subscribing(self):
+        older, new = self.account(OLDER_ACCOUNT), self.account(NEW_ACCOUNT)
+        self.assertTrue(tokens.terms_required(older, PROFILE))
+        self.assertFalse(tokens.terms_required(new, PROFILE))
+        self.terms = {"version": "2026-10-26", "accepted_at": "2026-10-27T09:00:00+00:00", "via": "checkout"}
+        tokens._not_agreed.clear()
+        self.assertFalse(tokens.terms_required(older, PROFILE))
+        self.settings.tokens_enabled = False
+        tokens._agreed.clear()
+        self.terms = None
+        self.assertFalse(tokens.terms_required(older, PROFILE))
 
     def test_a_profile_without_an_account_isnt_charged(self):
         self.assertIsNone(tokens.charge({**PROFILE, "auth_user_id": None}, "coach_chat"))

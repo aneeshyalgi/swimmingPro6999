@@ -52,6 +52,8 @@ import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
 import { Banner } from "@/components/training-ui"
 import { TokenStore, type StoreNotice } from "@/components/token-store"
 import { TokensNeededDialog } from "@/components/tokens-needed-dialog"
+import { TermsEnding, TermsUpdate } from "@/components/legal/terms-update"
+import { loadTermsState, type TermsState } from "@/lib/consents"
 import { useTokens } from "@/hooks/use-tokens"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
 import type { TrainingTarget } from "@/lib/coach-plan"
@@ -163,6 +165,10 @@ export default function DashboardPage() {
   const survey = useSurvey(userKey !== null)
   const { tokens, refresh: refreshTokens } = useTokens(userKey !== null)
   const [storeNotice, setStoreNotice] = useState<StoreNotice>(null)
+  // An account made before tokens is asked to agree to the Terms with them (components/legal/terms-update.tsx); after a
+  // "don't agree", the notice of when its subscription ends can open the question again.
+  const [terms, setTerms] = useState<TermsState | null>(null)
+  const [termsOpen, setTermsOpen] = useState(false)
   // Opens the token store from anywhere (a refused request, a chat message that wasn't answered), closing the chat (and
   // any call in it) on the way.
   const openStore = useRef(() => {})
@@ -271,6 +277,17 @@ export default function DashboardPage() {
     window.addEventListener(OPEN_TOKEN_STORE, open)
     return () => window.removeEventListener(OPEN_TOKEN_STORE, open)
   }, [])
+
+  // Whether this account still has to answer the Terms with tokens. If that can't be checked, nothing is asked: the
+  // next visit asks again.
+  useEffect(() => {
+    if (!userKey) return
+    let live = true
+    loadTermsState()
+      .then((state) => { if (live) setTerms(state) })
+      .catch(() => { /* asked again on the next visit */ })
+    return () => { live = false }
+  }, [userKey])
 
   // The chat has an address, as it did when it was a page: Back and Forward close and reopen it, and a reload (or an old
   // /coach-chat link) opens it once the dashboard has loaded. A call is never redialled by a reload.
@@ -429,11 +446,13 @@ export default function DashboardPage() {
     requestAnimationFrame(() => setGuide("gym-week"))
   }
 
-  const chatOpen = coachChat !== null && userKey !== null && coach !== null
+  const asking = terms?.required === true || termsOpen
+  // Not over the Terms question while it waits for an answer.
+  const chatOpen = coachChat !== null && userKey !== null && coach !== null && !asking
 
   return (
-    // The chat covers the dashboard while it's open, so keyboard focus and screen readers stay inside it.
-    <div inert={chatOpen} className="min-h-screen bg-[#070b10] text-foreground">
+    // The chat (or the Terms question) covers the dashboard while it's open, so keyboard focus and screen readers stay inside it.
+    <div inert={chatOpen || asking} className="min-h-screen bg-[#070b10] text-foreground">
       <div aria-hidden="true" className="pointer-events-none fixed inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(87,229,234,0.10),transparent_50%),radial-gradient(ellipse_at_bottom_left,rgba(56,120,220,0.10),transparent_55%)]" />
       </div>
@@ -691,6 +710,7 @@ export default function DashboardPage() {
             </header>
 
             <div className="mx-auto max-w-7xl px-4 pb-20 pt-6 sm:px-6 lg:px-8 lg:pt-8">
+              {terms?.declined && <TermsEnding endsAt={terms.ends_at} onAgree={() => setTermsOpen(true)} />}
               {activeTab === "overview" ? (
                 <Reveal>
                   <section className="relative mb-6 overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(87,229,234,0.16),rgba(12,20,28,0.94)_42%,rgba(56,120,220,0.12))] p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-8">
@@ -790,6 +810,10 @@ export default function DashboardPage() {
       </Tabs>
       {peek && <GuideSpotlight key={peek} target={peek} onClose={() => setPeek(null)} />}
       <TokensNeededDialog onGetTokens={() => openStore.current()} />
+      {asking && (
+        <TermsUpdate declined={terms?.declined === true} onAnswered={(state) => { setTerms(state); setTermsOpen(false) }}
+          onClose={terms?.required ? undefined : () => setTermsOpen(false)} />
+      )}
       <SubscriptionDialog open={subscriptionOpen} onOpenChange={setSubscriptionOpen} />
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
       {coach && (
