@@ -716,9 +716,6 @@
   12%, 78% { opacity: var(--o, 0.3); }
   100% { transform: translate3d(var(--dx, 0px), -380px, 0) rotate(var(--r, 140deg)); opacity: 0; }
 }
-/* A coin turning over now and then */
-.token-spin { animation: token-spin 7s cubic-bezier(0.65, 0, 0.35, 1) infinite; animation-delay: var(--spin-delay, 1.2s); }
-@keyframes token-spin { 0%, 76% { transform: perspective(480px) rotateY(0deg); } 100% { transform: perspective(480px) rotateY(360deg); } }
 /* A pack's coins dropping onto its stack, and the chosen stack bobbing */
 .token-drop { animation: token-drop 650ms cubic-bezier(0.34, 1.5, 0.5, 1) both; animation-delay: var(--drop-delay, 0ms); }
 @keyframes token-drop { from { opacity: 0; transform: translateY(-24px); } to { opacity: 1; transform: none; } }
@@ -730,18 +727,202 @@
 /* Cards and rows rising into place */
 .token-rise { animation: token-rise 650ms cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: var(--rise-delay, 0ms); }
 @keyframes token-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-/* The wallet's rings drawing round, and today moving along the month */
+/* The wallet's rings drawing round */
 .token-ring { transition: stroke-dashoffset 1600ms cubic-bezier(0.22, 1, 0.36, 1); transition-delay: var(--ring-delay, 0ms); }
-.token-slide { transition: left 1400ms cubic-bezier(0.22, 1, 0.36, 1), width 1400ms cubic-bezier(0.22, 1, 0.36, 1); }
 /* The coin popping in when tokens are added */
 .token-pop { animation: token-pop 900ms cubic-bezier(0.34, 1.6, 0.5, 1) both; }
 @keyframes token-pop { from { opacity: 0; transform: scale(0.2) rotate(-60deg); } to { opacity: 1; transform: none; } }
 
 @media (prefers-reduced-motion: reduce) {
   .token-float { display: none; }
-  .token-spin, .token-drop, .token-bob, .token-twinkle, .token-rise, .token-pop { animation: none; }
+  .token-drop, .token-bob, .token-twinkle, .token-rise, .token-pop { animation: none; }
   .token-twinkle { opacity: 0.8; }
-  .token-ring, .token-slide { transition: none; }
+  .token-ring { transition: none; }
+}
+
+/* The store's stage, panels and packs (ts-*). `--ts-tone` is a panel's colour as "r, g, b", as the coach switcher's tone. */
+@property --ts-spin { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.ts-vault, .ts-panel { box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.7), 0 0 90px -45px rgba(var(--ts-tone), 0.5); }
+.ts-vault {
+  background:
+    radial-gradient(80% 70% at 12% 8%, rgba(var(--ts-tone), 0.16), transparent 62%),
+    radial-gradient(60% 60% at 100% 100%, rgba(245, 158, 11, 0.1), transparent 60%),
+    linear-gradient(160deg, #0c1720, #070c12 55%, #0b1120);
+}
+.ts-panel {
+  background:
+    radial-gradient(110% 60% at 10% 0%, rgba(var(--ts-tone), 0.1), transparent 60%),
+    linear-gradient(165deg, #0d161e, #070c12 62%);
+}
+.ts-edge { background: linear-gradient(90deg, transparent, rgba(var(--ts-tone), 0.85), transparent); opacity: 0.55; }
+.ts-panel-icon {
+  color: rgb(var(--ts-tone)); background: rgba(var(--ts-tone), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--ts-tone), 0.3), 0 0 26px -6px rgba(var(--ts-tone), 0.6);
+}
+/* Light drifting behind the wallet */
+.ts-aurora i { position: absolute; border-radius: 9999px; filter: blur(70px); animation: ts-drift 18s ease-in-out infinite alternate; }
+.ts-aurora i:nth-child(1) { width: 460px; height: 460px; left: -170px; top: -210px; opacity: 0.42; background: radial-gradient(circle, rgba(var(--ts-tone), 0.9), transparent 66%); }
+.ts-aurora i:nth-child(2) { width: 400px; height: 400px; right: -150px; bottom: -230px; opacity: 0.3; background: radial-gradient(circle, rgba(245, 158, 11, 0.8), transparent 66%); animation-duration: 22s; animation-delay: -7s; }
+.ts-aurora i:nth-child(3) { width: 280px; height: 280px; left: 42%; top: 24%; opacity: 0.16; background: radial-gradient(circle, rgba(167, 139, 250, 0.9), transparent 66%); animation-duration: 26s; animation-delay: -12s; }
+@keyframes ts-drift { to { transform: translate(70px, 40px) scale(1.15); } }
+/* The wallet's words rising in, one after another */
+.ts-stagger > * { animation: csw-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 80ms + 150ms); }
+.ts-balance {
+  background: linear-gradient(100deg, #ffffff 30%, #a5f3fc 62%, #fde68a);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.ts-grow { transition: width 1.4s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* The coin's stage: a breathing halo, a spinning arc of light, a dashed orbit and lights riding round */
+.ts-halo {
+  position: absolute; inset: 16%; border-radius: 9999px; filter: blur(34px);
+  background: radial-gradient(circle, rgba(252, 211, 77, 0.5), rgba(var(--ts-tone), 0.28) 46%, transparent 72%);
+  animation: csw-breathe 4.4s ease-in-out infinite;
+}
+.ts-arc {
+  position: absolute; inset: 0; border-radius: 9999px;
+  background: conic-gradient(from var(--ts-spin), transparent 0deg, rgba(var(--ts-tone), 0.95) 70deg, transparent 140deg, rgba(252, 211, 77, 0.9) 220deg, transparent 290deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  animation: ts-spin 6s linear infinite;
+}
+@keyframes ts-spin { to { --ts-spin: 360deg; } }
+.ts-orbit { position: absolute; inset: 3.5%; border-radius: 9999px; border: 1px dashed rgba(var(--ts-tone), 0.22); animation: csw-rotate 50s linear infinite reverse; }
+.ts-sats { position: absolute; inset: 0; animation: csw-rotate 22s linear infinite; }
+.ts-sats span { position: absolute; inset: 0; transform: rotate(var(--a)); }
+.ts-sats span::after {
+  content: ""; position: absolute; left: 50%; top: -3px; width: 6px; height: 6px; margin-left: -3px; border-radius: 9999px;
+  background: #fde68a; box-shadow: 0 0 12px rgba(252, 211, 77, 0.95);
+}
+.ts-sats span:nth-child(even)::after { width: 4px; height: 4px; margin-left: -2px; top: -2px; background: #cffafe; box-shadow: 0 0 10px rgba(87, 229, 234, 0.95); }
+
+/* The coin, turning in 3D: it sways, then flips right round now and then, light glinting across its faces */
+.ts-coin { perspective: 1000px; }
+.ts-coin-body { position: absolute; inset: 0; transform-style: preserve-3d; animation: ts-coin-turn 10s cubic-bezier(0.65, 0, 0.35, 1) infinite; }
+.ts-coin-face, .ts-coin-edge { position: absolute; border-radius: 9999px; }
+.ts-coin-face { inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ts-coin-edge { inset: 2%; background: linear-gradient(90deg, #5c3a0c, #b7791f 22%, #f5c451 50%, #b7791f 78%, #5c3a0c); }
+.ts-coin-shine { position: absolute; inset: 0; overflow: hidden; border-radius: 9999px; }
+.ts-coin-shine::after {
+  content: ""; position: absolute; inset: -10%; mix-blend-mode: overlay;
+  background: linear-gradient(115deg, transparent 38%, rgba(255, 255, 255, 0.6) 50%, transparent 62%);
+  transform: translateX(-120%); animation: ts-shine 5s ease-in-out infinite;
+}
+.ts-coin-shadow {
+  position: absolute; left: 14%; right: 14%; bottom: -16%; height: 12%; border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.6), transparent); filter: blur(3px);
+}
+@keyframes ts-coin-turn {
+  0% { transform: rotateX(12deg) rotateY(-24deg); }
+  32%, 44% { transform: rotateX(6deg) rotateY(24deg); }
+  64% { transform: rotateX(10deg) rotateY(384deg); }
+  100% { transform: rotateX(12deg) rotateY(336deg); }
+}
+@keyframes ts-shine { 0%, 55% { transform: translateX(-120%); } 85%, 100% { transform: translateX(120%); } }
+/* Notes floating beside the coin */
+.ts-chip {
+  animation: csw-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards, ts-float 6s ease-in-out infinite;
+  animation-delay: var(--chip-delay, 600ms), calc(var(--chip-delay, 600ms) + 0.8s);
+}
+@keyframes ts-float { 50% { translate: 0 -8px; } }
+
+/* Buttons: bright, with a light passing over now and then (as the coach switcher's) */
+.ts-cta {
+  position: relative; overflow: hidden; isolation: isolate; color: #04121a;
+  background: linear-gradient(110deg, #d6fdff, #57e5ea 48%, #38bdf8);
+  box-shadow: 0 16px 40px -14px rgba(87, 229, 234, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.ts-cta:hover { transform: translateY(-2px); box-shadow: 0 22px 50px -14px rgba(87, 229, 234, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.6); }
+.ts-cta:active { transform: translateY(0) scale(0.98); }
+.ts-cta:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 3px; }
+.ts-cta::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.65) 50%, transparent 65%);
+  transform: translateX(-120%); animation: csw-sheen 3.6s ease-in-out 1s infinite;
+}
+.ts-cta:disabled { cursor: progress; opacity: 0.85; }
+.ts-cta:disabled:hover { transform: none; }
+
+/* Packs: the chosen one lifts, with a glow of its colour beneath and coins rising off its stage */
+.ts-pack { transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+.ts-pack[data-chosen] { transform: translateY(-6px); }
+.ts-pack-glow {
+  position: absolute; left: 12%; right: 12%; bottom: -16px; height: 40px; border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.55); filter: blur(26px); opacity: 0; transition: opacity 0.5s;
+}
+.ts-pack[data-chosen] .ts-pack-glow { opacity: 0.75; }
+/* A pack's stage: a spotlight falling on the coins, and the lit disc they stand on */
+.ts-spotlight {
+  background: conic-gradient(from 180deg at 50% -12%, transparent 158deg, rgba(var(--accent-rgb), 0.16) 172deg, rgba(255, 255, 255, 0.07) 180deg,
+    rgba(var(--accent-rgb), 0.16) 188deg, transparent 202deg);
+  -webkit-mask: linear-gradient(to bottom, #000 30%, transparent 92%); mask: linear-gradient(to bottom, #000 30%, transparent 92%);
+  opacity: 0.55; transition: opacity 0.6s;
+}
+.ts-pack[data-chosen] .ts-spotlight, .ts-pack:hover .ts-spotlight { opacity: 1; }
+.ts-pedestal {
+  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.5), rgba(var(--accent-rgb), 0.12) 70%, transparent);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.3), 0 0 30px -4px rgba(var(--accent-rgb), 0.55);
+  opacity: 0.6; transition: opacity 0.6s;
+}
+.ts-pack[data-chosen] .ts-pedestal { opacity: 1; }
+.ts-fly { position: absolute; bottom: 34%; left: var(--x); opacity: 0; animation: ts-fly 2.7s ease-out infinite; animation-delay: var(--d, 0s); }
+@keyframes ts-fly {
+  0% { transform: translateY(0) scale(0.5) rotate(0deg); opacity: 0; }
+  20% { opacity: 0.95; }
+  100% { transform: translateY(-96px) scale(1) rotate(220deg); opacity: 0; }
+}
+/* Checkout: a glow of the chosen pack's colour, and arrows running from the balance now to after */
+.ts-checkout {
+  border-color: rgba(var(--ts-tone), 0.24);
+  background: radial-gradient(90% 140% at 0% 0%, rgba(var(--ts-tone), 0.11), transparent 60%), rgba(0, 0, 0, 0.25);
+  transition: border-color 0.6s, background 0.6s;
+}
+.ts-chevrons i {
+  width: 9px; height: 9px; margin: 0 -1px; transform: rotate(45deg);
+  border-top: 2px solid rgba(var(--ts-tone), 0.9); border-right: 2px solid rgba(var(--ts-tone), 0.9);
+  animation: csw-chevron 1.3s ease-in-out infinite;
+}
+.ts-chevrons i:nth-child(2) { animation-delay: 0.15s; }
+.ts-chevrons i:nth-child(3) { animation-delay: 0.3s; }
+
+/* How tokens work: steps joined by a dashed line with light travelling along it */
+.ts-beam { background: repeating-linear-gradient(90deg, rgba(87, 229, 234, 0.35) 0 6px, transparent 6px 12px); }
+.ts-beam i {
+  position: absolute; top: -3px; left: -2%; width: 22px; height: 7px; border-radius: 9999px;
+  background: #a5f3fc; box-shadow: 0 0 14px rgba(87, 229, 234, 0.9);
+  animation: csw-flow 3.2s cubic-bezier(0.5, 0, 0.5, 1) infinite; animation-delay: calc(var(--i, 0) * 1.05s);
+}
+.ts-step {
+  background: linear-gradient(160deg, #0f1c26, #0a1218);
+  box-shadow: inset 0 0 0 1px rgba(87, 229, 234, 0.28), 0 0 34px -10px rgba(87, 229, 234, 0.7);
+}
+
+/* Costs: a light of the feature's colour following the pointer, its icon lighting up */
+.ts-cost { transition: border-color 0.3s, transform 0.3s, background-color 0.3s; }
+.ts-cost:hover { border-color: color-mix(in srgb, var(--c) 38%, transparent); background-color: color-mix(in srgb, var(--c) 5%, transparent); transform: translateY(-2px); }
+.ts-spot { background: radial-gradient(160px circle at var(--sx, 50%) var(--sy, 50%), color-mix(in srgb, var(--c) 22%, transparent), transparent 70%); opacity: 0; transition: opacity 0.35s; }
+.ts-cost:hover .ts-spot { opacity: 1; }
+.ts-orb {
+  color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 30%, transparent); transition: box-shadow 0.3s, transform 0.3s;
+}
+.ts-cost:hover .ts-orb { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent), 0 0 22px -4px var(--c); transform: scale(1.06) rotate(-4deg); }
+
+/* History: the ring's segments drawing round, and a timeline down the requests */
+.ts-seg { transition: stroke-dasharray 1.3s cubic-bezier(0.22, 1, 0.36, 1); transition-delay: var(--seg-delay, 0ms); }
+.ts-timeline { position: relative; }
+.ts-timeline::before {
+  content: ""; position: absolute; left: 18px; top: 18px; bottom: 18px; width: 1px;
+  background: linear-gradient(rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.03));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ts-aurora i, .ts-halo, .ts-arc, .ts-orbit, .ts-sats, .ts-coin-body, .ts-coin-shine::after, .ts-chip, .ts-cta::after,
+  .ts-chevrons i, .ts-beam i, .ts-stagger > * { animation: none; }
+  .ts-coin-body { transform: rotateX(10deg) rotateY(-18deg); }
+  .ts-fly { display: none; }
+  .ts-grow, .ts-pack, .ts-pack-glow, .ts-spotlight, .ts-pedestal, .ts-cost, .ts-seg { transition: none; }
 }
 
 /* ---------- Landing: demo player ---------- */
