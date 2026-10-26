@@ -654,6 +654,55 @@ class SwimCopyCheckTests(unittest.TestCase):
         self.assertEqual(swim_issues(self.swim(sets=[planned_set("Pull", 8, 150)]), None, "8x150 pull (breathe every 3,5,7 by 50) ~4,600 m"), [])
         self.assertEqual(swim_issues(self.swim(sets=[planned_set("Main", 4, 50), planned_set("Ladder", 1, 100)]), None, "4x50 fast\n200, 100, 50 easy"), [])
 
+    def test_a_total_copied_as_a_set_is_left_out(self):
+        # The swim's total made a set of its own: as written, cut down to fit a set ("**2,500 m | ...**" as 250 m), or at
+        # the end. The coach's lines (SWIM's sets) add up to it.
+        lines = "Warm-up: 400 easy\nMain: 8 x 50 sprint\nWarm-down: 200 easy"
+        for total, words in ((planned_set("Session overview", 1, 1000), f"I'd use my 1,000 m session.\n{lines}"),
+                             (planned_set("Monday: Swim", 1, 100), f"## Monday: Swim\n**1,000 m | about 30 minutes**\n{lines}"),
+                             (planned_set("Total", 1, 1000), f"{lines}\nTotal: 1,000 m")):
+            swim = self.swim(sets=[total, *SWIM["sets"]])
+            [issue] = [issue for issue in swim_issues(swim, None, words) if "is the total" in issue]
+            self.assertIsInstance(issue, training.SoftIssue)
+            issue.fix()
+            self.assertEqual([item.name for item in swim.sets], [item["name"] for item in SWIM["sets"]], words)
+        # A part's heading above its lines.
+        swim = self.swim(sets=[planned_set("Warm-Up", 1, 600), planned_set("Warm-Up: Easy", 1, 400), planned_set("Warm-Up: Kick", 4, 50),
+                               planned_set("Main Set: Sprints", 8, 50, "Sprint")])
+        [issue] = swim_issues(swim, None, "**Warm-up — 600 m**\n- 400 easy\n- 4 x 50 kick\n**Main set — 400 m**\n- 8 x 50 sprint")
+        self.assertIn("for that part", issue)
+        issue.fix()
+        self.assertEqual([item.name for item in swim.sets], ["Warm-Up: Easy", "Warm-Up: Kick", "Main Set: Sprints"])
+
+    def test_a_set_that_only_adds_up_like_a_total_stays(self):
+        def issues(sets, words):
+            return [issue for issue in swim_issues(self.swim(sets=sets), None, words) if "is the total" in issue]
+        # A warm-up of the same length as the rest, and a warm-up line that lists more than its own distance.
+        self.assertEqual(issues([planned_set("Warm-Up", 1, 400), planned_set("Main: Fast", 2, 100), planned_set("Main: Kick", 4, 50)],
+                                "Warm-up: 400 m\nMain: 2 x 100 fast, 4 x 50 kick"), [])
+        self.assertEqual(issues([planned_set("Warm-Up", 1, 200), planned_set("Warm-Up: Kick", 4, 25), planned_set("Warm-Up: Drill", 4, 25)],
+                                "Warm-up: 200 m, 4 x 25 kick, 4 x 25 drill"), [])
+        # A total the coach wrote that their lines add up to, with no set of its own.
+        self.assertEqual(issues(SWIM["sets"], "Warm-up: 400 easy\nMain: 8 x 50 sprint\nWarm-down: 200 easy\nTotal: 1,000 m"), [])
+        # A warm-up's first line as long as the rest of it, beside another part's heading of that length.
+        self.assertEqual(issues([planned_set("Warm-up: Freestyle", 1, 300), planned_set("Warm-up: Kick", 1, 200), planned_set("Warm-up: Drill", 1, 50),
+                                 planned_set("Warm-up: Swim", 1, 50), planned_set("Pre-set: Kick", 3, 100)],
+                                "**Warm-up — 600 m**\n- 1 × 300 freestyle\n- 1 × 200 kick\n- 1 × 50 drill\n- 1 × 50 swim\n"
+                                "**Pre-set — 300 m**\n- 3 × 100 kick"), [])
+
+    def test_the_pool_the_coach_mentions_is_not_a_set(self):
+        swim = self.swim(sets=[planned_set("Assumptions", 1, 25), *SWIM["sets"]])
+        words = "Assumptions: a 25 m pool, with fins.\nWarm-up: 400 easy\nMain: 8 x 50 sprint\nWarm-down: 200 easy"
+        [issue] = swim_issues(swim, None, words)
+        self.assertIn("length of the pool", issue)
+        issue.fix()
+        self.assertEqual([item.name for item in swim.sets], [item["name"] for item in SWIM["sets"]])
+        # 25s the coach gives are sets, pool or not.
+        self.assertEqual(swim_issues(self.swim(sets=[planned_set("Main: Sprints", 8, 25)]), None, "In the 25 m pool: 8 x 25 sprint"), [])
+
+    def test_a_distance_written_with_a_thousands_comma_was_given(self):
+        self.assertEqual(swim_issues(self.swim(sets=[planned_set("Main: Steady", 1, 2000)]), None, "2,000 steady freestyle"), [])
+
     def test_one_fifties_are_not_fifties(self):
         [issue] = swim_issues(self.swim(sets=[planned_set("Kick", 1, 50)]), None, "Eight one-fifties pull, then some fast kicks.")
         self.assertIn("didn't give", issue)

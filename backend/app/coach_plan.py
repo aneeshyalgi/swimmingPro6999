@@ -13,6 +13,7 @@ and generating or re-planning a week works around it instead of replacing it.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import re
@@ -265,7 +266,10 @@ def swim_format(strokes: list[str], pool: int, coach: str) -> str:
 - Rests, notes and drills explained in words aren't sets of their own: fold them into the description of the set they belong to.
 - Only a part with a distance the coach gives is a set. A part without one ("finish with some easy swimming", "then a warm-down")
   goes in notes, as the coach said it: never choose a distance yourself.
-- A total the coach states can be off: never add, stretch or trim sets to reach it. The sets are what the coach wrote."""
+- A total isn't a set, and neither is a part's heading above its lines ("Total: 2,350 m", "**2,500 m | about 60 minutes**",
+  "my 1,400 m session", "**Warm-up — 600 m**"): copy the lines, never the total as a set of its own. Nor is the pool the
+  coach mentions ("a 25 m pool"). A total the coach states can be off: never add, stretch or trim sets to reach it. The
+  sets are what the coach wrote."""
 
 
 def reply_pieces(reply: str) -> list[str]:
@@ -341,14 +345,36 @@ _SAID = {12: r"twelve", 15: r"fifteen", 20: r"twenty(?![- ]fives?)", 25: r"twent
          1200: r"1,200|twelve hundred", 1500: r"1,500|fifteen hundred"}
 
 
+# The athlete's pool, as the coach mentions it ("a 25 m pool", "50m long-course pool"): a length, not a distance to swim.
+_POOL = re.compile(r"(?<![\d.])(?:25|50)\s*-?\s*(?:m|metres?|meters?)?\s+(?:long[- ]course\s+|short[- ]course\s+)?pool\b")
+
+
+def _said(meters: int, text: str) -> bool:
+    """Whether the coach wrote or said a distance ("1400", "1,400", "fifties"); `text` in lower case."""
+    return bool(re.search(rf"(?<![\d.])(?:{meters}|{meters:,})(?!\d)", text) or (meters in _SAID and re.search(_SAID[meters], text)))
+
+
+def _leave_out(sets: list[Any], item: Any):
+    """The fix that takes a set back out of the copied sets."""
+    def fix() -> None:
+        sets[:] = [other for other in sets if other is not item]
+    return fix
+
+
 def unsaid_distance_issues(sets: list[Any], excerpt: str) -> list[str]:
-    """Sets whose distance the coach never wrote or said: a distance chosen for a part the coach gave without one."""
+    """Sets whose distance the coach never wrote or said: a distance chosen for a part the coach gave without one. One
+    swim of the athlete's pool, when the coach gave that length only as their pool ("a 25 m pool"), is left out if it stays."""
     text = excerpt.lower()
+    swum = _POOL.sub(" ", text)
     issues = []
     for item in sets:
         meters = item.distance_meters
-        said = re.search(rf"(?<![\d.]){meters}(?!\d)", text) or (meters in _SAID and re.search(_SAID[meters], text))
-        if not said:
+        if _said(meters, swum):
+            continue
+        if _said(meters, text) and item.rounds * item.repetitions == 1:
+            issues.append(training.soft(f"Set '{item.name}' is {meters} m, the length of the pool the coach mentioned, not a set. Leave "
+                                        "it out.", _leave_out(sets, item)))
+        elif not _said(meters, text):
             issues.append(training.soft(f"Set '{item.name}' is {meters} m, a distance the coach didn't give. Use the distance the coach "
                                         "gave for that part; when they gave none, it isn't a set: put it in notes as they said it."))
     return issues
@@ -379,12 +405,70 @@ def ladder_issues(sets: list[Any], excerpt: str) -> list[str]:
     return issues
 
 
+# Metres the coach writes as a total rather than swims ("Total: 2,350 m", "**2,500 m | about 60 minutes**", "my 1,400 m
+# session", "**Warm-up — 600 m**"): no "x" before them and no stroke or effort after them.
+_METRES = re.compile(r"(?<![\d.,])(\d{1,2},\d{3}|\d{3,5})\s*(?:m|metres|meters)\b")
+_TOTAL_WORDS = re.compile(r"total|overall|in all|volume|session|about|approx|around|roughly|≈|~|\|")
+
+
+def _written_totals(text: str) -> list[tuple[int, str]]:
+    """The totals in a swim's words (lower case), each with its line."""
+    totals = []
+    for line in text.replace("×", "x").splitlines():
+        for match in _METRES.finditer(line):
+            after = re.sub(r"^[\s*_)]*(?:of\s+)?", "", line[match.end():])
+            if not re.search(r"\bx\s*\(?\s*$", line[:match.start()]) and not re.match(_SWUM_AS, after) and not _SWIM_TERMS.match(after):
+                totals.append((int(match.group(1).replace(",", "")), line))
+    return totals
+
+
+def _part_of(item: Any) -> str:
+    """The part of the swim a set's name gives ("Warm-Up: Easy swim" is "warmup")."""
+    return re.sub(r"[^a-z]", "", re.split(r"[:—–(]", item.name.lower())[0])
+
+
+def _swum(sets: list[Any]) -> int:
+    return sum(item.rounds * item.repetitions * item.distance_meters for item in sets)
+
+
+def total_issues(sets: list[Any], excerpt: str) -> list[str]:
+    """A total the coach wrote copied as a set of its own, beside the lines that add up to it: the swim's ("my 1,400 m
+    session", "**2,500 m | about 60 minutes**") or a part's (its heading, "**Warm-up — 600 m**", a line of its own above
+    its lines). It's one swim of that total, or of a distance the coach never gave (a total longer than a set can be,
+    cut down to fit), and the coach's other lines add up to the total exactly. It's left out if it stays."""
+    text = excerpt.lower()
+    totals = _written_totals(text)
+    issues = []
+    for index, item in enumerate(sets):
+        if item.rounds * item.repetitions != 1 or not totals:
+            continue
+        others = [other for other in sets if other is not item]
+        following = sets[index + 1:]
+        # The part after it: the sets that follow, while they're in the same part as the first of them.
+        part = list(itertools.takewhile(lambda other: _part_of(other) == _part_of(following[0]), following)) if following else []
+        name = _part_of(part[0]) if part else ""
+        unsaid = not _said(item.distance_meters, text)
+        whole = len(others) >= 2 and any(
+            total == _swum(others) and (item.distance_meters == total or unsaid) and (total >= 1000 or _TOTAL_WORDS.search(line))
+            for total, line in totals)
+        # The part's own heading: a line naming the part, with no number but its total.
+        heading = len(part) >= 2 and bool(name) and (_part_of(item).startswith(name) or name.startswith(_part_of(item))) and any(
+            total == _swum(part) and (item.distance_meters == total or unsaid) and name in re.sub(r"[^a-z]", "", line)
+            and not re.search(r"\d", _METRES.sub("", line)) for total, line in totals)
+        if whole or heading:
+            issues.append(training.soft(f"Set '{item.name}' ({item.distance_meters} m) is the total the coach wrote for "
+                                        f"{'the swim' if whole else 'that part'}, not a set: the coach's other lines add up to it. "
+                                        "Leave it out.", _leave_out(sets, item)))
+    return issues
+
+
 def swim_issues(swim: CoachSwim, best: float | None, excerpt: str) -> list[str]:
     """A copied swim against what the coach wrote: odd distances, distances the coach never gave, ladders copied as
-    repeats, targets that can't be its pace, and a swim too long to be one. (Not the coach's own total: theirs can be
-    off, and the sets are what they wrote.)"""
+    repeats, a total copied as a set, targets that can't be its pace, and a swim too long to be one. (Not the coach's
+    own total otherwise: theirs can be off, and the sets are what they wrote.)"""
     issues: list[str] = (training.pace_issues(swim.sets, best) + training.odd_distance_issues(swim.sets, excerpt)
-                         + unsaid_distance_issues(swim.sets, excerpt) + ladder_issues(swim.sets, excerpt))
+                         + unsaid_distance_issues(swim.sets, excerpt) + ladder_issues(swim.sets, excerpt)
+                         + total_issues(swim.sets, excerpt))
     total = sum(item.rounds * item.repetitions * item.distance_meters for item in swim.sets)
     if total > 12000:
         issues.append(f"The sets total {total} m, but a swim can be at most 12,000 m: check each line is written once, with its own "
