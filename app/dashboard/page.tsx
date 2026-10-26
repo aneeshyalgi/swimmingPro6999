@@ -110,7 +110,7 @@ function TokenCount({ balance, onOpen, className }: { balance: number; onOpen: (
         className)}>
       <Coins className="h-4 w-4 text-amber-200" />
       {balance.toLocaleString()}
-      <span className="hidden font-medium text-slate-400 xl:inline">tokens</span>
+      <span className="hidden font-medium text-slate-400 @4xl:inline">tokens</span>
     </button>
   )
 }
@@ -613,8 +613,9 @@ export default function DashboardPage() {
           </aside>
 
           <main data-coach-dock className="min-w-0 flex-1">
-            {/* Header */}
-            <header className="sticky top-0 z-40 border-b border-white/[0.07] bg-[#070b10]/75 backdrop-blur-xl">
+            {/* Header. Its labels follow its own width (@container), not the window's: the week re-planner docked beside it
+                narrows it on a wide screen. */}
+            <header className="@container sticky top-0 z-40 border-b border-white/[0.07] bg-[#070b10]/75 backdrop-blur-xl">
               <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6 lg:px-8">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="flex rounded-xl bg-gradient-to-br from-accent via-accent-foreground to-primary p-1.5 lg:hidden">
@@ -627,7 +628,7 @@ export default function DashboardPage() {
                     <p className="truncate text-xs text-slate-400">{overview.date}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   {/* Below lg the survey's link is on the Dashboard tab instead, where there's room for it. */}
                   <SurveyLink invite={survey} className="hidden lg:flex" />
                   {/* On a phone the header has no room for it: the sections below start with it instead. */}
@@ -637,13 +638,14 @@ export default function DashboardPage() {
                       <button type="button" onClick={(event) => openCoachChat(false, event)} aria-label={`Chat with ${coach}`}
                         className="flex h-full cursor-pointer items-center gap-2 rounded-l-full pl-1.5 pr-3 text-sm font-medium text-white transition-colors hover:bg-accent/10">
                         <CoachAvatar key={coach} name={coach} shape="circle" className="h-6 w-6 animate-in fade-in zoom-in-50 duration-500" />
-                        <span className="hidden md:inline">Chat with {coach}</span>
+                        <span className="hidden whitespace-nowrap @3xl:inline">Chat with {coach}</span>
+                        <span className="hidden whitespace-nowrap @lg:inline @3xl:hidden">Chat</span>
                       </button>
                       <span aria-hidden className="h-5 w-px bg-white/10" />
                       <button type="button" onClick={() => setCoachSwitcherOpen(true)} aria-label="Switch coach" title="Switch coach"
                         className="group flex h-full items-center gap-1.5 rounded-r-full pl-2.5 pr-3 text-sm font-medium text-slate-300 transition-colors hover:bg-accent/10 hover:text-accent">
                         <Repeat className="h-4 w-4 transition-transform duration-500 ease-out group-hover:rotate-180" />
-                        <span className="hidden xl:inline">Switch</span>
+                        <span className="hidden whitespace-nowrap @4xl:inline">Switch</span>
                       </button>
                     </div>
                   )}
