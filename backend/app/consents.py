@@ -1,9 +1,9 @@
 """What athletes who join from now on agreed to, kept as evidence.
 
 A consent record is saved with each new athlete profile (at onboarding): the Terms and Privacy Policy version they
-joined under and, for an athlete under 16, the parent or guardian who agreed to them using SwimGPT (GDPR Art. 8,
-§ 107 BGB). Their Mind and Nutrition answers are health data (GDPR Art. 9), so those open only once they agree, and
-withdrawing that agreement deletes what they entered there.
+accepted when they signed up and, for an athlete under 16, the parent or guardian who agreed to them using SwimGPT
+(GDPR Art. 8, § 107 BGB). Their Mind and Nutrition answers are health data (GDPR Art. 9), so those open only once they
+agree, and withdrawing that agreement deletes what they entered there.
 
 Athletes who joined before have no consent record and nothing here applies to them: every check is a no-op without
 the record, so their features and data stay exactly as they were.
@@ -23,9 +23,10 @@ from app.db import get_supabase_client
 router = APIRouter(prefix="/api/consents", tags=["Consents"])
 
 # The Terms and Privacy Policy version (their date, as on the pages); kept with every consent given under it.
-LEGAL_VERSION = "2026-10-19"
+LEGAL_VERSION = "2026-10-26"
 PARENTAL_CONSENT_AGE = 16
 KEY, KIND = "consents", "consent_record"
+VERSION = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # The Mind and Nutrition records (mental.KEY, nutrition.KEY) and daily check-ins: what health consent covers.
 HEALTH_RECORDS = ("mental", "nutrition")
 FEEDBACK_KIND = "athlete_feedback"
@@ -64,11 +65,13 @@ def _save(profile_id: str, details: dict[str, Any]) -> None:
     save_record(profile_id, KEY, KIND, "Consents", None, details)
 
 
-def record_new_athlete(profile_id: str, guardian: Guardian | None) -> None:
-    """Called once, when onboarding creates the profile: the version they joined under and any guardian's consent."""
+def record_new_athlete(profile_id: str, guardian: Guardian | None, accepted: str | None = LEGAL_VERSION) -> None:
+    """Called once, when onboarding creates the profile: the Terms version the athlete accepted when they signed up
+    (`accepted`, from their sign-up; None if it isn't one) and any guardian's consent."""
     now = _now()
+    version = accepted if accepted and VERSION.match(accepted) else None
     _save(profile_id, {
-        "version": LEGAL_VERSION, "accepted_at": now, "health": None,
+        "version": version, "accepted_at": now if version else None, "health": None,
         "parental": {**guardian.model_dump(), "version": LEGAL_VERSION, "given_at": now} if guardian else None,
     })
 

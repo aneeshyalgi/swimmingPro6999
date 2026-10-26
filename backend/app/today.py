@@ -10,6 +10,7 @@ from openai import OpenAI, OpenAIError
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app import tokens
 from app.auth import get_authenticated_profile
 from app.config import get_settings, sampling
 from app.consents import ensure_health_consent
@@ -225,6 +226,7 @@ def get_today(authorization: str | None = Header(default=None)) -> TodayResponse
 
 @router.post("/generate", response_model=TodayResponse)
 def generate_today(authorization: str | None = Header(default=None)) -> TodayResponse:
+    receipt = None  # the plan's tokens (app/tokens.py), given back if it isn't saved
     try:
         from app.training import library, recent_race_results, pacing_context
         profile = get_authenticated_profile(authorization)
@@ -259,6 +261,7 @@ def generate_today(authorization: str | None = Header(default=None)) -> TodayRes
             "payment_status", "payment_plan_id", "stripe_checkout_session_id",
             "stripe_customer_id", "stripe_subscription_id",
         }}
+        receipt = tokens.charge(profile, "daily_plan")
         client = OpenAI(api_key=settings.openai_api_key)
         context, sources, _ = chat_context(
             [athlete_coach(profile)],
@@ -342,11 +345,17 @@ COACH PROGRAM (base today's swim on one of this coach's actual sessions, adapted
             raise HTTPException(status_code=500, detail="Today's plan was not persisted. Please try again.")
         return saved
     except HTTPException:
+        tokens.give_back(receipt)
         raise
     except APIError as exc:
+        tokens.give_back(receipt)
         raise HTTPException(status_code=502, detail=f"Could not save or retrieve today's plan in Supabase: {exc}") from exc
     except (OpenAIError, ValidationError, RuntimeError, ValueError) as exc:
+        tokens.give_back(receipt)
         raise HTTPException(status_code=502, detail=f"Today's coaching plan could not be generated: {exc}") from exc
+    except BaseException:
+        tokens.give_back(receipt)
+        raise
 
 
 @router.post("/feedback", response_model=TodayResponse)

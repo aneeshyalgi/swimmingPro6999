@@ -11,6 +11,7 @@ import {
   BookOpen,
   CalendarPlus,
   Check,
+  Coins,
   Copy,
   Loader2,
   MessageSquarePlus,
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { randomId } from "@/lib/training"
 import { readPlanFor, type AddedSession, type CoachPlan, type PlanKind, type TrainingTarget } from "@/lib/coach-plan"
+import { TokensNeeded, openTokenStore, tokensChanged, tokensNeededIn } from "@/lib/token-events"
 
 type Message = {
   id: string
@@ -50,6 +52,8 @@ type Message = {
   timestamp: Date
   sources?: ChatSource[]
   failed?: boolean
+  /** Not answered because the athlete hadn't enough tokens (lib/tokens.ts). */
+  outOfTokens?: boolean
   /** The kinds of session the coach's reply prescribes, which can be added to the athlete's weeks. */
   plan?: PlanKind
   /** Said on a voice call. */
@@ -405,7 +409,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
     let sentId: string
     if (retryIndex >= 0 && retryId) {
       sentId = retryId
-      setThreads((prev) => ({ ...prev, [coach]: prev[coach].map((message) => (message.id === sentId ? { ...message, failed: false } : message)) }))
+      setThreads((prev) => ({ ...prev, [coach]: prev[coach].map((message) => (message.id === sentId ? { ...message, failed: false, outOfTokens: false } : message)) }))
     } else {
       const userMessage: Message = { id: newId(), role: "user", content: text, timestamp: new Date() }
       setThreads((prev) => ({ ...prev, [coach]: [...(prev[coach] ?? []), userMessage] }))
@@ -438,16 +442,21 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
       let response = await ask(history)
       // Refused by a backend from before it took the longer conversation (while it's being updated): as it was given.
       if (response.status === 422 && history.length > EARLIER_CONTEXT) response = await ask(history.slice(-EARLIER_CONTEXT))
-      if (!response.ok) throw new Error(await response.text())
+      if (!response.ok) {
+        const text = await response.text()
+        throw tokensNeededIn(response.status, text) ?? new Error(text)
+      }
       const result = await response.json()
       const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, sync: "pending" }
       setThreads((prev) => ({ ...prev, [coach]: [...answered(prev[coach] ?? [], sentId), reply] }))
+      tokensChanged()
       if (reply.plan) prefetchPlan(coach, reply, text)
     } catch (error) {
-      console.error("Coach chat failed:", error)
+      const outOfTokens = error instanceof TokensNeeded
+      if (!outOfTokens) console.error("Coach chat failed:", error)
       setThreads((prev) => ({
         ...prev,
-        [coach]: (prev[coach] ?? []).map((message) => (message.id === sentId ? { ...message, failed: true } : message)),
+        [coach]: (prev[coach] ?? []).map((message) => (message.id === sentId ? { ...message, failed: true, outOfTokens } : message)),
       }))
     } finally {
       setPendingCoach(null)
@@ -467,7 +476,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
     const last = thread[thread.length - 1]
     const again = last?.role === "user" && last.failed && last.content === text ? last : null
     const history = savedChats.context(thread)
-    const userMessage: Message = again ? { ...again, failed: false } : { id: newId(), role: "user", content: text, timestamp: new Date() }
+    const userMessage: Message = again ? { ...again, failed: false, outOfTokens: false } : { id: newId(), role: "user", content: text, timestamp: new Date() }
     setThreads((prev) => ({
       ...prev,
       [coach]: again ? (prev[coach] ?? []).map((message) => (message.id === again.id ? userMessage : message)) : [...(prev[coach] ?? []), userMessage],
@@ -476,6 +485,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
       const result = await askCoachLive({ user_key: userKey, selected_coaches: [coach], active_coach: coach, message: text, history, mode: "conversation" }, signal, onText)
       const reply: Message = { id: newId(), role: "assistant", content: result.content, timestamp: new Date(), sources: result.sources || [], plan: result.plan ?? undefined, voice: true, sync: "pending" }
       setThreads((prev) => ({ ...prev, [coach]: [...answered(prev[coach] ?? [], userMessage.id), reply] }))
+      tokensChanged()
       if (reply.plan) {
         setCallPlan({ id: reply.id, kind: reply.plan })
         prefetchPlan(coach, reply, text)
@@ -486,7 +496,8 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
         // The athlete went on talking: that wasn't the end of what they were saying, which comes as one message next.
         setThreads((prev) => ({ ...prev, [coach]: (prev[coach] ?? []).filter((message) => message.id !== userMessage.id) }))
       } else if (!signal.aborted) {
-        setThreads((prev) => ({ ...prev, [coach]: (prev[coach] ?? []).map((message) => (message.id === userMessage.id ? { ...message, failed: true } : message)) }))
+        const outOfTokens = problem instanceof TokensNeeded
+        setThreads((prev) => ({ ...prev, [coach]: (prev[coach] ?? []).map((message) => (message.id === userMessage.id ? { ...message, failed: true, outOfTokens } : message)) }))
       }
       throw problem
     }
@@ -875,10 +886,21 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
                           >
                             {message.content}
                           </div>
-                          <div className="vs-meta mt-1.5 flex items-center justify-end gap-2 text-xs text-slate-500">
+                          <div className="vs-meta mt-1.5 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs text-slate-500">
                             {message.failed ? (
                               <>
-                                <span role="alert" className="text-rose-300">Not answered. The coach couldn&apos;t reply, please try again.</span>
+                                {message.outOfTokens ? (
+                                  <>
+                                    <span role="alert" className="text-rose-300">Not answered: you&apos;re out of tokens.</span>
+                                    <button type="button" onClick={openTokenStore}
+                                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 font-medium text-accent hover:bg-accent/10">
+                                      <Coins className="h-3.5 w-3.5" />
+                                      Get tokens
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span role="alert" className="text-rose-300">Not answered. The coach couldn&apos;t reply, please try again.</span>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => send(message.content, message.id)}

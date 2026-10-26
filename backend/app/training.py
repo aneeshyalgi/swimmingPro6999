@@ -27,6 +27,7 @@ from app.context import athlete_coach, chat_context
 from app.swim_planner import SwimAssignment, assign_week, main_strokes, session_parts, taper_meet
 from app.db import get_supabase_client
 from app import jobs as week_jobs
+from app import tokens
 from app.swim_times import with_display_times
 from app.week_pdf import render_mobility_pdf, render_swim_pdf, render_training_week_pdf, strength_sections
 from app.workout_pdf import render_workout_pdf
@@ -1694,7 +1695,7 @@ def export_week_part_pdf(part: WeekPart, date: date, authorization: str | None =
 async def generate_week(request: WeekRequest, http: Request, authorization: str | None = Header(default=None)):
     profile = await run_in_threadpool(get_authenticated_profile, authorization)
     return await week_jobs.run_generation(http, profile["id"], "swim", request.week_start, request.job_id,
-                                     lambda: build_week(profile, request.week_start))
+                                     lambda: build_week(profile, request.week_start), meter=tokens.Meter(profile))
 
 
 @router.post("/week/replan")
@@ -1703,7 +1704,7 @@ async def replan_generated_week(request: WeekRequest, http: Request, authorizati
     time per week, cancelled when the athlete leaves, and nothing from it is saved unless it finishes."""
     profile = await run_in_threadpool(get_authenticated_profile, authorization)
     return await week_jobs.run_generation(http, profile["id"], "swim", request.week_start, request.job_id,
-                                          lambda: replan_week(profile, request.week_start))
+                                          lambda: replan_week(profile, request.week_start), meter=tokens.Meter(profile))
 
 
 @router.post("/generation/cancel", status_code=204)
@@ -1839,6 +1840,7 @@ The athlete's own scheduled swims (never duplicate): {json.dumps([{"date": item[
 Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
 {f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
     days_to_plan = [day for day in week_days if day.isoformat() not in fixed_dates]
+    week_jobs.charge("swim_week")  # the athlete's tokens, now the coach writes it (app/tokens.py)
     note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments, days_to_plan)
 
     fixed_by_date = {day["date"]: day for day in fixed}
@@ -2194,6 +2196,7 @@ User-entered competitions: {json.dumps([{"date": view["date"], "competitions": v
 Swims already planned on these days that stay (never duplicate): {json.dumps([item for info in planned.values() for item in info["kept"]])}.
 Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
 {f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
+    week_jobs.charge("swim_replan")  # the athlete's tokens, now the coach writes it (app/tokens.py)
     note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments, list(planned))
 
     details = row["details"]
@@ -2319,6 +2322,13 @@ def generate_race_plan(identifier: UUID, authorization: str | None = Header(defa
                 parse_swim_time(target)
             except (ValueError, TypeError, AttributeError) as exc:
                 raise HTTPException(status_code=422, detail=f"Update the invalid onboarding target/PB for {event} before generating its race plan.") from exc
+    # The athlete's tokens (app/tokens.py), given back if no race plans come of it.
+    with tokens.charged(profile, "race_plan"):
+        _write_race_plans(profile, identifier, meet, targets)
+    return owned_competition(profile, str(identifier))
+
+
+def _write_race_plans(profile, identifier: UUID, meet: dict[str, Any], targets: dict[str, str | None]) -> None:
     result, sources = generate_structured(profile, RacePlans, f"""Create an individual race plan for each entered event at this competition: {json.dumps(meet)}.
 Use exactly these validated matching-course target times (null means no recorded target): {json.dumps(targets)}.
 Target time must use the athlete's actual matching-course goal/PB, or null if missing.
@@ -2343,7 +2353,6 @@ underwater distances. All recommendations should be consistent with source mater
             raise HTTPException(status_code=502, detail="The race target does not match a valid recorded PB or goal. Please retry.")
     save_record(profile["id"], f"race-plan:{identifier}", "race_plan", "Race preparation", date.fromisoformat(meet["date"]),
                 {"competition_id": str(identifier), "races": plans.model_dump()["races"], "source_files": sources}, True)
-    return owned_competition(profile, str(identifier))
 
 
 @router.post("/competitions/{identifier}/results")

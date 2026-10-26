@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app import coach_plan, gym, main, training
+from app import coach_plan, gym, main, tokens, training
 from app.coach_plan import CoachGym, CoachSwim, PlanOutline, plan_kinds, swim_issues
 from app.main import app
 
@@ -159,9 +159,10 @@ class CoachChatPlanTests(unittest.TestCase):
             patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
             self.addCleanup(patcher.stop)
             patcher.start()
-        patcher = patch.object(main, "OpenAI", return_value=self.openai)
-        self.addCleanup(patcher.stop)
-        patcher.start()
+        for target, name, value in [(main, "OpenAI", self.openai), (tokens, "charge", None)]:
+            patcher = patch.object(target, name, return_value=value)
+            self.addCleanup(patcher.stop)
+            patcher.start()
 
     def chat(self, reply, mode="chat"):
         self.openai.chat.completions.create.return_value.choices = [SimpleNamespace(message=SimpleNamespace(content=reply))]
@@ -240,9 +241,10 @@ class CoachChatLiveTests(unittest.TestCase):
             patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
             self.addCleanup(patcher.stop)
             patcher.start()
-        patcher = patch.object(main, "OpenAI", return_value=self.openai)
-        self.addCleanup(patcher.stop)
-        patcher.start()
+        for target, name, value in [(main, "OpenAI", self.openai), (tokens, "charge", None)]:
+            patcher = patch.object(target, name, return_value=value)
+            self.addCleanup(patcher.stop)
+            patcher.start()
         patcher = patch.dict(main._call_context, clear=True)
         self.addCleanup(patcher.stop)
         patcher.start()

@@ -11,6 +11,7 @@ import {
   Brain,
   ChevronLeft,
   ChevronRight,
+  Coins,
   CreditCard,
   Dumbbell,
   Gauge,
@@ -49,8 +50,13 @@ import { ChangePasswordDialog } from "@/components/change-password-dialog"
 import { WorkoutBuilderSection } from "@/components/workout-builder-section"
 import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
 import { Banner } from "@/components/training-ui"
+import { TokenStore, type StoreNotice } from "@/components/token-store"
+import { TokensNeededDialog } from "@/components/tokens-needed-dialog"
+import { useTokens } from "@/hooks/use-tokens"
 import { dashboardResponseSchema, type DashboardOverviewData, type DashboardPlan } from "@/lib/dashboard"
 import type { TrainingTarget } from "@/lib/coach-plan"
+import { OPEN_TOKEN_STORE } from "@/lib/token-events"
+import { tokenCount, verifyTokens } from "@/lib/tokens"
 
 const navGroups = [
   {
@@ -76,6 +82,8 @@ const navGroups = [
     ],
   },
 ]
+// The token store (lib/tokens.ts), once the backend has tokens.
+const tokenGroup = { label: "Account", items: [{ value: "tokens", label: "Token store", icon: Coins }] }
 
 /** Directions the Workout Builder's launch sparks fly out in. */
 const SPARKS = [0, 45, 90, 135, 180, 225, 270, 315]
@@ -88,6 +96,23 @@ const pageTitles: Record<string, [string, string]> = {
   mental: ["Mental Performance", "Confidence, focus and calm when it counts"],
   paces: ["Pace Calculator", "Training paces for every zone, for you and your athletes"],
   video: ["Video Analysis", "AI stroke lab: pose tracking, telemetry and a coach brief from your clip"],
+  tokens: ["Token store", "Tokens for your coach, your weeks and every AI feature"],
+}
+
+/** The athlete's token balance, which opens the token store; amber when it's nearly gone. */
+function TokenCount({ balance, onOpen, className }: { balance: number; onOpen: () => void; className?: string }) {
+  return (
+    <button type="button" onClick={onOpen} title="Token store" aria-label={`${tokenCount(balance)} left. Open the token store`}
+      className={cn("flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm font-semibold tabular-nums transition-colors",
+        balance < 10
+          ? "border-amber-300/40 bg-amber-300/10 text-amber-100 hover:bg-amber-300/15"
+          : "border-white/10 bg-white/[0.03] text-white hover:border-accent/30 hover:bg-accent/10",
+        className)}>
+      <Coins className="h-4 w-4 text-amber-200" />
+      {balance.toLocaleString()}
+      <span className="hidden font-medium text-slate-400 xl:inline">tokens</span>
+    </button>
+  )
 }
 
 type OnboardingData = {
@@ -136,6 +161,11 @@ export default function DashboardPage() {
   // can't bring back a summary from before a later change.
   const overviewRequest = useRef(0)
   const survey = useSurvey(userKey !== null)
+  const { tokens, refresh: refreshTokens } = useTokens(userKey !== null)
+  const [storeNotice, setStoreNotice] = useState<StoreNotice>(null)
+  // Opens the token store from anywhere (a refused request, a chat message that wasn't answered), closing the chat (and
+  // any call in it) on the way.
+  const openStore = useRef(() => {})
 
   useEffect(() => {
     const controller = new AbortController()
@@ -213,6 +243,35 @@ export default function DashboardPage() {
     window.history.replaceState(window.history.state, "", window.location.pathname)
   }, [])
 
+  // Stripe returns here after buying tokens (or cancelling): the token store opens with what happened, and a paid purchase
+  // is confirmed (its tokens added) straight away. The address is cleaned up, so a reload doesn't do it again.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const status = params.get("tokens")
+    if (status !== "paid" && status !== "cancelled") return
+    const sessionId = params.get("session_id")
+    window.history.replaceState(window.history.state, "", window.location.pathname)
+    setActiveTab("tokens")
+    if (status === "cancelled" || !sessionId) {
+      setStoreNotice({ tone: "note", text: "Checkout was cancelled, so nothing was charged." })
+      return
+    }
+    setStoreNotice({ tone: "busy", text: "Confirming your purchase…" })
+    verifyTokens(sessionId)
+      .then((result) => setStoreNotice(
+        !result.paid ? { tone: "error", text: "That payment hasn't gone through, so no tokens were added." }
+          : result.added ? { tone: "success", text: `${tokenCount(result.tokens)} added to your balance.` }
+            : { tone: "success", text: "Payment received. Your tokens are added within a minute." }))
+      .catch((failure: unknown) => setStoreNotice({ tone: "error", text: failure instanceof Error ? failure.message : "Your purchase couldn't be confirmed just now." }))
+      .finally(() => void refreshTokens())
+  }, [refreshTokens])
+
+  useEffect(() => {
+    const open = () => openStore.current()
+    window.addEventListener(OPEN_TOKEN_STORE, open)
+    return () => window.removeEventListener(OPEN_TOKEN_STORE, open)
+  }, [])
+
   // The chat has an address, as it did when it was a page: Back and Forward close and reopen it, and a reload (or an old
   // /coach-chat link) opens it once the dashboard has loaded. A call is never redialled by a reload.
   useEffect(() => {
@@ -278,6 +337,12 @@ export default function DashboardPage() {
     } else {
       window.history.replaceState(window.history.state, "", window.location.pathname)
     }
+  }
+
+  openStore.current = () => {
+    closeCoachChat()
+    setActiveTab("tokens")
+    window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
   /** The coach chat added sessions to the athlete's weeks: the Training section and the summary show them. */
@@ -352,6 +417,7 @@ export default function DashboardPage() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
   const [pageTitle, pageSubtitle] = pageTitles[activeTab] ?? pageTitles.overview
+  const groups = tokens?.available ? [...navGroups, tokenGroup] : navGroups
   const changeTab = (value: string) => {
     setActiveTab(value)
     if (value === "builder") setBuilderBurst((count) => count + 1)
@@ -408,7 +474,7 @@ export default function DashboardPage() {
 
             <nav className="flex-1 overflow-y-auto px-3 pb-3" aria-label="Dashboard sections">
               <TabsList className="flex h-auto w-full flex-col items-stretch gap-5 rounded-none bg-transparent p-0">
-                {navGroups.map((group) => (
+                {groups.map((group) => (
                   <div key={group.label} className="space-y-1">
                     {sidebarCollapsed ? (
                       <div className="mx-auto mb-2 h-px w-8 bg-white/10" />
@@ -564,6 +630,8 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   {/* Below lg the survey's link is on the Dashboard tab instead, where there's room for it. */}
                   <SurveyLink invite={survey} className="hidden lg:flex" />
+                  {/* On a phone the header has no room for it: the sections below start with it instead. */}
+                  {tokens?.available && <TokenCount balance={tokens.balance} onOpen={() => openStore.current()} className="hidden sm:flex" />}
                   {coach && (
                     <div className="flex h-9 items-center rounded-full border border-white/10 bg-white/[0.03] transition-colors hover:border-white/20">
                       <button type="button" onClick={(event) => openCoachChat(false, event)} aria-label={`Chat with ${coach}`}
@@ -603,7 +671,8 @@ export default function DashboardPage() {
               {/* Mobile section tabs */}
               <div className="border-t border-white/[0.05] lg:hidden">
                 <TabsList className="flex h-auto w-full justify-start gap-2 overflow-x-auto rounded-none bg-transparent px-4 py-2.5 [scrollbar-width:none] sm:px-6">
-                  {navGroups.flatMap((group) => group.items).map((item) => (
+                  {tokens?.available && <TokenCount balance={tokens.balance} onOpen={() => openStore.current()} className="h-auto flex-none px-3.5 py-1.5 sm:hidden" />}
+                  {groups.flatMap((group) => group.items).map((item) => (
                     <TabsTrigger
                       key={item.value}
                       value={item.value}
@@ -709,12 +778,16 @@ export default function DashboardPage() {
               <TabsContent value="paces" className="mt-0 space-y-6">
                 <PaceCalculator />
               </TabsContent>
+              <TabsContent value="tokens" className="mt-0">
+                <TokenStore tokens={tokens} notice={storeNotice} />
+              </TabsContent>
             </div>
             <LegalLinks className="pb-8 pt-2" />
           </main>
         </div>
       </Tabs>
       {peek && <GuideSpotlight key={peek} target={peek} onClose={() => setPeek(null)} />}
+      <TokensNeededDialog onGetTokens={() => openStore.current()} />
       <SubscriptionDialog open={subscriptionOpen} onOpenChange={setSubscriptionOpen} />
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
       {coach && (

@@ -61,6 +61,8 @@ class Visitor:
     # The browser itself remembers using its free analysis (it did before the server kept count). Only ever believed
     # in that direction.
     said_used: bool = False
+    # A subscriber's profile, whose tokens pay for their analyses (app/tokens.py).
+    profile: dict[str, Any] | None = None
 
 
 def _through_proxy(peer: str) -> bool:
@@ -102,7 +104,8 @@ def identify(request: Request, authorization: str | None) -> Visitor:
     user = get_authenticated_user(authorization)
     records["account"] = f"account/{user.id}"
     row = latest_profile_row(user.id)
-    return Visitor(signed_in=True, subscribed=row is not None and is_paid(row), records=records, said_used=said_used)
+    subscribed = row is not None and is_paid(row)
+    return Visitor(signed_in=True, subscribed=subscribed, records=records, said_used=said_used, profile=row if subscribed else None)
 
 
 _bucket_ready = False

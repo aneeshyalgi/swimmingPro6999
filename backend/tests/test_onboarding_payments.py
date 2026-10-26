@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import stripe
 
+from app import tokens
 from app.main import PAYMENT_PLANS, app
 from app.payments import adopt_subscription, billing_account, is_paid
 from app.withdrawal import START_NOW_VERSION
@@ -283,6 +284,13 @@ class OnboardingAccessTests(unittest.TestCase):
         program = screen["program"]
         self.assertEqual((program["headline"], program["phase"], program["tags"]), ("Built for speed", "Race-specific speed", list("abcde")))
         self.assertEqual(len(program["week"]), 4)
+
+    @patch("app.tokens.available", return_value=True)
+    def test_payment_screen_names_the_monthly_tokens_only_to_an_account_that_uses_them(self, available, user):
+        user.return_value = SimpleNamespace(id="user-1", created_at=datetime(2025, 3, 1, tzinfo=timezone.utc), user_metadata={})
+        self.assertIsNone(self.get("/api/subscription")["monthly_tokens"])
+        user.return_value = SimpleNamespace(id="user-1", created_at=datetime(2026, 11, 20, tzinfo=timezone.utc), user_metadata={})
+        self.assertEqual(self.get("/api/subscription")["monthly_tokens"], tokens.MONTHLY_TOKENS)
 
     def test_payment_screen_needs_a_finished_plan(self, user):
         headers = {"Authorization": "Bearer token"}

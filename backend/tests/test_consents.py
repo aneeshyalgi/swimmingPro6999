@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from app import consents
 from app.consents import LEGAL_VERSION, Guardian
 from app.main import app
 from app.schemas import OnboardingSubmission
@@ -127,7 +128,7 @@ class NewAthleteOnboardingTests(unittest.TestCase):
         supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = SimpleNamespace(data=[row])
         self.generate = MagicMock(return_value=({"generation_version": 3}, [], "gpt-4.1", "Coach Brad"))
         self.recorded = MagicMock()
-        user = SimpleNamespace(id="user-1", user_metadata={"full_name": "Alex Swim"})
+        user = SimpleNamespace(id="user-1", user_metadata={"full_name": "Alex Swim", "accepted_terms": "2026-10-19"})
         with patch("app.main.get_authenticated_user", return_value=user), patch("app.main.latest_profile_row", return_value=existing), \
                 patch("app.main.is_paid", return_value=False), patch("app.main.generate_dashboard_plan", new=self.generate), \
                 patch("app.main.get_supabase_client", return_value=supabase), patch("app.main.record_new_athlete", new=self.recorded):
@@ -152,6 +153,20 @@ class NewAthleteOnboardingTests(unittest.TestCase):
     def test_a_new_athlete_of_16_or_over_joins_without_a_guardian(self):
         self.assertEqual(self.post({"age": 16}).status_code, 201)
         self.assertEqual(self.recorded.call_args.args, ("row-1", None))
+
+    def test_the_terms_version_accepted_at_sign_up_is_what_the_new_profile_records(self):
+        self.post({"age": 16})
+        self.assertEqual(self.recorded.call_args.kwargs, {"accepted": "2026-10-19"})
+
+    def test_a_consent_record_keeps_the_version_accepted_at_sign_up_or_none(self):
+        saved = []
+        with patch.object(consents, "_save", side_effect=lambda profile_id, details: saved.append(details)):
+            consents.record_new_athlete("row-1", None, accepted=LEGAL_VERSION)
+            consents.record_new_athlete("row-1", None, accepted="2026-10-19")
+            consents.record_new_athlete("row-1", None, accepted=None)
+            consents.record_new_athlete("row-1", None, accepted="yesterday")
+        self.assertEqual([record["version"] for record in saved], [LEGAL_VERSION, "2026-10-19", None, None])
+        self.assertEqual([bool(record["accepted_at"]) for record in saved], [True, True, False, False])
 
     def test_an_athlete_who_joined_before_edits_their_answers_as_before(self):
         existing = {"id": "row-1", "user_key": "user_1", "recommended_coaches": ["Coach Brad"], "is_paid": False}

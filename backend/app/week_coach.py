@@ -31,7 +31,7 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from app import gym, training
+from app import gym, tokens, training
 from app.auth import get_authenticated_profile
 from app.coach_plan import CoachSection, CoachSwim, GymDoc, as_swim, coach_terms
 from app.context import athlete_coach
@@ -1030,6 +1030,8 @@ def chat(request: WeekChat, authorization: str | None = Header(default=None)) ->
         days_future = pool.submit(coach_line, profile)
         board, grounding, days = board_future.result(), grounding_future.result(), days_future.result()
     writer = Writer(profile, board, coach, grounding)
+    # The athlete's tokens for the coach's answer (app/tokens.py), given back if no answer comes.
+    receipt = tokens.charge(profile, "week_coach")
 
     def events() -> Iterator[bytes]:
         started = time.monotonic()
@@ -1039,10 +1041,12 @@ def chat(request: WeekChat, authorization: str | None = Header(default=None)) ->
                 check=lambda result: answer_issues(result, board), grounding=grounding, max_tokens=2500, seconds=60, urgent=True,
                 rules=WEEK_RULES)
         except HTTPException as exc:
+            tokens.give_back(receipt)
             yield _line({"type": "error", "detail": exc.detail})
             return
         except Exception:
             logger.exception("The week coach couldn't answer")
+            tokens.give_back(receipt)
             yield _line({"type": "error", "detail": training.GENERATION_FAILED})
             return
         changes, jobs = [], {}

@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Iterator, Literal, TypeVar
+from typing import Any, Callable, Iterator, Literal, TypeVar
 
 from fastapi import HTTPException, Request
 
@@ -139,6 +139,9 @@ class Job:
     # that asked for the same week meanwhile. It's cancelled when the last of them leaves.
     task: asyncio.Future | None = None
     watchers: set[str] = field(default_factory=set)
+    # The athlete's tokens for the run (app/tokens.Meter): charged as it reaches its AI work (charge), given back if it
+    # then fails or is cancelled.
+    meter: Any = None
 
 
 _lock = threading.Lock()
@@ -221,6 +224,14 @@ def checkpoint(job: Job | None = None) -> None:
         raise GenerationCancelled
 
 
+def charge(action: str) -> None:
+    """The run's tokens, as it starts its AI work: what `action` costs (app/tokens.py), charged once per run. Raises
+    tokens.OutOfTokens when the athlete hasn't enough. Nothing outside a run with a meter (a test, a script) is charged."""
+    job = _current.get()
+    if job is not None and job.meter is not None:
+        job.meter.charge(action)
+
+
 @contextmanager
 def committing() -> Iterator[None]:
     """Wrap the writes that save a generated week: a cancelled job stops before them; once they start, they finish."""
@@ -234,12 +245,14 @@ def committing() -> Iterator[None]:
 
 
 async def run_generation(request: Request, profile_id: str, part: Part, week_start: date, job_id: str | None,
-                         work: Callable[[], T]) -> T:
+                         work: Callable[[], T], meter: Any = None) -> T:
     """Run `work` (blocking) for the athlete's week, cancelling it as soon as their browser goes away. A request for a
-    week already being generated (another tab, a second device) waits for that run and returns the same week."""
+    week already being generated (another tab, a second device) waits for that run and returns the same week. `meter`:
+    the athlete's tokens for the run (see charge); a request that joins a run pays nothing more."""
     job, watcher, joined = _claim(profile_id, part, week_start, job_id)
     if joined:
         return await _follow(request, job, watcher, part)
+    job.meter = meter
 
     def wait_turn() -> None:
         checkpoint(job)
@@ -254,7 +267,13 @@ async def run_generation(request: Request, profile_id: str, part: Part, week_sta
             try:
                 checkpoint(job)
                 job.deadline = time.monotonic() + GENERATION_SECONDS
-                return work()
+                try:
+                    return work()
+                except BaseException:
+                    # The run failed, ran out of time or was cancelled: its tokens go back.
+                    if job.meter is not None:
+                        job.meter.give_back()
+                    raise
             finally:
                 weeks[part].release()
         finally:

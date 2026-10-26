@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     openai_plan_reasoning_effort: str = Field(default="low", alias="OPENAI_PLAN_REASONING_EFFORT")
     # Recognising the stroke in a clip's frames (Stroke Lab); tested best on underwater and side-on clips.
     openai_vision_model: str = Field(default="gpt-5.5", alias="OPENAI_VISION_MODEL")
+    # Tokens for the AI features (app/tokens.py), once their migration has run. Off: every AI feature is free, as before.
+    tokens_enabled: bool = Field(default=True, alias="TOKENS_ENABLED")
     stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
     stripe_publishable_key: str = Field(default="", alias="STRIPE_PUBLISHABLE_KEY")
     frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")

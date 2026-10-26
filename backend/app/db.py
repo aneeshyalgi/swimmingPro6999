@@ -23,7 +23,8 @@ def _safe_to_retry(request: httpx.Request, exc: Exception) -> bool:
         return True  # the request never reached the server
     if request.method != "POST":
         return True  # GET / PATCH / DELETE are idempotent
-    # POST is an upsert (merge-duplicates) or a read-only RPC; plain inserts are never replayed.
+    # POST is an upsert (merge-duplicates) or an RPC (each is read-only or, as the token functions are, done once per
+    # ref however often it's sent); plain inserts are never replayed.
     return "merge-duplicates" in request.headers.get("prefer", "") or "/rpc/" in request.url.path
 
 

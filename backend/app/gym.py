@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from app.auth import get_authenticated_profile
 from app.db import get_supabase_client
 from app import jobs as week_jobs
+from app import tokens
 from app.week_pdf import render_gym_week_pdf
 from app.workout_pdf import render_workout_pdf
 from app.strength_planner import SOURCE_LABEL, PlannedSession, athlete_from_profile, plan_week
@@ -310,7 +311,8 @@ async def generate_gym(request: GymGenerateRequest, http: Request, authorization
     if request.week_start.weekday() != 0:
         raise HTTPException(status_code=422, detail="Week start must be a Monday.")
     return await week_jobs.run_generation(http, profile["id"], "gym", request.week_start, request.job_id,
-                                     lambda: plan_gym_week(profile, request.week_start, request.notes))
+                                     lambda: plan_gym_week(profile, request.week_start, request.notes),
+                                     meter=tokens.Meter(profile))
 
 
 def plan_gym_week(profile, week_start: date, notes: str = "") -> dict[str, Any]:
@@ -342,6 +344,7 @@ def plan_gym_week(profile, week_start: date, notes: str = "") -> dict[str, Any]:
                                                         "(or are race days), and the mobility routine is off in your training days.")
         raise HTTPException(status_code=409, detail="There's nothing left to plan this week (race days stay free of gym work). Pick a future week.")
     job = week_jobs.current()
+    week_jobs.charge("gym_week")  # the athlete's tokens, now the coach writes it up (app/tokens.py)
 
     def narrate(session: PlannedSession) -> dict[str, Any]:
         week_jobs.checkpoint(job)

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
-from app import coach_history, main
+from app import coach_history, main, tokens
 from app.coach_history import CONVERSATIONS, KEPT, MESSAGES, NOT_YOUR_COACH, conversation_history
 from app.main import app
 from app.schemas import CoachChatMessage
@@ -352,7 +352,7 @@ class ConversationGivenToTheCoachTests(unittest.TestCase):
                 patch.object(main, "chat_context", return_value=("PROGRAM", [], ["Coach Brad"])), \
                 patch.object(main, "recent_race_results", return_value=[]), patch.object(main, "pacing_context", return_value={}), \
                 patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_reasoning_effort="low")), \
-                patch.object(main, "_chat_openai", return_value=openai):
+                patch.object(main, "_chat_openai", return_value=openai), patch.object(tokens, "charge", return_value=None):
             body = {"user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "And today?", "history": history}
             response = client.post("/api/coach-chat", headers=HEADERS, json=body)
             self.assertEqual(response.status_code, 200, response.text)

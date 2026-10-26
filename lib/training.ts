@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { supabase } from "@/lib/supabase"
+import { tokensNeededIn } from "@/lib/token-events"
 import { swimSessionSchema, strengthSessionSchema, mobilityWorkSchema } from "@/lib/workout-schemas"
 
 export const workoutSchema = z.object({
@@ -145,6 +146,8 @@ export async function trainingRequest<T>(
   }
   if (!response.ok) {
     const text = await response.text()
+    const refused = tokensNeededIn(response.status, text)
+    if (refused) throw refused
     let detail = `Training request failed (${response.status}).`
     try {
       const parsed = JSON.parse(text) as { detail?: string | { msg: string }[] }

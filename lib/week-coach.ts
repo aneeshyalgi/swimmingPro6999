@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { supabase } from "@/lib/supabase"
+import { tokensChanged, tokensNeededIn } from "@/lib/token-events"
 import { mobilityWorkSchema, swimSessionSchema } from "@/lib/workout-schemas"
 import {
   builderSectionSchema, gymWeekSchema, gymWorkoutSchema, trainingRequest, weekSchema,
@@ -49,6 +50,8 @@ async function token() {
 
 async function failure(response: Response): Promise<Error> {
   const text = await response.text()
+  const refused = tokensNeededIn(response.status, text)
+  if (refused) return refused
   try {
     const parsed = JSON.parse(text) as { detail?: string | { msg: string }[] }
     if (typeof parsed.detail === "string") return new Error(parsed.detail)
@@ -98,6 +101,8 @@ export async function askWeekCoach(body: { kind: WeekKind; week_start: string; m
   } catch (error) {
     if (signal?.aborted) throw error
     throw new Error("The connection dropped while your coach was answering. Please try again.")
+  } finally {
+    tokensChanged()  // the answer was paid for, or its tokens came back
   }
 }
 

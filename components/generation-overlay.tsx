@@ -5,6 +5,7 @@ import { createPortal } from "react-dom"
 import { ShieldAlert } from "lucide-react"
 import type { z } from "zod"
 import { GenerationProgress } from "@/components/training-ui"
+import { tokensChanged } from "@/lib/token-events"
 import { startGeneration } from "@/lib/training"
 
 /**
@@ -39,6 +40,7 @@ export function useWeekGeneration() {
     } finally {
       if (running.current === generation) running.current = null
       setActive(false)
+      tokensChanged()  // the week was paid for, or its tokens came back
     }
   }, [])
 

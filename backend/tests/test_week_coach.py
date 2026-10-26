@@ -9,7 +9,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app import gym, training, week_coach
+from app import gym, tokens, training, week_coach
 from app.coach_plan import CoachExercise, CoachSection
 from app.main import app
 from app.week_coach import (
@@ -177,6 +177,7 @@ class WeekCoachCase(unittest.TestCase):
         self.own_gym = self.db.add("gym:own", "gym_workout", DAY["Friday"], {"workout": builder_workout("Pull day"), "date": DAY["Friday"].isoformat(),
                                                                               "dose": "Moderate", "focus": "Your own workout", "source": "manual"})
         self.patch(training, "get_supabase_client", return_value=self.db)
+        self.patch(tokens, "charge", return_value=None)  # the athlete's tokens (tests/test_tokens.py tests them)
         self.patch(week_coach, "get_authenticated_profile", return_value=PROFILE)
         self.patch(week_coach, "_now", return_value=datetime(2026, 10, 21, 9, tzinfo=timezone.utc))
         self.patch(training, "datetime", wraps=datetime, **{"now.return_value": datetime(2026, 10, 21, 9, tzinfo=timezone.utc)})

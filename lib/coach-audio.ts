@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase"
 import type { ChatSource } from "@/components/chat-markdown"
 import type { PlanKind } from "@/lib/coach-plan"
 import { EARLIER_CONTEXT } from "@/lib/coach-history"
+import { tokensNeededIn } from "@/lib/token-events"
 
 const apiUrl = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 export const MAX_RECORDING_BYTES = 24 * 1024 * 1024
@@ -92,7 +93,9 @@ export async function askCoachLive(body: Record<string, unknown>, signal: AbortS
     onText(reply.content)
     return reply
   }
-  if (!response.ok || !response.body) throw new Error(failed)
+  // Out of tokens: the API says so in words the athlete can act on.
+  if (!response.ok) throw tokensNeededIn(response.status, await response.text().catch(() => "")) ?? new Error(failed)
+  if (!response.body) throw new Error(failed)
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffered = ""

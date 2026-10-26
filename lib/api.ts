@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { supabase } from "@/lib/supabase"
+import { tokensNeeded } from "@/lib/token-events"
 
 type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal }
 
@@ -17,13 +18,16 @@ export async function apiRequest<T>(path: string, schema: z.ZodType<T>, options:
   })
   if (!response.ok) {
     let detail = `The request failed (${response.status}). Please try again.`
+    let parsed: { detail?: string | { msg: string }[] } | null = null
     try {
-      const parsed = (await response.json()) as { detail?: string | { msg: string }[] }
-      if (typeof parsed.detail === "string") detail = parsed.detail
-      else if (Array.isArray(parsed.detail)) detail = parsed.detail.map((item) => item.msg).join("; ")
+      parsed = await response.json()
     } catch {
       // Not JSON: keep the status message.
     }
+    const refused = tokensNeeded(response.status, parsed)
+    if (refused) throw refused
+    if (typeof parsed?.detail === "string") detail = parsed.detail
+    else if (Array.isArray(parsed?.detail)) detail = parsed.detail.map((item) => item.msg).join("; ")
     throw new Error(detail)
   }
   return schema.parse(await response.json())

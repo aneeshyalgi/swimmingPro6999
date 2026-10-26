@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,8 +18,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 from postgrest.exceptions import APIError
 from pydantic import ValidationError
+from starlette.background import BackgroundTask
 import stripe
 
+from app import tokens
 from app.config import get_settings, sampling
 from app.db import get_supabase_client, warm_clients
 from app.coach_catalog import COACHES, public_profile
@@ -44,6 +46,7 @@ from app.stroke_detection import router as stroke_detection_router
 from app.gym import gym_week, router as gym_router
 from app.consents import PARENTAL_CONSENT_AGE, Guardian, record_new_athlete, router as consents_router
 from app.survey import router as survey_router
+from app.tokens import OutOfTokens, router as tokens_router
 from app.payments import PAYMENT_PLANS, adopt_subscription, billing_account, is_paid, record_payment, subscription_summary
 from app.video_access import checked_access, identify, release, start_analysis
 from app.swim_times import with_display_times
@@ -93,6 +96,12 @@ async def unexpected_errors(request: Request, call_next):
         return JSONResponse(status_code=500, content={"detail": "Something went wrong on our side. Please try again."})
 
 
+@app.exception_handler(OutOfTokens)
+async def out_of_tokens(_request: Request, exc: OutOfTokens) -> JSONResponse:
+    # The message for the athlete, as any error has, and the numbers behind it for the page to offer the token store.
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "tokens": exc.tokens})
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[*settings.cors_origins, "http://localhost:3001", "http://127.0.0.1:3001"],
@@ -116,6 +125,7 @@ app.include_router(week_coach_router)
 app.include_router(stroke_detection_router)
 app.include_router(consents_router)
 app.include_router(survey_router)
+app.include_router(tokens_router)
 
 
 @app.get("/health")
@@ -268,10 +278,10 @@ def _chat_openai() -> OpenAI:
         return _chat_clients[key]
 
 
-def _coach_messages(request: CoachChatRequest, authorization: str | None, on_call: bool = False) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
-    """The messages for the coach's reply to the athlete's latest message, and the program sessions they draw on, after
-    checking the athlete and their coach. Raises HTTPException, or APIError when the database can't be read. `on_call`:
-    a voice call's turn, which reuses what the call's last turn looked up (CALL_CONTEXT_SECONDS)."""
+def _coach_messages(request: CoachChatRequest, authorization: str | None, on_call: bool = False) -> tuple[list[dict[str, str]], list[dict[str, Any]], dict[str, Any]]:
+    """The messages for the coach's reply to the athlete's latest message, the program sessions they draw on and the
+    athlete's profile, after checking the athlete and their coach. Raises HTTPException, or APIError when the database
+    can't be read. `on_call`: a voice call's turn, which reuses what the call's last turn looked up (CALL_CONTEXT_SECONDS)."""
     key = hashlib.sha256(authorization.encode()).hexdigest() if on_call and authorization else None
     now = time.monotonic()
     remembered = _call_context.get(key) if key else None
@@ -357,7 +367,7 @@ YOUR COACHING PROGRAM (your own session types, weekly orders, rules and the sess
                        "in the first person. Never present unsupported claims as part of your program.",
         },
         {"role": "user", "content": prompt},
-    ], sources
+    ], sources, profile
 
 
 def _reply_options(request: CoachChatRequest) -> dict[str, Any]:
@@ -366,19 +376,26 @@ def _reply_options(request: CoachChatRequest) -> dict[str, Any]:
             **sampling(settings.openai_model, "none" if request.mode == "conversation" else settings.openai_reasoning_effort, 0.2)}
 
 
+def _reply_action(request: CoachChatRequest) -> str:
+    """What a reply costs as (app/tokens.py): a typed message, or a turn of a voice call."""
+    return "voice_reply" if request.mode == "conversation" else "coach_chat"
+
+
 @app.post("/api/coach-chat", response_model=CoachChatResponse)
 def coach_chat(request: CoachChatRequest, authorization: str | None = Header(default=None)) -> CoachChatResponse:
     if not settings.openai_api_key:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="OPENAI_API_KEY_BOSS is not configured.")
 
     try:
-        messages, sources = _coach_messages(request, authorization)
-        response = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages)
-        content = response.choices[0].message.content
-        if not content:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The coach returned an empty response.")
-        # A reply that prescribes sessions says which kinds, so the chat can offer to add them to the athlete's weeks.
-        return CoachChatResponse(content=content, sources=sources, plan=plan_kinds(content))
+        messages, sources, profile = _coach_messages(request, authorization)
+        # The reply's tokens, given back if no reply comes.
+        with tokens.charged(profile, _reply_action(request)):
+            response = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages)
+            content = response.choices[0].message.content
+            if not content:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The coach returned an empty response.")
+            # A reply that prescribes sessions says which kinds, so the chat can offer to add them to the athlete's weeks.
+            return CoachChatResponse(content=content, sources=sources, plan=plan_kinds(content))
     except HTTPException:
         raise
     except APIError as exc:
@@ -395,14 +412,26 @@ def coach_chat_live(request: CoachChatRequest, authorization: str | None = Heade
     if not settings.openai_api_key:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="OPENAI_API_KEY_BOSS is not configured.")
     try:
-        messages, sources = _coach_messages(request, authorization, on_call=True)
-        stream = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages, stream=True)
+        messages, sources, profile = _coach_messages(request, authorization, on_call=True)
     except HTTPException:
         raise
     except APIError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Coach context query failed: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Coach response failed: {exc}") from exc
+    # The reply's tokens: given back if it can't start, breaks off before the coach has said it, or none of it reaches the
+    # athlete (the call moved on: they went on talking, or hung up). Once some of it has, it's theirs.
+    receipt = tokens.charge(profile, _reply_action(request))
+    try:
+        stream = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages, stream=True)
+    except Exception as exc:
+        tokens.give_back(receipt)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Coach response failed: {exc}") from exc
+    reached = {"athlete": False, "given_back": False}
+
+    def give_back() -> None:
+        reached["given_back"] = True
+        tokens.give_back(receipt)
 
     def events():
         written: list[str] = []
@@ -412,18 +441,27 @@ def coach_chat_live(request: CoachChatRequest, authorization: str | None = Heade
                 if delta:
                     written.append(delta)
                     yield json.dumps({"delta": delta}) + "\n"
+                    reached["athlete"] = True  # asked for more: what came before was sent
             content = "".join(written)
             if content.strip():
                 yield json.dumps({"done": True, "content": content, "sources": sources, "plan": plan_kinds(content)}) + "\n"
             else:
+                give_back()
                 yield json.dumps({"error": "The coach returned an empty response."}) + "\n"
         except Exception:
             logger.exception("Coach reply broke off on a voice call")
+            give_back()
             yield json.dumps({"error": "The coach couldn't finish answering. Please try again."}) + "\n"
         finally:
             stream.close()
 
-    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    def unheard() -> None:
+        """Once the reply is over, or the call has left it: a reply none of which reached the athlete is free."""
+        if not reached["athlete"] and not reached["given_back"]:
+            give_back()
+
+    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+                             background=BackgroundTask(unheard))
 
 
 @app.post("/api/payments/checkout", response_model=CheckoutSessionResponse)
@@ -567,15 +605,18 @@ def video_analysis_access(request: Request, authorization: str | None = Header(d
 
 @app.post("/api/video-analysis")
 def analyze_video(payload: dict[str, Any], request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    """The coach brief for an analysed clip: as many as a subscriber likes, otherwise one free analysis (402 after)."""
+    """The coach brief for an analysed clip: a subscriber's costs tokens (app/tokens.py), and anyone else gets one free
+    analysis (402 after)."""
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="OPENAI_API_KEY_BOSS is not configured in the backend environment.",
         )
-    claimed = start_analysis(identify(request, authorization))
+    visitor = identify(request, authorization)
+    claimed = start_analysis(visitor)
     try:
-        return _coach_brief(payload)
+        with tokens.charged(visitor.profile, "video_analysis") if visitor.profile else nullcontext():
+            return _coach_brief(payload)
     except BaseException:
         release(claimed)  # an analysis that fails doesn't use up the free one
         raise
@@ -725,7 +766,8 @@ def save_onboarding(submission: OnboardingSubmission, authorization: str | None 
         supabase.table("user_coach_matches").delete().eq("user_id", row["id"]).execute()
         supabase.table("user_coach_matches").insert({"user_id": row["id"], "coach_name": coach}).execute()
         if existing is None:
-            record_new_athlete(row["id"], guardian)
+            # The Terms version they accepted when they signed up.
+            record_new_athlete(row["id"], guardian, accepted=(user.user_metadata or {}).get("accepted_terms"))
     except APIError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Supabase persistence error: {exc}") from exc
 
@@ -822,6 +864,9 @@ def get_subscription(authorization: str | None = Header(default=None)) -> dict[s
         "offers": offers,
         # The monthly plan alone, for a payment screen that was loaded before yearly billing existed.
         "offer": offers[0],
+        # The tokens a subscription includes every month for the AI features (app/tokens.py), said before paying: only to
+        # an account that uses them.
+        "monthly_tokens": tokens.MONTHLY_TOKENS if tokens.available() and tokens.account_uses_tokens(user) else None,
         "coach": {"name": fit["name"], "title": fit["title"], "inspired_by": fit["inspired_by"]} if fit else None,
         "program": {
             "headline": (plan.get("coach_match") or {}).get("headline"),

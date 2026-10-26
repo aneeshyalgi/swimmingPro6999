@@ -66,6 +66,8 @@ class VideoAccessTestCase(unittest.TestCase):
             # As deployed: behind a hosting platform's proxy, which reports each caller's address in X-Forwarded-For.
             ("app.video_access._through_proxy", {"return_value": True}),
             ("app.main.settings", {"new": SimpleNamespace(openai_api_key="test-openai")}),
+            # A subscriber's tokens (tests/test_tokens.py tests them).
+            ("app.tokens.charge", {"return_value": None}),
         ]:
             patcher = patch(target, **options)
             patcher.start()

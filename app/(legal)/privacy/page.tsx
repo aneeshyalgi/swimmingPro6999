@@ -40,6 +40,7 @@ const sections: LegalSection[] = [
               <tr><td>Mind and Nutrition answers, check-ins</td><td>Tailor mental and nutrition guidance</td><td>Art. 9(2)(a), 6(1)(a): your consent</td></tr>
               <tr><td>A parent or guardian&apos;s consent (under 16)</td><td>Prove that they agreed</td><td>Art. 6(1)(c), 7(1), 8</td></tr>
               <tr><td>Chats, voice and video frames</td><td>AI coaching answers</td><td>Art. 6(1)(b)</td></tr>
+              <tr><td>Tokens: your balance and what you used them on</td><td>Run your tokens for the AI features</td><td>Art. 6(1)(b)</td></tr>
               <tr><td>Survey answers, if you take part</td><td>Improve SwimGPT</td><td>Art. 6(1)(f); emails about your answers or new surveys: 6(1)(a)</td></tr>
               <tr><td>Payment data</td><td>Subscriptions and purchases, bookkeeping</td><td>Art. 6(1)(b) and (c)</td></tr>
             </tbody>
@@ -163,7 +164,7 @@ const sections: LegalSection[] = [
     title: "Payments",
     body: (
       <>
-        <p>When you subscribe, buy a training plan or pay for a coach change, you pay on Stripe&apos;s secure checkout page. Stripe processes your name, email address, billing country or address, payment details (such as your card or your Stripe Link account) and the transaction. Stripe may also use device and connection data to prevent fraud.</p>
+        <p>When you subscribe, buy a training plan or tokens, or pay for a coach change, you pay on Stripe&apos;s secure checkout page. Stripe processes your name, email address, billing country or address, payment details (such as your card or your Stripe Link account) and the transaction. Stripe may also use device and connection data to prevent fraud.</p>
         <p>From Stripe we receive confirmation of the payment, the plan, amount, status and renewal dates, and Stripe&apos;s customer and subscription references, but never your full card details. The legal bases are our contract with you (Art. 6(1)(b) GDPR), our legal duties to keep accounting records (Art. 6(1)(c) GDPR) and preventing fraud (Art. 6(1)(f) GDPR).</p>
         <p>Payments are provided by <strong>Stripe Payments Europe, Ltd.</strong> (Ireland). For some purposes, such as preventing fraud and meeting its own legal duties, Stripe is a separate controller; see <a href="https://stripe.com/privacy" {...external}>Stripe&apos;s privacy policy</a>. If you choose Stripe Link, Link saves your payment details for future purchases under Stripe&apos;s terms. We keep payment and invoice records for 10 years, as German tax and commercial law requires (§ 147 AO, § 257 HGB).</p>
       </>
@@ -174,6 +175,16 @@ const sections: LegalSection[] = [
     title: "Training plan store",
     body: (
       <p>For each purchase we keep the plan, price, currency, date, payment status and Stripe&apos;s payment reference. You read your plans in the app. The legal bases are our contract with you (Art. 6(1)(b) GDPR) and our accounting duties (Art. 6(1)(c) GDPR). We keep the purchase record for as long as you have access to the plan, and the payment record for 10 years.</p>
+    ),
+  },
+  {
+    id: "tokens",
+    title: "Tokens",
+    body: (
+      <>
+        <p>SwimGPT&apos;s AI features use tokens for accounts created on or after 26 October 2026 (see our <Link href="/terms#tokens">Terms</Link>). For those accounts we keep the tokens you have: each month&apos;s and those you buy, how many are left and until when. We also keep each AI request that used tokens: which feature, how many tokens, when, and whether they were given back. For tokens you buy we keep the pack, the number of tokens, the price, currency, date, payment status and Stripe&apos;s checkout reference.</p>
+        <p>We use this to keep your balance, take and give back tokens, and show you in the Token store where your tokens went. The legal bases are our contract with you (Art. 6(1)(b) GDPR) and, for purchases, our accounting duties (Art. 6(1)(c) GDPR). It is stored with Supabase. We keep each request for 180 days and your tokens until 180 days after they expire; purchase records for as long as your account exists, and the payment record for 10 years (see <a href="#payments">Payments</a>).</p>
+      </>
     ),
   },
   {
@@ -262,6 +273,7 @@ const sections: LegalSection[] = [
             <tr><td>Emails with us</td><td>Until your request is dealt with, unless we must keep them by law</td></tr>
             <tr><td>Chats and data in your browser</td><td>On your device until you delete them</td></tr>
             <tr><td>Coach chats saved with your account</td><td>The latest 50 messages with your coach, until you start a new chat, clear your history or delete your account</td></tr>
+            <tr><td>Tokens: your balance and what you used them on</td><td>Each request 180 days; your tokens until 180 days after they expire; token purchases until you delete your account (payment records 10 years)</td></tr>
           </tbody>
         </table>
       </div>

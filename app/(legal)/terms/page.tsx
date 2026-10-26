@@ -13,7 +13,7 @@ const supportEmail = OPERATOR.email
 
 export const metadata: Metadata = {
   title: "Terms of Service · SwimGPT",
-  description: "The terms for using SwimGPT: subscriptions, cancellation, your right of withdrawal, AI coaching and safety.",
+  description: "The terms for using SwimGPT: subscriptions, tokens, cancellation, your right of withdrawal, AI coaching and safety.",
 }
 
 const sections: LegalSection[] = [
@@ -35,6 +35,7 @@ const sections: LegalSection[] = [
     body: (
       <>
         <p>SwimGPT is an AI coaching service for swimmers. With a subscription you get your personalised season plan, swim and gym weeks, the workout library and calendar, race planning and pacing, progress tracking, Mind and Nutrition guidance, chats and voice conversations with your AI coach, and video stroke analysis, as described in the app when you subscribe.</p>
+        <p>The AI features use tokens. Your subscription includes tokens every month, and you can buy more (see <a href="#tokens">Tokens for AI features</a>).</p>
         <p>Without a subscription you can create an account, complete onboarding, see a preview of your plan and analyse one video for free. Training plans in our store are sold separately. What exactly is included is shown on the payment screen and in the app.</p>
       </>
     ),
@@ -115,6 +116,27 @@ const sections: LegalSection[] = [
     ),
   },
   {
+    id: "tokens",
+    title: "Tokens for AI features",
+    body: (
+      <>
+        <p>SwimGPT&apos;s AI features use tokens: messages and voice calls with your coach, generating and re-planning your swim and gym weeks, the week re-planner, race plans and video analysis. How many tokens each one uses is shown in the Token store in your dashboard. Tokens are taken when the AI starts working. If it then fails, or you leave before a generated week is saved, they are given back automatically. When you don&apos;t have enough tokens for something, it doesn&apos;t run and nothing is taken.</p>
+        <p>Tokens apply to accounts created on or after 26 October 2026. If you created your account before then, your subscription includes the AI features without tokens, as before.</p>
+        <h3>Monthly tokens</h3>
+        <p>Your subscription includes tokens every month. How many is shown on the payment screen and in the Token store. They are added on the 26th of each month and can be used until the next 26th. Monthly tokens you haven&apos;t used by then expire; they don&apos;t carry over to the next month.</p>
+        <h3>Buying tokens</h3>
+        <p>You can buy extra tokens in the Token store at the prices shown there. You order them the same way as a training plan, using the payment button (&ldquo;Pay&rdquo;) on the checkout page. They are added to your account as soon as your payment is confirmed and can be used for 2 months from then. Bought tokens you haven&apos;t used by then expire. The tokens that expire first are always used first.</p>
+        <h3>Rules for all tokens</h3>
+        <ul>
+          <li>Tokens can only be used for SwimGPT&apos;s AI features, and only while your subscription is active. Bought tokens still expire 2 months after you buy them.</li>
+          <li>Tokens have no cash value. They can&apos;t be paid out, exchanged, sold or moved to another account.</li>
+          <li>Bought tokens are not refunded, except under your statutory rights. Your right of withdrawal for them ends once they are added (see <a href="#withdrawal">Your right of withdrawal</a>). Unused tokens expire when your account is deleted.</li>
+          <li>We may change how many tokens a feature uses, how many tokens your subscription includes each month, or the token packs, where there is a valid reason, such as a change in the cost of the AI models we use. Tokens you&apos;ve already bought keep their 2 months. If a change affects your subscription more than slightly, we tell you in advance, and you can end your subscription free of charge as described under <a href="#availability">Availability and changes to SwimGPT</a>.</li>
+        </ul>
+      </>
+    ),
+  },
+  {
     id: "cancellation",
     title: "Cancelling",
     body: (
@@ -143,6 +165,7 @@ const sections: LegalSection[] = [
         <p><strong>Your subscription.</strong> When you start your subscription, you ask us at checkout to provide it straight away, before the withdrawal period ends, and we begin at once. From that moment, everything SwimGPT provides is a service you have received, including workout and season plan generation, coach chat and live voice calls, nutrition and mental performance support, performance tracking and every other feature of your subscription. If you withdraw within the 14 days, you pay for your subscription up to and including the day we receive your withdrawal, calculated per day from the price of your billing period, and only the remainder is refunded. Cancelling your subscription is not a withdrawal: it only ends your subscription for the future, as described under <a href="#cancellation">Cancelling</a>. Once the withdrawal period has ended, payments are not refunded, except in the cases described under <a href="#cancellation">Cancelling</a>.</p>
         <p><strong>Coach switches.</strong> A coach switch is carried out straight away, as you ask at checkout, and is complete once your season plan has been rebuilt with your new coach. From then on, your right of withdrawal has ended and the payment for the switch is not refunded (§ 356(4) BGB).</p>
         <p><strong>Training plans.</strong> A training plan from our store (digital content not supplied on a tangible medium) is unlocked in your account as soon as your payment is confirmed. Your right of withdrawal ends at that moment, even if you never open the plan, provided you expressly agreed at checkout that we unlock it before the withdrawal period ends and confirmed that you know you thereby lose your right of withdrawal (§ 356(5) BGB). Once it has ended, the plan is not refunded.</p>
+        <p><strong>Tokens.</strong> Tokens you buy (digital content not supplied on a tangible medium) are added to your account as soon as your payment is confirmed. Your right of withdrawal ends at that moment, even if you haven&apos;t used them, provided you expressly agreed at checkout that we add them before the withdrawal period ends and confirmed that you know you thereby lose your right of withdrawal (§ 356(5) BGB). Once it has ended, bought tokens are not refunded.</p>
         <p><strong>Business customers.</strong> If you use SwimGPT for purposes of your trade, business or profession, you have no right of withdrawal, and payments are not refunded except where the law requires it.</p>
         <p><strong>Customers outside the EU.</strong> If you live outside the European Union, the right of withdrawal described above does not apply to you, unless the law of the country where you live gives you a right of withdrawal that cannot be excluded by agreement (see <a href="#law">Applicable law and disputes</a>). Your rights if SwimGPT doesn&apos;t work as it should are not affected (see <a href="#warranty">If something doesn&apos;t work</a>).</p>
         <div className="lg-boxed">
@@ -242,7 +265,7 @@ const sections: LegalSection[] = [
     id: "changes",
     title: "Changes to these Terms",
     body: (
-      <p>New versions of these Terms apply to new contracts. We change the Terms of your existing contract only with your consent: we will send you the changes at least 30 days before they are meant to apply and ask whether you agree. If you don&apos;t agree, your current Terms continue to apply, and we may end the contract as described in <a href="#cancellation">Cancelling</a>.</p>
+      <p>New versions of these Terms apply to new contracts straight away. We may also change the Terms of your existing contract for the future where there is a valid reason, such as a change in the law or in court rulings, new or changed features of SwimGPT, or technical or security developments, as long as the change is reasonable for you and leaves the price of your subscription and what it includes as they are (see <a href="#subscriptions">Subscriptions, prices and renewal</a> and <a href="#availability">Availability and changes to SwimGPT</a>). We tell you about the change by email at least 30 days before it applies, and in that email we point out that it applies to you unless you object before then. If you object, we may end your contract at the end of a billing period, as described in <a href="#cancellation">Cancelling</a>.</p>
     ),
   },
   {

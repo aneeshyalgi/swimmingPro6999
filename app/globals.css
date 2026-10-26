@@ -705,6 +705,45 @@
   .store-confetti { display: none; }
 }
 
+/* ---------- Token store (components/token-store.tsx) ---------- */
+/* Coins drifting up behind the wallet */
+.token-float {
+  position: absolute; bottom: -32px; left: var(--x); opacity: 0;
+  animation: token-float var(--t, 12s) linear infinite; animation-delay: var(--d, 0s);
+}
+@keyframes token-float {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 0; }
+  12%, 78% { opacity: var(--o, 0.3); }
+  100% { transform: translate3d(var(--dx, 0px), -380px, 0) rotate(var(--r, 140deg)); opacity: 0; }
+}
+/* A coin turning over now and then */
+.token-spin { animation: token-spin 7s cubic-bezier(0.65, 0, 0.35, 1) infinite; animation-delay: var(--spin-delay, 1.2s); }
+@keyframes token-spin { 0%, 76% { transform: perspective(480px) rotateY(0deg); } 100% { transform: perspective(480px) rotateY(360deg); } }
+/* A pack's coins dropping onto its stack, and the chosen stack bobbing */
+.token-drop { animation: token-drop 650ms cubic-bezier(0.34, 1.5, 0.5, 1) both; animation-delay: var(--drop-delay, 0ms); }
+@keyframes token-drop { from { opacity: 0; transform: translateY(-24px); } to { opacity: 1; transform: none; } }
+.token-bob { animation: token-bob 3.4s ease-in-out infinite; }
+@keyframes token-bob { 50% { transform: translateY(-5px); } }
+/* Sparkles by the coins */
+.token-twinkle { transform-box: fill-box; transform-origin: center; animation: token-twinkle 2.8s ease-in-out infinite; animation-delay: var(--twinkle-delay, 0s); }
+@keyframes token-twinkle { 0%, 100% { opacity: 0; transform: scale(0.3); } 50% { opacity: 1; transform: scale(1); } }
+/* Cards and rows rising into place */
+.token-rise { animation: token-rise 650ms cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: var(--rise-delay, 0ms); }
+@keyframes token-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+/* The wallet's rings drawing round, and today moving along the month */
+.token-ring { transition: stroke-dashoffset 1600ms cubic-bezier(0.22, 1, 0.36, 1); transition-delay: var(--ring-delay, 0ms); }
+.token-slide { transition: left 1400ms cubic-bezier(0.22, 1, 0.36, 1), width 1400ms cubic-bezier(0.22, 1, 0.36, 1); }
+/* The coin popping in when tokens are added */
+.token-pop { animation: token-pop 900ms cubic-bezier(0.34, 1.6, 0.5, 1) both; }
+@keyframes token-pop { from { opacity: 0; transform: scale(0.2) rotate(-60deg); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .token-float { display: none; }
+  .token-spin, .token-drop, .token-bob, .token-twinkle, .token-rise, .token-pop { animation: none; }
+  .token-twinkle { opacity: 0.8; }
+  .token-ring, .token-slide { transition: none; }
+}
+
 /* ---------- Landing: demo player ---------- */
 .dp-root { position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center; padding: 72px 16px 24px; perspective: 1800px; }
 @media (min-width: 640px) { .dp-root { padding: 88px 40px 40px; } }

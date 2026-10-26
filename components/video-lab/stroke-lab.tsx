@@ -6,6 +6,7 @@ import type { PoseLandmarker } from "@mediapipe/tasks-vision"
 import { Activity, ArrowRight, Check, Crosshair, Cpu, Film, Gauge, Loader2, Ruler, RotateCcw, ScanLine, Sparkles, Waves } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { tokensChanged, tokensNeededIn } from "@/lib/token-events"
 import {
   detectPose, drawHud, getPoseLandmarker, measure, smoothPose, strokeRate, summarize,
   type ClipSummary, type FrameMetrics, type Layers, type Point, type PosePoint,
@@ -332,6 +333,9 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
       // Access can change after the check above (the free analysis used in another tab meanwhile).
       const blocked = await paywallOf(response)
       if (blocked) { setAccess(blocked); setPaywall(blocked); setPhase("ready"); setProgress(0); return }
+      // A subscriber out of tokens: the API's message says so (and the dashboard offers its token store).
+      const refused = response.status === 429 ? tokensNeededIn(response.status, await response.text()) : null
+      if (refused) { setError(refused.message); setPhase("ready"); setProgress(0); return }
       if (!response.ok) {
         // An expired session, or free-analysis records that couldn't be checked, explain themselves.
         const detail = response.status === 401 || response.status === 503 ? await detailOf(response) : null
@@ -344,6 +348,7 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
       setBriefStroke(chosen)
       setProgress(100)
       setPhase("done")
+      tokensChanged()
       if (current !== "subscribed") {
         rememberFreeAnalysisUsed()
         void checkAccess().then(setAccess)

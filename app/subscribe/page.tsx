@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, type CSSProperties, type ReactNode } fro
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
-  AlertTriangle, ArrowRight, Dumbbell, Info, LogOut, MessageCircle, PiggyBank, ShieldCheck, Sparkles, Target, Timer,
+  AlertTriangle, ArrowRight, Coins, Dumbbell, Info, LogOut, MessageCircle, PiggyBank, ShieldCheck, Sparkles, Target, Timer,
   TrendingUp, Trophy, Waves, Zap,
 } from "lucide-react"
 import { CoachAvatar } from "@/components/coach-avatar"
@@ -26,6 +26,8 @@ type Screen = {
   // Monthly and yearly. A backend from before yearly billing sends only `offer`, the monthly plan.
   offers?: Offer[]
   offer: Offer
+  // The tokens the subscription includes every month for the AI features (absent from a backend from before tokens).
+  monthly_tokens?: number | null
   coach: { name: string; title: string; inspired_by: string | null } | null
   program: {
     headline: string | null
@@ -230,9 +232,11 @@ function SubscribeContent() {
   const features = [
     { icon: Waves, text: `Every swim session written from ${coachName}'s program` },
     { icon: Dumbbell, text: "Strength, mobility and recovery planned around your swims" },
-    { icon: MessageCircle, text: `Chat or talk live with ${coachName}, any time` },
+    { icon: MessageCircle, text: `Chat or talk live with ${coachName}` },
     { icon: Trophy, text: "Race plans, pacing and taper for your meets" },
     { icon: TrendingUp, text: "Track every PB, split and training zone" },
+    // What the AI features run on, said before paying (Terms, "Tokens for AI features").
+    ...(screen.monthly_tokens ? [{ icon: Coins, text: `${screen.monthly_tokens.toLocaleString()} tokens every month for the AI features, with more in the Token store` }] : []),
   ]
 
   return (

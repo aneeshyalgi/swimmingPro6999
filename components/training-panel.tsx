@@ -31,6 +31,7 @@ import { CalendarDay, compactMeters } from "@/components/calendar-day"
 import { GUIDE_SUBTAB, type GuideEvent, type GuideTarget } from "@/components/dashboard-guide"
 import { NewSwimEditor, TrainingItemEditor, type EditTarget } from "@/components/training-item-editor"
 import { cn } from "@/lib/utils"
+import { tokensChanged } from "@/lib/token-events"
 import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
 import { WeekCoach, WeekCoachButton, type WeekLink } from "@/components/week-coach"
 import {
@@ -975,6 +976,7 @@ function CompetitionCard({ meet, busy, resultKey, setResultKey, onDelete, perfor
     <div className="relative p-5 sm:p-6">
       {!meet.races.length && <Button size="sm" className="mb-5 rounded-full bg-gradient-to-r from-cyan-300 to-sky-400 font-semibold text-slate-950" disabled={busy} onClick={() => perform(async () => {
         await trainingRequest(`/competitions/${meet.id}/plan`, competitionSchema, { method: "POST" })
+        tokensChanged()
       }, "Race plans saved from your onboarding data and your coach's methods.")}><Sparkles className="mr-1.5 h-4 w-4" />Generate Individual Race Plans</Button>}
       <TwoColumnFlow gap={4} weights={meet.events.map((event) => (meet.races.some((item) => item.event === event) ? 3 : 1) + (meet.results.some((item) => item.result.event === event) ? 2 : 0))}
         items={meet.events.map((event) => {
