@@ -61,16 +61,18 @@ SPOKEN_PLAN_RULES = """- When the athlete asks for a training plan, session, wor
 - Say it straight away, without asking questions first, fitted to their profile (their swims a week and session
   length); anything the profile doesn't tell you, assume sensibly and say so in a few words."""
 
-# A swim's sets: repeats of a pool distance ("4x50", "8 x 25"), distances with what they're swum as ("300 loosen",
-# "200 easy with fins") and the same said aloud ("eight fifties", "six one-fifties", "three hundred easy").
+# A swim's sets: repeats of a pool distance ("4x50", "8 x 25", "8 × 50m"), distances with what they're swum as ("300
+# loosen", "200 easy with fins") and the same said aloud ("eight fifties", "six one-fifties", "three hundred easy").
 _DISTANCES = r"(?:12|15|20|25|50|75|100|150|200|250|300|400|500|600|800|1000|1200|1500)"
+# A distance's unit written onto it ("50m", "100yd"), which leaves no word boundary after the number.
+_UNIT = r"(?:m|metres|meters|yd|yards)?"
 _SWUM_AS = (r"(?:easy|loosen|choice|kick|pull|drill|scull|swim|build|descend|fast|max|smooth|cruise|recovery|aerobic|threshold|sprint|"
             r"dive|fins|paddles|snorkel|warm[- ]?up|warm[- ]?down|cool[- ]?down)")
 _COUNT_WORDS = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve|sixteen|twenty|\d{1,2})"
 _SAID_REPEATS = (r"(?:twenty[- ]fives|fifties|seventy[- ]fives|one[- ]hundreds|hundreds|one[- ]fifties|two[- ]hundreds|two[- ]fifties|"
                  r"three[- ]hundreds|four[- ]hundreds)")
 _SWIM_PATTERNS = [
-    re.compile(rf"\b\d{{1,2}}\s*x\s*\(?\s*{_DISTANCES}\b(?!\s*(?:reps?|kg|lbs?|%|sec|seconds|s\b))"),
+    re.compile(rf"\b\d{{1,2}}\s*x\s*\(?\s*{_DISTANCES}{_UNIT}\b(?!\s*(?:reps?|kg|lbs?|%|sec|seconds|s\b))"),
     re.compile(rf"\b{_DISTANCES}\s*(?:m|meters|metres|yd|yards)?\s+(?:of\s+)?{_SWUM_AS}\b"),
     re.compile(rf"\b{_COUNT_WORDS}\s+{_SAID_REPEATS}\b"),
     re.compile(rf"\b(?:one|two|three|four|five|six|eight)[\s-]+hundred\s+(?:meters?\s+|metres?\s+)?{_SWUM_AS}\b"),
@@ -125,7 +127,7 @@ def plan_kinds(reply: str) -> Literal["swim", "gym", "both"] | None:
 
 
 # Any pool distance, written or said ("four rounds of 150 freestyle", "six one-hundreds"), but not a time ("20 seconds").
-_ANY_DISTANCE = re.compile(rf"\b{_DISTANCES}\b(?!\s*(?:s\b|sec|secs|seconds|min|mins|minutes|%))|"
+_ANY_DISTANCE = re.compile(rf"\b{_DISTANCES}{_UNIT}\b(?!\s*(?:s\b|sec|secs|seconds|min|mins|minutes|%))|"
                            r"\b(?:twenty[- ]fives?|fifties|fifty|seventy[- ]fives?|hundreds?|one[- ]fifties)\b")
 
 

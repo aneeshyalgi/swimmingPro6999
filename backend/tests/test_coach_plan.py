@@ -145,6 +145,16 @@ class PlanKindsTests(unittest.TestCase):
         self.assertIsNone(plan_kinds("Try 4x50 at race pace once a week to sharpen your speed."))
         self.assertIsNone(plan_kinds("Stretch your hips for 5 min after every swim."))
 
+    def test_distances_with_their_unit_written_on_are_sets(self):
+        # As GPT-6.1 Sol writes them: "1 × 200m freestyle" (no space before the m).
+        reply = ("### Warm-up — 900m\n1. **1 × 200m freestyle**, easy loosen — rest **20 seconds**.\n"
+                 "2. **8 × 50m freestyle pull with buoy and paddles** — leave every 1:40.\n"
+                 "### Main set — 200m\n**8 × 25m freestyle from a dive, maximal speed — leave every 2:30.**")
+        self.assertEqual(plan_kinds(reply), "swim")
+        self.assertTrue(coach_plan.prescribed("swim", "Warm-down: 1 × 300m easy freestyle with fins"))
+        # Times written the same way aren't distances.
+        self.assertIsNone(plan_kinds("Walk 3 x 20min, then 2 x 15min of easy cycling."))
+
 
 class CoachChatPlanTests(unittest.TestCase):
     """The chat asks the coach to write sessions out in full and returns which kinds a reply prescribes."""
