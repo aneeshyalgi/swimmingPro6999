@@ -42,7 +42,7 @@ from app.withdrawal import start_now_metadata
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tokens", tags=["Tokens"])
 
-MONTHLY_TOKENS = 100
+MONTHLY_TOKENS = 50
 BOUGHT_MONTHS = 2
 # The accounts that use tokens: those made from TOKENS_FROM, when the Terms that brought them in (TOKENS_TERMS) began.
 # In the CHANGEOVER after that, an account that signed up under earlier Terms (its sign-up page was opened before the
