@@ -179,12 +179,15 @@ def _relevance(program: CoachProgram, session, taper: bool, query_words: set[str
     return score
 
 
-def chat_context(names: list[str], query: str, limit: int = 8, swims: int = 0) -> tuple[str, list[dict[str, Any]], list[str]]:
+def chat_context(names: list[str], query: str, limit: int = 8, swims: int = 0,
+                 taper_week: bool | None = None) -> tuple[str, list[dict[str, Any]], list[str]]:
     """Programs of the athlete's coaches for a question: each coach's full overview plus its most relevant sessions.
 
     `swims`: the athlete's swims a week. Each coach's week for that many swims is then always there (the best-matching
     session of every type in it), so a plan for the week is written from the coach's own sessions: a message that
     matches no session's words ("Can you give me a training plan") otherwise gets the sessions listed first.
+    `taper_week`: the week's sessions only from the coach's taper sessions (True) or only from the others (False);
+    None takes whichever matches the question best.
 
     Returns (context, sources, coach names). Sources name the sessions used, for provenance in the response.
     """
@@ -200,7 +203,8 @@ def chat_context(names: list[str], query: str, limit: int = 8, swims: int = 0) -
     chosen: list = []
     for program in programs:   # the athlete's week: the best-matching session of every type in it
         for kind in dict.fromkeys(swim_order(program, swims)):
-            chosen += [item for item in ranked if item[0] is program and item[1].type == kind][:1]
+            chosen += [item for item in ranked if item[0] is program and item[1].type == kind
+                       and (taper_week is None or item[2] == taper_week)][:1]
     for program in programs:   # every coach is represented by at least their best-matching sessions
         own = [item for item in ranked if item[0] is program]
         wanted = max(1, limit // (2 * len(programs))) - sum(item in chosen for item in own)
@@ -218,6 +222,8 @@ def chat_context(names: list[str], query: str, limit: int = 8, swims: int = 0) -
 
 
 def plan_context(profile: dict[str, Any], coach: str) -> tuple[str, list[str]]:
-    """The coach's program (overview and session catalogue) for the athlete's season plan."""
-    context, sources, _ = chat_context([coach], " ".join(profile.get("main_events") or []) + " race pace taper", limit=6)
+    """The coach's program for the athlete's season plan: its overview and session catalogue, a session of every type in
+    the athlete's week as the coach trains it (not tapered), and the race-pace and taper sessions closest to their events."""
+    context, sources, _ = chat_context([coach], " ".join(profile.get("main_events") or []) + " race pace taper", limit=8,
+                                       swims=int(profile.get("swim_sessions_per_week") or 0), taper_week=False)
     return context, sorted({item["source_file"] for item in sources})

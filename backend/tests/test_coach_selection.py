@@ -2,7 +2,7 @@ from itertools import combinations
 import unittest
 
 from app.coach_catalog import COACHES
-from app.context import athlete_coach, chat_context, coach_options, coach_recommendation, recommended_coach, select_coach
+from app.context import athlete_coach, chat_context, coach_options, coach_recommendation, plan_context, recommended_coach, select_coach
 from app.schemas import OnboardingSubmission
 
 # Events and swimmer types exactly as the onboarding form sends them.
@@ -161,6 +161,19 @@ class CoachContextTests(unittest.TestCase):
                             (6, {"Power", "Threshold", "Active Rest", "Threshold/Aerobic", "Kick", "VO2MAX"})):
             self.assertLessEqual(week, set(kinds(swims)), swims)
             self.assertEqual(len(kinds(swims)), 8)
+
+    def test_the_season_plan_has_every_session_of_the_athletes_week_and_their_taper(self):
+        def kind(label):
+            return label.split(" - ")[1].rsplit(" Session", 1)[0]
+        _, sources = plan_context({"main_events": ["50m Freestyle", "100m Breaststroke"], "swim_sessions_per_week": 6}, "Coach Brad")
+        # The week as Brad trains it (its sessions, not their taper versions), then the race-pace and taper sessions.
+        week = {"Power", "50 Race Pace", "Aerobic/Recovery", "Resistance", "100 Race Pace"}
+        self.assertLessEqual(week, {kind(label) for label in sources if not kind(label).startswith("Taper ")})
+        self.assertTrue(any(kind(label).startswith("Taper ") for label in sources))
+        self.assertEqual(len(sources), 8)
+        # A question about tapering still gets the taper version of each session of the week.
+        _, chat_sources, _ = chat_context(["Coach Brad"], "plan my taper week", swims=4)
+        self.assertTrue(all(source["source_file"].startswith("Coach Brad - Taper ") for source in chat_sources[:4]))
 
     def test_the_week_keeps_the_sessions_a_question_is_about(self):
         _, sources, _ = chat_context(["Coach Robert"], "give me a kick set", swims=4)
