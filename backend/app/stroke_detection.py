@@ -24,7 +24,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field, field_validator
 
-from app.config import get_settings
+from app.config import get_settings, reasons
 from app.video_access import allow_recognition, identify
 
 router = APIRouter(prefix="/api/video-analysis", tags=["Video analysis"])
@@ -144,8 +144,8 @@ def evidence_text(evidence: PoseEvidence | None) -> str:
 
 
 def model_options(model: str) -> dict[str, Any]:
-    """Reasoning models (GPT-5, o-series) take a reasoning effort and no temperature; others answer at temperature 0."""
-    return {"reasoning_effort": "low"} if model.startswith(("gpt-5", "o1", "o3", "o4")) else {"temperature": 0}
+    """Reasoning models (GPT-5, GPT-6, o-series) take a reasoning effort and no temperature; others answer at temperature 0."""
+    return {"reasoning_effort": "low"} if reasons(model) else {"temperature": 0}
 
 
 def normalize_stroke(value: Any) -> str | None:

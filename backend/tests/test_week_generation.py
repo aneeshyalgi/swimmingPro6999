@@ -81,6 +81,16 @@ class StreamedReplyTests(unittest.TestCase):
         self.assertNotIn("temperature", request)
         self.assertEqual(request["timeout"].read, 2 * training.SILENT_SECONDS)
 
+    def test_a_model_that_always_reasons_is_never_asked_not_to(self):
+        # GPT-6.1 Sol refuses reasoning_effort none: set to none, it reasons as little as it can, with room to think.
+        client = FakeClient(answer('{"title": "a", "items": []}'))
+        with patch.object(training, "get_settings", return_value=SimpleNamespace(openai_plan_model="gpt-6.1-sol", openai_plan_reasoning_effort="none")):
+            self.reply(client)
+        request = client.requests[0]
+        self.assertEqual((request["model"], request["reasoning_effort"]), ("gpt-6.1-sol", "low"))
+        self.assertEqual(request["max_completion_tokens"], 500 + training.REASONING_TOKENS)
+        self.assertNotIn("temperature", request)
+
     def test_a_reply_stuck_writing_whitespace_is_stopped_at_once(self):
         stuck = [chunk('{"title": "a", "items": [1, 2, 3'), *[chunk("    ") for _ in range(10_000)]]
         client = FakeClient(stuck)

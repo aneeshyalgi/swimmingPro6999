@@ -435,7 +435,8 @@ class CoachReplyTests(TokensCase):
                             ("chat_context", ("PROGRAM", [], ["Coach Brad"])), ("recent_race_results", []), ("pacing_context", {}),
                             ("_chat_openai", self.openai)]:
             self.patch(main, name, return_value=value)
-        self.patch(main, "settings", new=SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_reasoning_effort="low"))
+        self.patch(main, "settings", new=SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_voice_model="gpt-4o-mini",
+                                                         openai_reasoning_effort="low"))
         patcher = patch.dict(main._call_context, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)

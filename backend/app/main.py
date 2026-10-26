@@ -371,9 +371,11 @@ YOUR COACHING PROGRAM (your own session types, weekly orders, rules and the sess
 
 
 def _reply_options(request: CoachChatRequest) -> dict[str, Any]:
-    # A voice call's reply is spoken the moment it's ready, so it doesn't reason first.
-    return {"model": settings.openai_model,
-            **sampling(settings.openai_model, "none" if request.mode == "conversation" else settings.openai_reasoning_effort, 0.2)}
+    # A voice call's reply is spoken the moment it's ready: its own model, which reasons as little as it allows (not at
+    # all where it can).
+    if request.mode == "conversation":
+        return {"model": settings.openai_voice_model, **sampling(settings.openai_voice_model, "none", 0.2)}
+    return {"model": settings.openai_model, **sampling(settings.openai_model, settings.openai_reasoning_effort, 0.2)}
 
 
 def _reply_action(request: CoachChatRequest) -> str:

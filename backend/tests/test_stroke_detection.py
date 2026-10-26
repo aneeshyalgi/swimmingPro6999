@@ -138,6 +138,7 @@ class StrokeDetectionHelperTests(unittest.TestCase):
     def test_reasoning_models_get_an_effort_and_others_a_temperature(self):
         self.assertEqual(model_options("gpt-5.5"), {"reasoning_effort": "low"})
         self.assertEqual(model_options("o4-mini"), {"reasoning_effort": "low"})
+        self.assertEqual(model_options("gpt-6.1-sol"), {"reasoning_effort": "low"})
         self.assertEqual(model_options("gpt-4.1"), {"temperature": 0})
 
 

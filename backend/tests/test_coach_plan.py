@@ -155,7 +155,8 @@ class CoachChatPlanTests(unittest.TestCase):
         for name, value in [("get_authenticated_profile", {**PROFILE, "user_key": "key-1"}), ("recent_athlete_feedback", []),
                             ("chat_context", ("PROGRAM", [], ["Coach Brad"])), ("recent_race_results", []), ("pacing_context", {}),
                             ("coach_line", ""),
-                            ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_reasoning_effort="low"))]:
+                            ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_voice_model="gpt-4o-mini",
+                                                         openai_reasoning_effort="low"))]:
             patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
             self.addCleanup(patcher.stop)
             patcher.start()
@@ -197,7 +198,8 @@ class CoachChatPlanTests(unittest.TestCase):
         self.assertIn("The athlete's chosen training days: swims on Mon, Wed, Fri. When you write a week of sessions, put them on these days.", prompt)
 
     def test_on_gpt_5_the_chat_reasons_and_a_call_answers_at_once(self):
-        with patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_reasoning_effort="low")):
+        with patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_voice_model="gpt-5.5",
+                                                            openai_reasoning_effort="low")):
             self.chat(CHAT_SWIM)
             chat = self.openai.chat.completions.create.call_args.kwargs
             self.chat(SPOKEN_SWIM, mode="conversation")
@@ -208,6 +210,24 @@ class CoachChatPlanTests(unittest.TestCase):
         # Any other model answers at its temperature, as before.
         self.chat(ADVICE)
         self.assertEqual(self.openai.chat.completions.create.call_args.kwargs["temperature"], 0.2)
+
+    def test_on_gpt_6_the_chat_reasons_and_a_call_comes_from_its_own_model(self):
+        # The chat on GPT-6.1 Sol reasons; a call's reply comes from GPT-6 Sol, which can answer without reasoning.
+        with patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-6.1-sol", openai_voice_model="gpt-6-sol",
+                                                            openai_reasoning_effort="low")):
+            self.chat(CHAT_SWIM)
+            chat = self.openai.chat.completions.create.call_args.kwargs
+            self.chat(SPOKEN_SWIM, mode="conversation")
+            call = self.openai.chat.completions.create.call_args.kwargs
+        self.assertEqual((chat["model"], chat["reasoning_effort"]), ("gpt-6.1-sol", "low"))
+        self.assertEqual((call["model"], call["reasoning_effort"]), ("gpt-6-sol", "none"))
+        self.assertNotIn("temperature", chat)
+        self.assertNotIn("temperature", call)
+        # Calls set to GPT-6.1 Sol, which always reasons (it refuses none), reason as little as it can.
+        with patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-6.1-sol", openai_voice_model="gpt-6.1-sol",
+                                                            openai_reasoning_effort="low")):
+            self.chat(SPOKEN_SWIM, mode="conversation")
+        self.assertEqual(self.openai.chat.completions.create.call_args.kwargs["reasoning_effort"], "low")
 
 
 class _ReplyStream:
@@ -237,7 +257,8 @@ class CoachChatLiveTests(unittest.TestCase):
         for name, value in [("get_authenticated_profile", {**PROFILE, "user_key": "key-1"}), ("recent_athlete_feedback", []),
                             ("chat_context", ("PROGRAM", [{"source_file": "Power 1", "coach_name": "Coach Brad", "similarity": 3.0}], ["Coach Brad"])),
                             ("recent_race_results", []), ("pacing_context", {}), ("coach_line", ""),
-                            ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_reasoning_effort="low"))]:
+                            ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_voice_model="gpt-5.5",
+                                                         openai_reasoning_effort="low"))]:
             patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
             self.addCleanup(patcher.stop)
             patcher.start()

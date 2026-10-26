@@ -351,7 +351,8 @@ class ConversationGivenToTheCoachTests(unittest.TestCase):
                 patch.object(main, "recent_athlete_feedback", return_value=[]), patch.object(main, "coach_line", return_value=""), \
                 patch.object(main, "chat_context", return_value=("PROGRAM", [], ["Coach Brad"])), \
                 patch.object(main, "recent_race_results", return_value=[]), patch.object(main, "pacing_context", return_value={}), \
-                patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_reasoning_effort="low")), \
+                patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_voice_model="gpt-4o-mini",
+                                                               openai_reasoning_effort="low")), \
                 patch.object(main, "_chat_openai", return_value=openai), patch.object(tokens, "charge", return_value=None):
             body = {"user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "And today?", "history": history}
             response = client.post("/api/coach-chat", headers=HEADERS, json=body)
