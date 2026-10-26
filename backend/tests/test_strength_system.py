@@ -320,5 +320,37 @@ class ChosenStrengthDaysTests(unittest.TestCase):
             self.assertEqual(planner.call_args.args[4], counted)
 
 
+class WorkoutTitleTests(unittest.TestCase):
+    """The coach's words for a strength workout keep a workout's name as its title, never a slogan."""
+
+    def test_a_slogan_gets_another_attempt_then_the_systems_own_name(self):
+        from app import gym, training
+        text = gym.GymNarrative(title="Neural Strength. Clean Execution. Race Quality.", objective="o" * 10, rationale="r" * 10,
+                                coaching_notes="c" * 10)
+        [issue] = gym.title_issues(text, "Lower-Body Power + Start/Turn Strength")
+        self.assertIsInstance(issue, training.SoftIssue)
+        issue.fix()
+        self.assertEqual(text.title, "Lower-Body Power + Start/Turn Strength")
+        for name in ("Lower-Body Power + Start/Turn Strength", "Jump Power & Pulling Strength", "Sprint Mobility"):
+            self.assertEqual(gym.title_issues(text.model_copy(update={"title": name}), "x"), [], name)
+        self.assertTrue(gym.title_issues(text.model_copy(update={"title": "Build Power That Carries Into Every Start"}), "x"))
+
+    def test_the_coachs_words_are_checked_and_a_slogan_falls_back(self):
+        from app import gym
+        session = strength(plan_week(athlete(), MONDAY, WEEK, MONDAY))[0]
+
+        def write(_profile, schema, objective, check=None, **_options):
+            self.assertIn("not a slogan or sentences", objective)
+            text = schema(title="Race Power. Clean Execution. No Excess.", objective="o" * 10, rationale="r" * 10, coaching_notes="c" * 10)
+            for issue in check(text):     # as generate_structured does with a reply that keeps a minor issue
+                issue.fix()
+            return text, []
+
+        with patch.object(gym, "generate_structured", side_effect=write), patch.object(gym, "athlete_brief", return_value={}):
+            workout = gym._narrate({"id": "profile-a"}, session, "")
+        self.assertEqual(workout["title"], session.workout["title"])
+        self.assertEqual(workout["objective"], "o" * 10)
+
+
 if __name__ == "__main__":
     unittest.main()
