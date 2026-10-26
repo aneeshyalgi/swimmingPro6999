@@ -2,10 +2,11 @@
 
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react"
 import {
-  ArrowDown, AudioLines, CalendarClock, Check, ChevronDown, Coins, CreditCard, Dumbbell, Flag, Gift, History, Info,
+  ArrowDown, AudioLines, CalendarClock, Check, ChevronRight, Coins, CreditCard, Dumbbell, Flag, Gift, History, Info,
   Loader2, MessageCircle, RefreshCw, ShieldCheck, Sparkles, Undo2, Video, Wand2, Waves, Zap, type LucideIcon,
 } from "lucide-react"
 import { Reveal, Tile, TileHeader, useTween } from "@/components/dashboard-ui"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Banner, EmptyState } from "@/components/training-ui"
 import { StartNowConsent } from "@/components/legal/start-now-consent"
 import { formatPrice } from "@/lib/plan-store"
@@ -33,7 +34,7 @@ const OTHER = { does: "An AI feature", many: "AI requests", icon: Sparkles, colo
 const featureOf = (action: string | null) => (action && FEATURES[action]) || OTHER
 // What the wallet says the balance is enough for.
 const EXAMPLES = ["coach_chat", "swim_week", "video_analysis"]
-// History rows shown before "Show all".
+// History rows shown on the tile; "Show all" opens every one in a window of its own.
 const FIRST_ROWS = 8
 const DAY = 86_400_000
 
@@ -594,33 +595,40 @@ function Costs({ tokens }: { tokens: TokenBalance }) {
   )
 }
 
-/** The latest AI requests: how their tokens split between features, then each one, by day. */
+/** The latest AI requests: how their tokens split between features, then each one, by day; all of them in a window. */
 function Activity({ tokens }: { tokens: TokenBalance }) {
   const [everything, setEverything] = useState(false)
   const items = tokens.recent
-  const shown = everything ? items : items.slice(0, FIRST_ROWS)
   return (
     <Tile>
       <TileHeader icon={History} title="Where your tokens went" subtitle="Your latest AI requests" />
       {items.length ? (
         <>
           <Breakdown items={items} />
-          <ol className="mt-5 space-y-4">
-            {byDay(shown).map(([day, group]) => (
-              <li key={day}>
-                <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{day}</p>
-                <ul className="divide-y divide-white/[0.05]">
-                  {group.map((item, index) => <SpendRow key={`${item.at}-${index}`} item={item} />)}
-                </ul>
-              </li>
-            ))}
-          </ol>
+          <SpendDays items={items.slice(0, FIRST_ROWS)} className="mt-5" />
           {items.length > FIRST_ROWS && (
-            <button type="button" onClick={() => setEverything((value) => !value)} aria-expanded={everything}
-              className="mt-3 inline-flex items-center gap-1.5 rounded-full px-1 py-1 text-sm font-medium text-accent transition-colors hover:text-white">
-              {everything ? "Show fewer" : `Show all ${items.length}`}
-              <ChevronDown className={cn("h-4 w-4 transition-transform duration-300", everything && "rotate-180")} />
-            </button>
+            <Dialog open={everything} onOpenChange={setEverything}>
+              <DialogTrigger asChild>
+                <button type="button"
+                  className="group mt-3 inline-flex items-center gap-1.5 rounded-full px-1 py-1 text-sm font-medium text-accent transition-colors hover:text-white">
+                  Show all {items.length}
+                  <ChevronRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5" />
+                </button>
+              </DialogTrigger>
+              <DialogContent className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden border-white/10 bg-[#0d151c] p-0 sm:max-w-lg">
+                <DialogHeader className="border-b border-white/[0.06] px-5 pb-4 pr-12 pt-5 text-left">
+                  <DialogTitle className="flex items-center gap-2 text-white"><History className="h-4 w-4 text-accent" />Where your tokens went</DialogTitle>
+                  <DialogDescription className="text-slate-400">Your latest {items.length} AI requests</DialogDescription>
+                </DialogHeader>
+                {/* The list's top padding is inside it, so a day's pinned heading sits flush with the top as it scrolls. */}
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5">
+                  <div className="pt-4">
+                    <Breakdown items={items} />
+                    <SpendDays items={items} pinned className="mt-5" />
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
           )}
         </>
       ) : (
@@ -670,6 +678,23 @@ function Breakdown({ items }: { items: Spend[] }) {
         </>
       )}
     </div>
+  )
+}
+
+/** Requests by day, newest first. `pinned`: in the full list's window, each day's heading stays in view as it scrolls. */
+function SpendDays({ items, pinned = false, className }: { items: Spend[]; pinned?: boolean; className?: string }) {
+  return (
+    <ol className={cn("space-y-4", className)}>
+      {byDay(items).map(([day, group]) => (
+        <li key={day}>
+          <p className={cn("mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500",
+            pinned && "sticky top-0 z-10 -mx-5 bg-[#0d151c]/95 px-5 py-1.5 backdrop-blur")}>{day}</p>
+          <ul className="divide-y divide-white/[0.05]">
+            {group.map((item, index) => <SpendRow key={`${item.at}-${index}`} item={item} />)}
+          </ul>
+        </li>
+      ))}
+    </ol>
   )
 }
 
