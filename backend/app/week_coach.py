@@ -380,7 +380,8 @@ def plan_prompt(board: Board, profile, coach: str, message: str, turns: list["Tu
         label, refs = "Swim week", "S2 for a swim, M1 for a day's mobility"
         rules = (f"THE WEEK'S RULES: at most {SWIMS_A_DAY} swims and {METERS_A_DAY:,} m of swimming a day; a swim is at most "
                  f"{METERS_A_SWIM:,} m. The athlete's plan has {profile.get('swim_sessions_per_week') or 'an unknown number of'} swims a week"
-                 f"{f' of at most {max_minutes} minutes' if max_minutes else ''}.")
+                 f"{f' of at most {max_minutes} minutes' if max_minutes else ''}: their usual week, not a limit. A swim they ask for is "
+                 "added even when it makes more than that (your message can say it's one more than usual).")
         new = ('"swim" (a new swim) or "mobility" (a day\'s mobility work, on a day that has none; only in a generated week)')
         sizes = """- meters: a swim you edit or add: the total distance it comes to after the change, worked out from what it is now and
   what the athlete asked (a 2,400 m swim "600 m shorter" comes to 1,800 m, even with a kick set added; "1,500 m" is
@@ -395,7 +396,8 @@ def plan_prompt(board: Board, profile, coach: str, message: str, turns: list["Tu
                   "follows only the athlete's plan, never a request: it can't pick the days, a focus or the exercises, or leave mobility out.")
         label, refs = "Gym week", "G2"
         rules = (f"THE WEEK'S RULES: at most {WORKOUTS_A_DAY} workouts a day. The athlete's plan has {profile.get('gym_sessions_per_week') or 0} "
-                 "strength sessions a week; mobility workouts are light and can go on any day.")
+                 "strength sessions a week: their usual week, not a limit. A workout they ask for is added even when it makes more "
+                 "than that (your message can say it's one more than usual). Mobility workouts are light and can go on any day.")
         new = '"strength" (a strength, power or core workout) or "mobility" (a mobility or recovery workout)'
         sizes = """- meters: null.
 - minutes: a workout you edit or add: how long it lasts after the change (the athlete's number when they give one); null
@@ -424,10 +426,11 @@ Answer as {coach}, in the chat beside the athlete's {label}.
   here.
 - changes: the changes that do exactly what the athlete asked, and nothing else: every other session stays as it is. A wish
   that needs several changes gets all of them ("make the week easier": each session left; "swap Tuesday and Thursday": both
-  moves). When the message is unclear about what to change, ask one short question instead (no changes). When it isn't about
-  this week's training, answer briefly and say the main coach chat is the place for it (no changes). When it's unsafe or
-  breaks the week's rules, say so and make the closest change that's safe, or none. Sessions with the same title are
-  separate sessions, each with its own reference: a change to one leaves the others. To train on other or fewer days, move
+  moves). A clear request is done, not asked about first. Only when the message is unclear about what to change, ask one
+  short question instead (no changes). When it isn't about this week's training, answer briefly and say the main coach
+  chat is the place for it (no changes). When it's unsafe or breaks the week's rules, say so and make the closest change
+  that's safe, or none. Sessions with the same title are separate sessions, each with its own reference: a change to one
+  leaves the others. To train on other or fewer days, move
   the sessions on the days the athlete doesn't want onto the days they do (within a day's limit), and remove only what
   they want gone or what can't fit.
 - action: edit (rewrite a session), add (a new session on a day), remove (delete a session), move (the same session on

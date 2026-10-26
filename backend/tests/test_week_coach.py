@@ -582,6 +582,22 @@ class ChatTests(WeekCoachCase):
         self.assertIn("The athlete's chosen training days: swims on Mon, Wed, Fri, Sun; strength sessions on Tue, Thu; the mobility "
                       "routine on the other days.", prompts[-1])
 
+    def test_the_athletes_weekly_numbers_are_their_usual_week_not_a_limit(self):
+        prompts = []
+        answer = self.generate
+
+        def remember(profile, schema, objective, check=None, **options):
+            prompts.append(objective)
+            return answer(profile, schema, objective, check, **options)
+
+        self.patch(training, "generate_structured", side_effect=remember)
+        for kind, sessions in (("swim", "A swim they ask for is added"), ("gym", "A workout they ask for is added")):
+            self.answers = [{"message": "Added.", "changes": [], "elsewhere": False}]
+            self.chat("Add one on Thursday", kind=kind)
+            self.assertIn("their usual week, not a limit", prompts[-1])
+            self.assertIn(f"{sessions} even when it makes more than that", prompts[-1])
+            self.assertIn("A clear request is done, not asked about first.", prompts[-1])
+
     def test_a_change_that_cant_be_written_is_left_out_and_said_so(self):
         self.answers = [{"message": "Here.", "changes": [
             {"action": "add", "session": None, "new": "swim", "day": "Sunday", "instruction": "Easy", "meters": 1500, "minutes": None, "label": "Easy swim"}], "elsewhere": False},
