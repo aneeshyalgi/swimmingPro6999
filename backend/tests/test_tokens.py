@@ -760,7 +760,7 @@ class VideoAnalysisTests(TokensCase):
 
 
 def checkout_session(**changes):
-    session = SimpleNamespace(id="cs_1", url="https://checkout.stripe.test/cs_1", payment_status="paid", status="complete", amount_total=1299,
+    session = SimpleNamespace(id="cs_1", url="https://checkout.stripe.test/cs_1", payment_status="paid", status="complete", amount_total=2599,
                               currency="usd", metadata={"kind": "tokens", "pack": "plus", "tokens": "300", "user_id": "row-1"})
     for key, value in changes.items():
         setattr(session, key, value)
@@ -803,14 +803,14 @@ class StoreTests(TokensCase):
         self.assertEqual(response.json(), {"checkout_url": "https://checkout.stripe.test/cs_1"})
         options = self.create.call_args.kwargs
         self.assertEqual((options["mode"], options["customer"], options["payment_method_types"]), ("payment", "cus_1", ["card"]))
-        self.assertEqual(options["line_items"][0]["price_data"]["unit_amount"], 1299)
+        self.assertEqual(options["line_items"][0]["price_data"]["unit_amount"], 2599)
         self.assertEqual(options["line_items"][0]["price_data"]["product_data"]["name"], "300 SwimGPT tokens")
         self.assertEqual(options["success_url"], "https://swimgpt.test/dashboard?tokens=paid&session_id={CHECKOUT_SESSION_ID}")
         self.assertEqual({key: options["metadata"][key] for key in ("kind", "pack", "tokens", "user_id")},
                          {"kind": "tokens", "pack": "plus", "tokens": "300", "user_id": "row-1"})
         self.assertIn("start_now", options["metadata"])
         self.assertEqual(self.db.purchases, [{"user_id": "row-1", "stripe_checkout_session_id": "cs_1", "pack": "plus", "tokens": 300,
-                                              "amount": 1299, "currency": "usd", "status": "pending"}])
+                                              "amount": 2599, "currency": "usd", "status": "pending"}])
 
     def test_an_older_account_has_no_store_and_cant_buy_tokens(self):
         self.db.account = SimpleNamespace(created_at=OLDER_ACCOUNT, user_metadata={})
