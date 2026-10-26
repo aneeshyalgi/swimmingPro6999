@@ -32,7 +32,7 @@ from app.dashboard import build_dashboard_overview
 from app.auth import get_authenticated_profile, get_authenticated_user, latest_profile_row
 from app.today import router as today_router, recent_athlete_feedback
 from app.training import router as training_router, get_week, next_competition, competitions, recent_race_results, pacing_context
-from app.training_days import coach_line, router as training_days_router
+from app.training_days import coach_line, router as training_days_router, weekly
 from app.performance import router as performance_router, apply_performance_snapshot
 from app.pace_calculator import router as pace_calculator_router
 from app.nutrition import router as nutrition_router
@@ -307,7 +307,8 @@ def _coach_messages(request: CoachChatRequest, authorization: str | None, on_cal
         _call_context[key] = (now + CALL_CONTEXT_SECONDS, profile, looked_up)
     athlete_feedback, days, race_results, pacing = looked_up
 
-    context, sources, resolved_coaches = chat_context(request.selected_coaches, request.message)
+    # Every session type of the athlete's week is in the context, so the coach can write the week they ask for.
+    context, sources, resolved_coaches = chat_context(request.selected_coaches, request.message, swims=weekly(profile)[0])
     history = conversation_history(request.history)
     # The athlete is talking to their coach (a chat has exactly one), who answers as themselves: "my program", never
     # "a Coach Brad plan".
@@ -333,6 +334,8 @@ Hard rules:
   general advice on it, making clear it's general advice and not part of your program.
 - When the athlete asks for a set or session, use your actual sessions below (adapting the main stroke and pace to the athlete) rather than inventing new ones.
 - Ground advice in the athlete profile whenever relevant: events, PBs, goals, volume, facilities, injuries, health, and recovery.
+- Never ask the athlete for anything their profile below already tells you (their events, PBs, goals, swims and gym sessions
+  a week, session length, pools, gym access, injuries or health): use it.
 - Be direct and useful. Give a short answer first, then concrete steps or a set when appropriate.
 - Do not cite sources, excerpt numbers ([1], [2]...), document titles or file names in your answer.
 - Do not diagnose injuries or medical conditions; recommend a qualified professional when needed.

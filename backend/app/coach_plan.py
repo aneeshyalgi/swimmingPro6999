@@ -1,6 +1,6 @@
 """Training a coach writes in chat or on a voice call, added to the athlete's swim and gym weeks.
 
-The coach writes the sessions an athlete asks for out in full (PLAN_RULES), and a reply that prescribes sessions is
+The coach writes the sessions an athlete asks for out in full, straight away (PLAN_RULES), and a reply that prescribes sessions is
 recognised by its sets and exercises (plan_kinds), so the chat offers to add them. Reading the reply splits it into its
 sessions (the lines and sentences that belong to each, and any day it names), then writes every session in the app's own formats, all
 at the same time: a swim as a swim-week swim (sets) and a gym, dryland or mobility session as a Workout Builder workout
@@ -44,13 +44,21 @@ NO_SESSION = ("There's no complete session in this reply to add. Ask your coach 
 PLAN_RULES = """- When the athlete asks for a training plan, session, workout or set, write it out in full so they can follow it
   and add it to their calendar: a swim with every set in order (warm-up to warm-down) as repetitions x distance, with
   stroke, interval or rest and effort, and its total distance; a gym, dryland or mobility session with every exercise
-  and its sets, reps, load and rest. For a plan over several days, start each session with its day ("Monday: Swim")."""
+  and its sets, reps, load and rest. For a plan over several days, start each session with its day ("Monday: Swim").
+- Write it in this reply, without asking questions first, fitted to their profile: a week is your weekly order for
+  their swims a week (on their chosen days when they're given below, otherwise spread over the week by you), and each
+  swim fits their session length (a session of yours too long for it is shortened to fit, and said to be shortened).
+  Anything the profile doesn't tell you (how far they swim now, kit like fins or paddles, which pool when they have
+  more than one), assume sensibly and say what you assumed in one short line. Ask at most one question, after the
+  plan, and only when the answer would really change it."""
 # The same on a voice call, where the reply is spoken: the sessions said as a coach says them, never as a written list.
 SPOKEN_PLAN_RULES = """- When the athlete asks for a training plan, session, workout or set on this call, say it the way a coach would out
   loud, in plain sentences and never as a list: every set in order with its numbers ("four hundred easy, then six
   one-hundreds freestyle on one twenty at threshold"), or every exercise with its sets and reps. One session in about 120
   words at most; a plan over several days in one sentence a day: the day and its main set or exercises with their numbers
-  ("Monday, threshold: six one-hundreds on one twenty"), never only a session's name."""
+  ("Monday, threshold: six one-hundreds on one twenty"), never only a session's name.
+- Say it straight away, without asking questions first, fitted to their profile (their swims a week and session
+  length); anything the profile doesn't tell you, assume sensibly and say so in a few words."""
 
 # A swim's sets: repeats of a pool distance ("4x50", "8 x 25"), distances with what they're swum as ("300 loosen",
 # "200 easy with fins") and the same said aloud ("eight fifties", "six one-fifties", "three hundred easy").

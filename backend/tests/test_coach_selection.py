@@ -151,6 +151,24 @@ class CoachContextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             chat_context(["Coach Nobody"], "anything")
 
+    def test_a_plan_request_has_every_session_of_the_athletes_week(self):
+        # The message matches no session's words: on its own it gets the sessions listed first, none of them a VO2MAX.
+        def kinds(swims):
+            _, sources, _ = chat_context(["Coach Robert"], "Can you give me a training plan", swims=swims)
+            return [source["source_file"].split(" - ")[1].rsplit(" Session", 1)[0] for source in sources]
+        self.assertNotIn("VO2MAX", kinds(0))
+        for swims, week in ((4, {"Threshold", "Active Rest", "Power", "VO2MAX"}),
+                            (6, {"Power", "Threshold", "Active Rest", "Threshold/Aerobic", "Kick", "VO2MAX"})):
+            self.assertLessEqual(week, set(kinds(swims)), swims)
+            self.assertEqual(len(kinds(swims)), 8)
+
+    def test_the_week_keeps_the_sessions_a_question_is_about(self):
+        _, sources, _ = chat_context(["Coach Robert"], "give me a kick set", swims=4)
+        labels = [source["source_file"] for source in sources]
+        self.assertIn("Coach Robert - Kick Session #1", labels)
+        self.assertIn("Coach Robert - VO2MAX Session #1", labels)
+        self.assertEqual(len(labels), 8)
+
 
 
 SPRINTER = {"main_events": ["50m Freestyle", "100m Butterfly"], "swimmer_type": "sprinter", "swim_sessions_per_week": 6, **WITH_GYM}

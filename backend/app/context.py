@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from app.coach_catalog import COACHES, public_profile
-from app.coach_programs import PROGRAMS, CoachProgram, program_for, render_overview, render_session, session_label
+from app.coach_programs import PROGRAMS, CoachProgram, program_for, render_overview, render_session, session_label, swim_order
 
 SWIMMER_TYPE_LABELS = {"sprinter": "sprinter", "mid": "mid-distance", "distance": "distance", "specialist": "IM specialist"}
 GYM_FACILITIES = {"Full Gym Access", "Basic Gym"}
@@ -179,8 +179,12 @@ def _relevance(program: CoachProgram, session, taper: bool, query_words: set[str
     return score
 
 
-def chat_context(names: list[str], query: str, limit: int = 8) -> tuple[str, list[dict[str, Any]], list[str]]:
+def chat_context(names: list[str], query: str, limit: int = 8, swims: int = 0) -> tuple[str, list[dict[str, Any]], list[str]]:
     """Programs of the athlete's coaches for a question: each coach's full overview plus its most relevant sessions.
+
+    `swims`: the athlete's swims a week. Each coach's week for that many swims is then always there (the best-matching
+    session of every type in it), so a plan for the week is written from the coach's own sessions: a message that
+    matches no session's words ("Can you give me a training plan") otherwise gets the sessions listed first.
 
     Returns (context, sources, coach names). Sources name the sessions used, for provenance in the response.
     """
@@ -194,8 +198,13 @@ def chat_context(names: list[str], query: str, limit: int = 8) -> tuple[str, lis
         key=lambda item: item[3], reverse=True,
     )
     chosen: list = []
+    for program in programs:   # the athlete's week: the best-matching session of every type in it
+        for kind in dict.fromkeys(swim_order(program, swims)):
+            chosen += [item for item in ranked if item[0] is program and item[1].type == kind][:1]
     for program in programs:   # every coach is represented by at least their best-matching sessions
-        chosen += [item for item in ranked if item[0] is program][:max(1, limit // (2 * len(programs)))]
+        own = [item for item in ranked if item[0] is program]
+        wanted = max(1, limit // (2 * len(programs))) - sum(item in chosen for item in own)
+        chosen += [item for item in own if item not in chosen][:max(0, wanted)]
     chosen += [item for item in ranked if item not in chosen][:max(0, limit - len(chosen))]
     blocks = [f"=== {program.name} PROGRAM ===\n{render_overview(program)}" for program in programs]
     blocks += [f"--- {render_session(program, session, taper)}" for program, session, taper, _ in chosen]

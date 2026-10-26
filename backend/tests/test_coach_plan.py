@@ -189,6 +189,21 @@ class CoachChatPlanTests(unittest.TestCase):
     def test_a_reply_without_sessions_offers_nothing(self):
         self.assertIsNone(self.chat(ADVICE).json()["plan"])
 
+    def test_a_plan_is_written_at_once_without_asking_what_the_profile_says(self):
+        for mode, rule in (("chat", "Write it in this reply, without asking questions first"),
+                           ("conversation", "Say it straight away, without asking questions first")):
+            self.chat(CHAT_SWIM, mode=mode)
+            prompt = self.openai.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+            self.assertIn(rule, prompt)
+            self.assertIn("Never ask the athlete for anything their profile below already tells you", prompt)
+
+    def test_the_coach_is_given_every_session_type_of_the_athletes_week(self):
+        with patch.object(main, "get_authenticated_profile", return_value={**PROFILE, "user_key": "key-1", "swim_sessions_per_week": 5}):
+            self.chat(CHAT_SWIM)
+        self.assertEqual(main.chat_context.call_args.kwargs["swims"], 5)
+        self.chat(CHAT_SWIM)
+        self.assertEqual(main.chat_context.call_args.kwargs["swims"], 0)
+
     def test_the_athletes_chosen_days_are_where_a_week_goes(self):
         self.chat(CHAT_SWIM)
         self.assertNotIn("chosen training days", self.openai.chat.completions.create.call_args.kwargs["messages"][1]["content"])
