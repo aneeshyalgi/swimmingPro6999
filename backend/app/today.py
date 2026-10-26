@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import json
+import re
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
@@ -134,6 +135,9 @@ class TodayResponse(BaseModel):
 
 
 router = APIRouter(prefix="/api/today", tags=["Today"])
+# A date (and time zone) a daily plan's objective opens with: "2026-10-26 (UTC): ", "Monday 26 October 2026 — ".
+_DATE_PREFIX = re.compile(r"^\s*(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day,?\s+)?(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s+[a-z]+\s+\d{4})"
+                          r"(?:\s*\(?utc\)?)?\s*[:—–-]\s*", re.IGNORECASE)
 
 
 def _day() -> date:
@@ -228,7 +232,7 @@ def get_today(authorization: str | None = Header(default=None)) -> TodayResponse
 def generate_today(authorization: str | None = Header(default=None)) -> TodayResponse:
     receipt = None  # the plan's tokens (app/tokens.py), given back if it isn't saved
     try:
-        from app.training import library, recent_race_results, pacing_context
+        from app.training import gym_items, library, load_records, recent_race_results, pacing_context
         profile = get_authenticated_profile(authorization)
         day = _day()
         day_string = day.isoformat()
@@ -255,7 +259,14 @@ def generate_today(authorization: str | None = Header(default=None)) -> TodayRes
         scheduled_swims = [item for item in library(profile) if item["date"] and
                            week_start.isoformat() <= item["date"] < (week_start + timedelta(days=7)).isoformat()]
         swim_remaining = max(0, profile.get("swim_sessions_per_week", 0) - len(scheduled_swims))
-        gym_remaining = max(0, profile.get("gym_sessions_per_week", 0) - sum(bool(plan.get("strength")) for plan in previous))
+        # The strength workouts on the athlete's Gym week count too (mobility ones don't), and a day that already has one
+        # gets no second.
+        gym_week = gym_items(profile["id"], load_records(profile["id"], ["gym_workout"]), week_start, week_start + timedelta(days=7))
+        gym_strength = [item for item in gym_week if not str(item["focus"]).startswith("Mobility")]
+        gym_today = [f"{item['workout'].get('title') or 'Workout'} ({'strength' if item in gym_strength else 'mobility'})"
+                     for item in gym_week if item["date"] == day_string]
+        gym_remaining = 0 if any(item["date"] == day_string for item in gym_strength) else max(
+            0, profile.get("gym_sessions_per_week", 0) - len(gym_strength) - sum(bool(plan.get("strength")) for plan in previous))
         athlete = {key: value for key, value in profile.items() if key not in {
             "id", "auth_user_id", "user_key", "full_name", "created_at", "updated_at",
             "payment_status", "payment_plan_id", "stripe_checkout_session_id",
@@ -282,6 +293,8 @@ Use the saved training phase. This is a recommendation, not proof of completed w
 At most one swim and one strength session today; second_swim must be null. Remaining weekly availability:
 {swim_remaining} swim sessions and {gym_remaining} strength sessions. Return null for
 swim/strength if its remaining availability is zero. A recovery day is allowed.
+daily_objective and coaching_note are read by the athlete: write them to the athlete in plain words, never with the
+date, the time zone or these instructions' terms ("remaining availability", "onboarding", "schema").
 Avoid repeating the prior daily plans; do not treat them as completed sessions.
 Include at least two sets and at least one technical-focus cue per set.
 The swim sets must be fully executable: warm-up, main work and warm-down; rounds,
@@ -305,6 +318,8 @@ ONBOARDING: {json.dumps(athlete)}
 SAVED COACHING PLAN: {json.dumps(stored_plan.data[0]["plan"])}
 EARLIER PLANS THIS WEEK: {json.dumps(previous)}
 ADDITIONAL MANUALLY SCHEDULED SWIMS TODAY (do not duplicate in swim): {json.dumps([swim.model_dump() for swim in current.additional_swims])}
+WORKOUTS ON THE ATHLETE'S GYM WEEK TODAY (already planned: never plan another strength session beside one, and never say
+today has no gym workout when it has one): {json.dumps(gym_today)}
 RECENT ATHLETE FEEDBACK: {json.dumps(feedback)}
 RECENT ACTUAL RACE RESULTS: {json.dumps(recent_race_results(profile["id"]))}
 SHARED PACING METHODOLOGY (use this formula/settings for PB-derived zone targets,
@@ -317,6 +332,8 @@ COACH PROGRAM (base today's swim on one of this coach's actual sessions, adapted
         if not content:
             raise HTTPException(status_code=502, detail="The coach returned an empty daily plan.")
         plan = DailyPlan.model_validate_json(content)
+        # The date the plan was asked for, never part of what the athlete reads ("2026-10-26 (UTC): Support...").
+        plan.daily_objective = _DATE_PREFIX.sub("", plan.daily_objective).strip() or plan.daily_objective
         saved_phase = stored_plan.data[0]["plan"].get("phase")
         if saved_phase:
             plan.training_phase = saved_phase
