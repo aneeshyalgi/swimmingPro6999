@@ -254,6 +254,12 @@ export default function DashboardPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const status = params.get("tokens")
+    // Sent here to get tokens (from the public Stroke Lab, out of them): the token store opens.
+    if (status === "store") {
+      window.history.replaceState(window.history.state, "", window.location.pathname)
+      setActiveTab("tokens")
+      return
+    }
     if (status !== "paid" && status !== "cancelled") return
     const sessionId = params.get("session_id")
     window.history.replaceState(window.history.state, "", window.location.pathname)

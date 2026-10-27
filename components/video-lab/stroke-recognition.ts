@@ -1,4 +1,5 @@
 import { detectStill, getStillPoseLandmarker, type PosePoint } from "@/components/video-lab/pose-engine"
+import { tokensNeededIn } from "@/lib/token-events"
 
 /*
  * Recognises the stroke in a clip, so the athlete doesn't have to pick it.
@@ -154,7 +155,11 @@ export async function recognizeStroke(url: string, signal: AbortSignal, headers:
         evidence: landmarker ? strokeEvidence(poses, poseCanvas.width, poseCanvas.height) : null,
       }),
     })
-    if (!response.ok) throw new Error(`Stroke recognition failed (${response.status}).`)
+    if (!response.ok) {
+      // A subscriber without the tokens for the clip (recognising and analysing it): TokensNeeded, with the API's words.
+      const refused = response.status === 429 ? tokensNeededIn(response.status, await response.text()) : null
+      throw refused ?? new Error(`Stroke recognition failed (${response.status}).`)
+    }
     const guess = (await response.json()) as Partial<StrokeGuess>
     return { stroke: guess.stroke ?? null, confidence: Number(guess.confidence) || 0, reason: guess.reason ?? "", alternative: guess.alternative ?? null }
   } finally {

@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import type { PoseLandmarker } from "@mediapipe/tasks-vision"
-import { Activity, ArrowRight, Check, Crosshair, Cpu, Film, Gauge, Loader2, Ruler, RotateCcw, ScanLine, Sparkles, Waves } from "lucide-react"
+import { Activity, ArrowRight, Check, Coins, Crosshair, Cpu, Film, Gauge, Loader2, Ruler, RotateCcw, ScanLine, Sparkles, Waves } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { tokensChanged, tokensNeededIn } from "@/lib/token-events"
+import { TokensNeeded, openTokenStore, tokensChanged, tokensNeededIn } from "@/lib/token-events"
 import {
   detectPose, drawHud, getPoseLandmarker, measure, smoothPose, strokeRate, summarize,
   type ClipSummary, type FrameMetrics, type Layers, type Point, type PosePoint,
@@ -23,8 +23,9 @@ import {
 type Phase = "empty" | "ready" | "scanning" | "measuring" | "writing" | "done"
 type TelemetryState = { live: FrameMetrics | null; history: FrameMetrics[]; tracking: "idle" | "live" | "paused" | "lost"; fps: number }
 /** Recognising the stroke from the clip itself (see stroke-recognition.ts). */
-// checking: asking whether this visitor may have one (see video-access.ts); working: recognising.
-type Recognition = { status: "idle" | "checking" | "working" | "failed" } | ({ status: "done" } & StrokeGuess)
+// checking: asking whether this visitor may have one (see video-access.ts); working: recognising; tokens: a subscriber
+// without the tokens for the clip (the API's `message` says so).
+type Recognition = { status: "idle" | "checking" | "working" | "failed" } | { status: "tokens"; message: string } | ({ status: "done" } & StrokeGuess)
 
 const STROKES = ["Freestyle", "Backstroke", "Breaststroke", "Butterfly", "IM", "Dive"]
 const ANGLES = ["Side view", "Front view", "Underwater view", "Mixed angles"]
@@ -145,9 +146,11 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
         const guess = await recognizeStroke(url, controller.signal, await accessHeaders())
         if (controller.signal.aborted) return
         setRecognition({ status: "done", ...guess })
+        tokensChanged()   // a subscriber's recognition costs a token
         if (guess.stroke && guess.confidence >= AUTO_PICK && sourceRef.current === "auto") chooseStroke(guess.stroke, "auto")
       } catch (failure) {
         if (controller.signal.aborted) return
+        if (failure instanceof TokensNeeded) { setRecognition({ status: "tokens", message: failure.message }); return }
         console.warn("Stroke recognition failed:", failure)
         setRecognition({ status: "failed" })
       }
@@ -495,7 +498,7 @@ export function StrokeLab({ variant = "public" }: { variant?: "public" | "dashbo
                       )
                     })}
                   </div>
-                  <RecognitionNote recognition={recognition} stroke={stroke} disabled={busy || detecting} onUse={chooseStroke} />
+                  <RecognitionNote recognition={recognition} stroke={stroke} disabled={busy || detecting} variant={variant} onUse={chooseStroke} />
                 </div>
                 <div>
                   <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Camera angle</p>
@@ -609,6 +612,9 @@ function RecognitionBadge({ recognition, stroke, source }: { recognition: Recogn
   if (recognition.status === "working") {
     return <span className={cn(pill, "border-cyan-300/25 bg-cyan-300/10 text-cyan-100")}><Loader2 className="h-3 w-3 animate-spin" />Recognising</span>
   }
+  if (recognition.status === "tokens") {
+    return <span className={cn(pill, "border-amber-300/30 bg-amber-300/10 text-amber-100")}><Coins className="h-3 w-3" />Out of tokens</span>
+  }
   if (recognition.status === "done" && recognition.stroke && recognition.stroke === stroke && recognition.confidence >= AUTO_PICK) {
     const sure = recognition.confidence >= SURE && !recognition.alternative
     return (
@@ -623,8 +629,9 @@ function RecognitionBadge({ recognition, stroke, source }: { recognition: Recogn
 }
 
 /** One line under the strokes: what recognition saw, the runner-up or its own answer one tap away, or why it has none. */
-function RecognitionNote({ recognition, stroke, disabled, onUse }: {
-  recognition: Recognition; stroke: string; disabled: boolean; onUse: (stroke: string, source: "auto" | "you") => void
+function RecognitionNote({ recognition, stroke, disabled, variant, onUse }: {
+  recognition: Recognition; stroke: string; disabled: boolean; variant: "public" | "dashboard"
+  onUse: (stroke: string, source: "auto" | "you") => void
 }) {
   const sentence = (text: string) => (/[.!?]$/.test(text) ? text : text + ".")
   const useButton = (value: string, source: "auto" | "you") => (
@@ -633,7 +640,19 @@ function RecognitionNote({ recognition, stroke, disabled, onUse }: {
     </button>
   )
   let note: ReactNode = null
-  if (recognition.status === "working") note = "Watching your clip to recognise the stroke. You can change it once it's done."
+  if (recognition.status === "tokens") {
+    // The dashboard opens its token store; elsewhere (the public page) the dashboard opens on it.
+    const link = "font-semibold text-cyan-200 underline-offset-2 transition-colors hover:text-white hover:underline"
+    note = (
+      <span role="alert">
+        <span className="text-amber-100">{recognition.message}</span>{" "}
+        {variant === "dashboard"
+          ? <button type="button" onClick={openTokenStore} className={link}>Get tokens</button>
+          : <a href="/dashboard?tokens=store" className={link}>Get tokens</a>}
+      </span>
+    )
+  }
+  else if (recognition.status === "working") note = "Watching your clip to recognise the stroke. You can change it once it's done."
   else if (recognition.status === "failed") note = "Automatic stroke recognition isn't available right now. Pick your stroke above."
   else if (recognition.status === "done" && !recognition.stroke) note = "We couldn't make out a stroke in this clip. Pick it above."
   else if (recognition.status === "done" && recognition.stroke) {

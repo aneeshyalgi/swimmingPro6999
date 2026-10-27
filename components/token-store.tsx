@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject } from "react"
 import {
   ArrowDown, AudioLines, CalendarClock, CalendarPlus, Check, ChevronRight, Coins, CreditCard, Dumbbell, Flag, Gift, History, Info,
-  Loader2, MessageCircle, RefreshCw, ShieldCheck, Sparkles, Undo2, Video, Wand2, Waves, Zap, type LucideIcon,
+  Loader2, MessageCircle, RefreshCw, ScanLine, ShieldCheck, Sparkles, Undo2, Video, Wand2, Waves, Zap, type LucideIcon,
 } from "lucide-react"
 import { Reveal, useTween } from "@/components/dashboard-ui"
 import { Banner, EmptyState } from "@/components/training-ui"
@@ -30,6 +30,7 @@ const FEATURES: Record<string, { does: string; many: string; icon: LucideIcon; c
   gym_week: { does: "Planning a gym week", many: "gym weeks", icon: Dumbbell, color: "#fb923c" },
   week_coach: { does: "A message to the week re-planner", many: "re-planner messages", icon: Wand2, color: "#e879f9" },
   race_plan: { does: "Race plans for a meet", many: "race plans", icon: Flag, color: "#fb7185" },
+  stroke_recognition: { does: "Recognising the stroke in a clip", many: "stroke recognitions", icon: ScanLine, color: "#5eead4" },
   video_analysis: { does: "A video analysis", many: "video analyses", icon: Video, color: "#34d399" },
   daily_plan: { does: "Today's plan", many: "daily plans", icon: CalendarClock, color: "#fcd34d" },
 }
@@ -37,6 +38,12 @@ const OTHER = { does: "An AI feature", many: "AI requests", icon: Sparkles, colo
 const featureOf = (action: string | null) => (action && FEATURES[action]) || OTHER
 // What the wallet says the balance is enough for.
 const EXAMPLES = ["coach_chat", "swim_week", "video_analysis"]
+// Features that only come together: a clip's stroke is recognised for its analysis (and only when both are covered), so
+// how many the balance covers counts both.
+const COMES_WITH: Record<string, string[]> = { video_analysis: ["stroke_recognition"], stroke_recognition: ["video_analysis"] }
+/** Tokens one use of `action` takes in all, with what it comes with. */
+const fullCost = (action: string, costs: TokenBalance["costs"]) =>
+  [action, ...(COMES_WITH[action] ?? [])].reduce((sum, item) => sum + (costs.find((cost) => cost.action === item)?.tokens ?? 0), 0)
 // History rows shown on the tile; "Show all" opens every one in a window of its own.
 const FIRST_ROWS = 8
 const DAY = 86_400_000
@@ -391,8 +398,8 @@ function Stats({ tokens }: { tokens: TokenBalance }) {
 /** What the balance is enough for, in a few features' worth. */
 function EnoughFor({ tokens }: { tokens: TokenBalance }) {
   const examples = EXAMPLES.flatMap((action) => {
-    const cost = tokens.costs.find((item) => item.action === action)
-    const times = cost && cost.tokens > 0 ? Math.floor(tokens.balance / cost.tokens) : 0
+    const cost = tokens.costs.some((item) => item.action === action) ? fullCost(action, tokens.costs) : 0
+    const times = cost > 0 ? Math.floor(tokens.balance / cost) : 0
     return times > 0 ? [{ action, times, ...featureOf(action) }] : []
   })
   if (!examples.length) return null
@@ -718,7 +725,9 @@ function Costs({ tokens }: { tokens: TokenBalance }) {
   return (
     <Panel icon={Zap} tone={AMBER} title="What things cost" subtitle="Tokens are taken as the AI starts working">
       <ul className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-2 2xl:grid-cols-3">
-        {tokens.costs.map((cost, index) => <CostTile key={cost.action} action={cost.action} cost={cost.tokens} balance={tokens.balance} index={index} />)}
+        {tokens.costs.map((cost, index) => (
+          <CostTile key={cost.action} action={cost.action} cost={cost.tokens} full={fullCost(cost.action, tokens.costs)} balance={tokens.balance} index={index} />
+        ))}
       </ul>
       <div className="pt-4">
         <div className="flex items-start gap-3 rounded-2xl border border-emerald-300/15 bg-emerald-400/[0.06] p-3.5">
@@ -732,10 +741,11 @@ function Costs({ tokens }: { tokens: TokenBalance }) {
   )
 }
 
-/** One feature's price; under a mouse, a light of its colour follows the pointer. */
-function CostTile({ action, cost, balance, index }: { action: string; cost: number; balance: number; index: number }) {
+/** One feature's price (`full`: what a use takes in all, with what it comes with); under a mouse, a light of its colour
+ *  follows the pointer. */
+function CostTile({ action, cost, full, balance, index }: { action: string; cost: number; full: number; balance: number; index: number }) {
   const { does, icon: Icon, color } = featureOf(action)
-  const times = cost > 0 ? Math.floor(balance / cost) : 0
+  const times = full > 0 ? Math.floor(balance / full) : 0
   const follow = (event: PointerEvent<HTMLLIElement>) => {
     if (event.pointerType !== "mouse") return
     const box = event.currentTarget.getBoundingClientRect()

@@ -28,8 +28,8 @@ class StrokeDetectionEndpointTests(unittest.TestCase):
         patches = [
             patch("app.stroke_detection.get_settings", return_value=self.settings),
             patch("app.stroke_detection.OpenAI", return_value=self.provider),
-            # Who may recognise is covered in test_video_access.py; here everyone may.
-            patch("app.stroke_detection.identify", return_value=SimpleNamespace(subscribed=True)),
+            # Who may recognise is covered in test_video_access.py, and what it costs in test_tokens.py; here everyone may.
+            patch("app.stroke_detection.identify", return_value=SimpleNamespace(subscribed=True, profile=None)),
             patch("app.stroke_detection.allow_recognition"),
         ]
         for item in patches:

@@ -18,12 +18,14 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field, field_validator
 
+from app import tokens
 from app.config import get_settings, reasons
 from app.video_access import allow_recognition, identify
 
@@ -196,11 +198,16 @@ def combine(answers: list[StrokeDetectionResponse]) -> StrokeDetectionResponse:
 @router.post("/stroke", response_model=StrokeDetectionResponse)
 def detect_stroke(payload: StrokeDetectionRequest, request: Request, authorization: str | None = Header(default=None)) -> StrokeDetectionResponse:
     """Names the stroke swum in the clip: one of the lab's six options, or null when no stroke can be seen. Only for
-    someone who may still analyse it (see app/video_access.py)."""
+    someone who may still analyse it (see app/video_access.py); a subscriber's costs a token."""
     settings = get_settings()
     if not settings.openai_api_key:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stroke recognition is not configured.")
-    allow_recognition(identify(request, authorization))
+    visitor = identify(request, authorization)
+    allow_recognition(visitor)
+    # A subscriber's recognition costs a token (app/tokens.py), and runs only when their tokens cover the clip's analysis
+    # too: a token taken for recognising a clip they then can't analyse would be wasted.
+    if visitor.profile:
+        tokens.require(visitor.profile, "stroke_recognition", then="video_analysis")
 
     intro = f"{len(payload.frames)} frames from the clip, in order."
     if payload.duration_seconds:
@@ -224,8 +231,10 @@ def detect_stroke(payload: StrokeDetectionRequest, request: Request, authorizati
         return parse_detection(response.choices[0].message.content)
 
     try:
-        with ThreadPoolExecutor(max_workers=OPINIONS) as pool:
-            answers = list(pool.map(ask, range(OPINIONS)))
+        # Given back if the recognition fails.
+        with tokens.charged(visitor.profile, "stroke_recognition") if visitor.profile else nullcontext():
+            with ThreadPoolExecutor(max_workers=OPINIONS) as pool:
+                answers = list(pool.map(ask, range(OPINIONS)))
     except OpenAIError as exc:
         logger.warning("Stroke recognition failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Stroke recognition is unavailable right now.") from exc

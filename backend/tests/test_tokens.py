@@ -830,7 +830,7 @@ class VideoAnalysisTests(TokensCase):
 
     def test_a_subscribers_analysis_costs_tokens(self):
         self.assertEqual(self.analyse().status_code, 200)
-        self.assertEqual(self.db.spent(), [("video_analysis", 5)])
+        self.assertEqual(self.db.spent(), [("video_analysis", 4)])
 
     def test_the_free_analysis_costs_no_tokens(self):
         self.visitor = Visitor(signed_in=False, subscribed=False, records={"browser": "browser/1"})
@@ -847,8 +847,58 @@ class VideoAnalysisTests(TokensCase):
         self.patch(tokens, "MONTHLY_TOKENS", new=1)
         response = self.analyse()
         self.assertEqual(response.status_code, 429)
-        self.assertEqual(response.json()["tokens"]["needed"], 5)
+        self.assertEqual(response.json()["tokens"]["needed"], 4)
         self.brief.assert_not_called()
+
+
+class StrokeRecognitionTests(TokensCase):
+    """Recognising the stroke in a subscriber's clip costs a token, and only runs when their tokens cover the analysis
+    after it too; with the analysis, a clip costs what its analysis alone did before."""
+
+    def setUp(self):
+        super().setUp()
+        from app import stroke_detection
+        from tests.test_stroke_detection import STILL, answer
+        self.client = TestClient(app)
+        self.still = STILL
+        self.visitor = Visitor(signed_in=True, subscribed=True, records={"account": "account/user-1"}, profile=dict(PROFILE))
+        self.provider = MagicMock()
+        self.provider.chat.completions.create.return_value = answer("Freestyle", 90, "Face down, alternating arms")
+        self.patch(stroke_detection, "identify", side_effect=lambda request, authorization: self.visitor)
+        self.patch(stroke_detection, "allow_recognition")
+        self.patch(stroke_detection, "get_settings", return_value=SimpleNamespace(openai_api_key="test-openai", openai_vision_model="gpt-6.1-sol"))
+        self.patch(stroke_detection, "OpenAI", return_value=self.provider)
+
+    def recognise(self):
+        return self.client.post("/api/video-analysis/stroke", headers=HEADERS,
+                                json={"frames": [{"time": 0.5, "image": self.still}], "duration_seconds": 6.0})
+
+    def test_recognising_a_stroke_costs_a_token(self):
+        response = self.recognise()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["stroke"], "Freestyle")
+        self.assertEqual((self.db.spent(), self.db.balance()), ([("stroke_recognition", 1)], tokens.MONTHLY_TOKENS - 1))
+        # Recognised and analysed, a clip costs what its analysis alone did before recognising cost anything.
+        self.assertEqual(tokens.COSTS["stroke_recognition"] + tokens.COSTS["video_analysis"], 5)
+
+    def test_without_tokens_for_the_analysis_too_nothing_is_recognised(self):
+        self.patch(tokens, "MONTHLY_TOKENS", new=4)
+        response = self.recognise()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["tokens"], {"needed": 5, "balance": 4, "renews_at": RENEWS})
+        self.provider.chat.completions.create.assert_not_called()
+        self.assertEqual((self.db.spent(), self.db.balance()), ([], 4))
+
+    def test_a_failed_recognition_gives_its_token_back(self):
+        from openai import OpenAIError
+        self.provider.chat.completions.create.side_effect = OpenAIError("model down")
+        self.assertEqual(self.recognise().status_code, 502)
+        self.assertEqual((self.db.spent(), self.db.balance()), ([], tokens.MONTHLY_TOKENS))
+
+    def test_a_visitors_free_analysis_is_recognised_free(self):
+        self.visitor = Visitor(signed_in=False, subscribed=False, records={"browser": "browser/1"})
+        self.assertEqual(self.recognise().status_code, 200)
+        self.assertEqual(self.db.calls, [])
 
 
 def checkout_session(**changes):
