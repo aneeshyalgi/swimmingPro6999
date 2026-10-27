@@ -231,7 +231,7 @@ class ChargeTests(TokensCase):
     def test_every_request_is_charged_with_its_own_id_never_one_from_the_browser(self):
         first, second = tokens.charge(PROFILE, "coach_chat"), tokens.charge(PROFILE, "coach_chat")
         self.assertNotEqual(first.ref, second.ref)
-        self.assertEqual(self.db.spent(), [("coach_chat", 1), ("coach_chat", 1)])
+        self.assertEqual(self.db.spent(), [("coach_chat", 4), ("coach_chat", 4)])
 
     def test_a_call_the_database_client_resends_is_charged_once_and_can_still_be_given_back(self):
         self.db.resent = True
@@ -253,7 +253,7 @@ class ChargeTests(TokensCase):
     def test_one_token_reads_as_one(self):
         self.patch(tokens, "MONTHLY_TOKENS", new=0)
         with self.assertRaises(tokens.OutOfTokens) as caught:
-            tokens.charge(PROFILE, "coach_chat")
+            tokens.charge(PROFILE, "coach_plan")
         self.assertTrue(caught.exception.detail.startswith("This needs 1 token and you have 0 left."))
 
     def test_charged_gives_the_tokens_back_when_its_work_fails(self):
@@ -318,7 +318,7 @@ class AccountTests(TokensCase):
         tokens.charge(PROFILE, "coach_chat")
         tokens.charge(PROFILE, "coach_chat")
         self.assertEqual(self.db.lookups, ["user-1"])
-        self.assertEqual(self.db.spent(), [("coach_chat", 1), ("coach_chat", 1)])
+        self.assertEqual(self.db.spent(), [("coach_chat", 4), ("coach_chat", 4)])
 
     def test_an_account_that_cant_be_looked_up_is_free_that_time_and_looked_up_again(self):
         self.db.account_failure = httpx.ConnectError("down")
@@ -449,25 +449,25 @@ class CoachReplyTests(TokensCase):
         response = self.ask("/api/coach-chat/live", mode="conversation", **body)
         return response, [json.loads(line) for line in response.text.splitlines() if line.strip()] if response.status_code == 200 else []
 
-    def test_each_typed_message_costs_a_token(self):
+    def test_each_typed_message_costs_four_tokens(self):
         self.assertEqual(self.ask().status_code, 200)
         self.assertEqual(self.ask(message="And tomorrow?").status_code, 200)
-        self.assertEqual(self.db.spent(), [("coach_chat", 1), ("coach_chat", 1)])
+        self.assertEqual(self.db.spent(), [("coach_chat", 4), ("coach_chat", 4)])
 
     def test_an_id_from_the_browser_cant_make_a_message_free(self):
         for _ in range(2):
             self.assertEqual(self.ask(message_id="same-id", ref="coach_chat:same").status_code, 200)
-        self.assertEqual(self.db.spent(), [("coach_chat", 1), ("coach_chat", 1)])
+        self.assertEqual(self.db.spent(), [("coach_chat", 4), ("coach_chat", 4)])
 
     def test_out_of_tokens_the_coach_isnt_asked_and_the_page_is_told_why(self):
         self.patch(tokens, "MONTHLY_TOKENS", new=0)
         response = self.ask()
         self.assertEqual(response.status_code, 429)
-        self.assertEqual(response.json()["tokens"], {"needed": 1, "balance": 0, "renews_at": RENEWS})
+        self.assertEqual(response.json()["tokens"], {"needed": 4, "balance": 0, "renews_at": RENEWS})
         self.assertIn("Get more in the Token store", response.json()["detail"])
         self.openai.chat.completions.create.assert_not_called()
 
-    def test_a_reply_that_doesnt_come_gives_its_token_back(self):
+    def test_a_reply_that_doesnt_come_gives_its_tokens_back(self):
         self.openai.chat.completions.create.side_effect = RuntimeError("model down")
         self.assertEqual(self.ask().status_code, 502)
         self.openai.chat.completions.create.side_effect = None
@@ -477,20 +477,20 @@ class CoachReplyTests(TokensCase):
         # Asked again once the coach is back, the message is paid for after all.
         self.openai.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Hi."))])
         self.assertEqual(self.ask().status_code, 200)
-        self.assertEqual(self.db.spent(), [("coach_chat", 1)])
+        self.assertEqual(self.db.spent(), [("coach_chat", 4)])
 
     def test_someone_elses_profile_costs_nothing(self):
         self.assertEqual(self.client.post("/api/coach-chat", headers=HEADERS, json={
             "user_key": "key-2", "selected_coaches": ["Coach Brad"], "message": "Hi"}).status_code, 403)
         self.assertEqual(self.db.calls, [])
 
-    def test_a_call_reply_costs_a_token_as_it_starts(self):
+    def test_a_call_reply_costs_four_tokens_as_it_starts(self):
         response, lines = self.live(["Eight twenty-fives, ", "fast."])
         self.assertEqual(response.status_code, 200)
         self.assertTrue(lines[-1]["done"])
-        self.assertEqual(self.db.spent(), [("voice_reply", 1)])
+        self.assertEqual(self.db.spent(), [("voice_reply", 4)])
 
-    def test_a_call_reply_that_breaks_off_or_cant_start_gives_its_token_back(self):
+    def test_a_call_reply_that_breaks_off_or_cant_start_gives_its_tokens_back(self):
         with self.assertLogs("app.main", level="ERROR"):
             _, lines = self.live(["Start with"], failure=RuntimeError("reset"))
         self.assertIn("error", lines[-1])
@@ -508,7 +508,7 @@ class CoachReplyTests(TokensCase):
 
     def test_a_call_reply_none_of_which_reaches_the_athlete_is_free(self):
         response = self.call_reply(["Eight twenty-fives, ", "fast."])
-        self.assertEqual(self.db.spent(), [("voice_reply", 1)])
+        self.assertEqual(self.db.spent(), [("voice_reply", 4)])
         asyncio.run(response.background())  # the call moved on (they went on talking, or hung up) before it was sent
         self.assertEqual((self.db.spent(), self.db.balance()), ([], tokens.MONTHLY_TOKENS))
 
@@ -520,7 +520,7 @@ class CoachReplyTests(TokensCase):
             await response.body_iterator.__anext__()  # asked for more: the first piece was sent
             await response.background()
         asyncio.run(hear_the_start_then_leave())
-        self.assertEqual(self.db.spent(), [("voice_reply", 1)])
+        self.assertEqual(self.db.spent(), [("voice_reply", 4)])
 
     def test_a_call_reply_that_failed_is_given_back_once(self):
         response = self.call_reply([])
@@ -537,7 +537,7 @@ class CoachReplyTests(TokensCase):
         self.patch(tokens, "MONTHLY_TOKENS", new=0)
         response, _ = self.live(["Hi."])
         self.assertEqual(response.status_code, 429)
-        self.assertEqual(response.json()["tokens"]["needed"], 1)
+        self.assertEqual(response.json()["tokens"]["needed"], 4)
         self.openai.chat.completions.create.assert_not_called()
 
 
@@ -723,8 +723,8 @@ class RacePlanTests(TokensCase):
         self.save.assert_not_called()
 
 
-class CoachPlanTests(TokensCase):
-    """A coach's plan from the chat, read into sessions for the athlete's weeks: a token a session, paid once."""
+class CoachPlanCase(TokensCase):
+    """A coach's reply in the chat, and the AI that reads it into sessions for the athlete's weeks."""
 
     def setUp(self):
         super().setUp()
@@ -751,6 +751,10 @@ class CoachPlanTests(TokensCase):
 
     def read(self):
         return self.client.post("/api/training/coach-plan/read", headers=HEADERS, json={"reply": self.reply, "request": "Plan my week"})
+
+
+class CoachPlanTests(CoachPlanCase):
+    """A coach's plan from the chat, read into sessions for the athlete's weeks: a token a session, paid once."""
 
     def test_a_plan_costs_a_token_a_session_and_is_paid_for_once(self):
         response = self.read()
@@ -812,6 +816,97 @@ class CoachPlanTests(TokensCase):
         self.db.account = SimpleNamespace(created_at=OLDER_ACCOUNT, user_metadata={})
         self.assertEqual(self.read().status_code, 200)
         self.assertEqual(self.db.calls, [])
+
+
+class CoachPlanAddTests(CoachPlanCase):
+    """Adding a coach's plan: the read pays for its sessions once; adding them again ("Add again") costs a token a session."""
+
+    def setUp(self):
+        super().setUp()
+        from app import coach_plan
+        from tests.test_coach_plan import TODAY
+        self.today = TODAY
+        self.rows: dict = {}
+        self.save_fails = False
+        self.patch(training, "library", return_value=[])
+        self.patch(training, "_week_phase", return_value="Build")
+        clock = self.patch(coach_plan, "datetime")
+        clock.now.return_value.date.return_value = TODAY
+        sessions = MagicMock()
+        sessions.select.return_value.eq.return_value.in_.side_effect = lambda column, ids: SimpleNamespace(
+            execute=lambda: SimpleNamespace(data=[{"id": key} for key in ids if key in self.rows]))
+        sessions.upsert.side_effect = self.upsert
+        self.sessions = sessions
+        self.patch(training, "get_supabase_client", return_value=SimpleNamespace(table=lambda name: sessions))
+
+    def upsert(self, rows, on_conflict=None):
+        if not self.save_fails:
+            self.rows.update({row["id"]: row for row in rows})
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=[] if self.save_fails else rows))
+
+    def add(self, sessions):
+        body = [{"kind": "swim", "id": item["id"], "date": self.today.isoformat(), "workout": item["workout"]} if item["kind"] == "swim"
+                else {"kind": "gym", "id": item["id"], "date": self.today.isoformat(), "focus": item["focus"], "doc": item["doc"]}
+                for item in sessions]
+        return self.client.post("/api/training/coach-plan/add", headers=HEADERS, json={"sessions": body})
+
+    @staticmethod
+    def copied(sessions):
+        """The sessions as "Add again" sends them: the same training under new ids."""
+        return [{**item, "id": str(uuid4())} for item in sessions]
+
+    def test_the_read_pays_for_adding_its_sessions_and_adding_them_again_costs_a_token_a_session(self):
+        sessions = self.read().json()["sessions"]
+        self.assertEqual(self.add(sessions).status_code, 200)
+        self.assertEqual((self.db.spent(), len(self.rows)), ([("coach_plan", 2)], 2))
+        # Sent again (its reply was lost): the same two, saved again, at no cost.
+        self.assertEqual(self.add(sessions).status_code, 200)
+        self.assertEqual((self.db.spent(), len(self.rows)), ([("coach_plan", 2)], 2))
+        # Added again: two new sessions, two tokens.
+        copies = self.copied(sessions)
+        self.assertEqual(self.add(copies).status_code, 200)
+        self.assertEqual((self.db.spent(), len(self.rows)), ([("coach_plan", 2), ("coach_plan", 2)], 4))
+        self.assertEqual(self.db.balance(), tokens.MONTHLY_TOKENS - 4)
+        # The copies sent again (a lost reply), whole or in part: already saved, so nothing more to pay.
+        self.assertEqual(self.add(copies).status_code, 200)
+        self.assertEqual(self.add(copies[:1]).status_code, 200)
+        self.assertEqual((self.db.spent(), len(self.rows)), ([("coach_plan", 2), ("coach_plan", 2)], 4))
+
+    def test_a_reply_read_again_gives_its_sessions_the_same_ids(self):
+        first = [item["id"] for item in self.read().json()["sessions"]]
+        self.reads.clear()                       # the server forgot it (a restart, or a day later)
+        self.assertEqual([item["id"] for item in self.read().json()["sessions"]], first)
+        self.assertEqual(len(set(first)), 2)
+        self.assertTrue(all(item[14] == "8" for item in first))   # told apart from a copy's ids by the chat
+
+    def test_a_read_id_made_for_another_athlete_or_altered_is_a_copy(self):
+        from app import coach_plan
+        sessions = self.read().json()["sessions"]
+        theirs = coach_plan._session_id("row-2", "0123456789abcdef")
+        altered = sessions[1]["id"][:-1] + ("0" if sessions[1]["id"][-1] != "0" else "1")
+        self.assertEqual(self.add([{**sessions[0], "id": theirs}, {**sessions[1], "id": altered}]).status_code, 200)
+        self.assertEqual(self.db.spent(), [("coach_plan", 2), ("coach_plan", 2)])
+
+    def test_without_the_tokens_for_every_copy_none_is_added(self):
+        sessions = self.read().json()["sessions"]
+        self.db.lots[0]["remaining"] = 1
+        response = self.add(self.copied(sessions))
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["tokens"]["needed"], 2)
+        self.assertEqual((self.db.spent(), self.rows), ([("coach_plan", 2)], {}))
+
+    def test_copies_that_arent_saved_give_their_tokens_back(self):
+        sessions = self.read().json()["sessions"]
+        self.save_fails = True
+        self.assertEqual(self.add(self.copied(sessions)).status_code, 500)
+        self.assertEqual((self.db.spent(), self.db.balance()), ([("coach_plan", 2)], tokens.MONTHLY_TOKENS - 2))
+
+    def test_an_account_without_tokens_adds_again_free(self):
+        self.db.account = SimpleNamespace(created_at=OLDER_ACCOUNT, user_metadata={})
+        sessions = self.read().json()["sessions"]
+        self.assertEqual(self.add(self.copied(sessions)).status_code, 200)
+        self.assertEqual((self.db.calls, len(self.rows)), ([], 2))
+        self.sessions.select.assert_not_called()
 
 
 class VideoAnalysisTests(TokensCase):

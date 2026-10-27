@@ -12,7 +12,7 @@ import { SwimWorkoutDetails } from "@/components/swim-workout"
 import { ZoneChip, shortDate, todayISO } from "@/components/training-ui"
 import { compactMeters } from "@/components/calendar-day"
 import { mondayISO, shiftWeek } from "@/lib/training"
-import { TokensNeeded, openTokenStore } from "@/lib/token-events"
+import { TokensNeeded, openTokenStore, tokensChanged } from "@/lib/token-events"
 import { tokenCount } from "@/lib/tokens"
 import {
   addCoachPlan, alreadyIn, asGymItem, dayProblem, hintedDate, loadWeek, placeSessions, placedWeekdays, startingWeek, swimMeters,
@@ -52,7 +52,8 @@ export function PlanCallout({ kind, added, cost = null, onOpen }: {
   kind: PlanKind
   /** What was added: how many sessions, and of which kinds (where they went). */
   added?: { count: number; kinds?: ("swim" | "gym")[] } | null
-  /** Tokens a session costs to read into the athlete's weeks (lib/tokens.ts); null when the athlete doesn't use tokens. */
+  /** Tokens a session costs to add to the athlete's weeks, at first or again (lib/tokens.ts); null when the athlete doesn't
+   *  use tokens. */
   cost?: number | null
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void
 }) {
@@ -65,9 +66,10 @@ export function PlanCallout({ kind, added, cost = null, onOpen }: {
           <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/90">In your training</span>
           <span className="block truncate text-sm font-medium text-emerald-50">{plural(added.count, "session")} added to your {where}</span>
         </span>
-        <button type="button" onClick={onOpen}
+        <button type="button" onClick={onOpen} title={cost ? `${tokenCount(cost)} a session` : undefined}
           className="shrink-0 rounded-full border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-white">
-          Add again
+          {/* On a phone the price is left to the sheet's add button, which shows it before anything is spent. */}
+          Add again{cost ? <span className="hidden font-medium text-slate-400 sm:inline"> · {tokenCount(cost)} a session</span> : null}
         </button>
       </div>
     )
@@ -97,12 +99,15 @@ export function PlanCallout({ kind, added, cost = null, onOpen }: {
  * weeks' own formats (`cached` when it was read before), then the athlete picks a week and a day for each, with that
  * week's training beside them, and adds them: the days a session can't go on (over, or full of swims) can't be picked.
  */
-export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, onRead, onAdded, onOpenTraining, onClose }: {
+export function CoachPlanSheet({ coach, coachName, read, cached, cost = null, swimsPerWeek, onRead, onAdded, onOpenTraining, onClose }: {
   coach: string
   coachName: string
   /** The reply read into sessions: a new read, or one already under way (this was opened before). */
   read: () => Promise<CoachPlan>
   cached: CoachPlan | null
+  /** Tokens a session costs to add: adding sessions again (lib/tokens.ts). null when reading them paid for adding them, or
+   *  the athlete doesn't use tokens. */
+  cost?: number | null
   /** The athlete's swims a week: generating a week waits until it has no more swims than this. */
   swimsPerWeek: number
   onRead: (plan: CoachPlan) => void
@@ -131,6 +136,8 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
   const [details, setDetails] = useState<string | null>(null)
   const [stage, setStage] = useState<"review" | "saving" | "done">("review")
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Adding them again was refused for want of tokens: the way on is the token store.
+  const [saveOutOfTokens, setSaveOutOfTokens] = useState(false)
   const [added, setAdded] = useState<AddedSession[]>([])
   const [leaving, setLeaving] = useState(false)
   const weeksRef = useRef(weeks)
@@ -262,12 +269,15 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
     if (!canAdd || !weekStart) return
     setStage("saving")
     setSaveError(null)
+    setSaveOutOfTokens(false)
     try {
       const result = await addCoachPlan(chosen.map((session) => ({ session, date: placed[session.id] as string })))
+      if (cost) tokensChanged()
       setAdded(result.added)
       setStage("done")
       onAdded(result.added)
     } catch (failure) {
+      setSaveOutOfTokens(failure instanceof TokensNeeded)
       setSaveError(failure instanceof Error ? failure.message : "Your sessions couldn't be added just now. Please try again.")
       setStage("review")
       // The week may have changed meanwhile (a swim added elsewhere): read it again, keeping the days picked.
@@ -493,11 +503,20 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
                 </div>
               )}
 
-              {saveError && (
+              {saveError && (saveOutOfTokens ? (
+                <div role="alert" className="flex flex-wrap items-center gap-x-2.5 gap-y-3 rounded-2xl border border-amber-300/25 bg-amber-300/[0.08] p-3.5 text-sm leading-6 text-amber-50">
+                  <Coins className="h-4 w-4 shrink-0 text-amber-200" />
+                  <span className="min-w-0 flex-1">{saveError}</span>
+                  <button type="button" onClick={openTokenStore}
+                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-100">
+                    <Coins className="h-3.5 w-3.5" />Get tokens
+                  </button>
+                </div>
+              ) : (
                 <p role="alert" className="flex gap-2.5 rounded-2xl border border-rose-300/25 bg-rose-500/[0.08] p-3.5 text-sm leading-6 text-rose-100">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />{saveError}
                 </p>
-              )}
+              ))}
             </div>
           )}
         </div>
@@ -512,7 +531,9 @@ export function CoachPlanSheet({ coach, coachName, read, cached, swimsPerWeek, o
               className="cp-add group relative inline-flex h-12 items-center gap-2 overflow-hidden rounded-full px-6 text-sm font-bold text-slate-950 transition-all duration-300 hover:-translate-y-0.5 disabled:translate-y-0 disabled:opacity-40 max-sm:flex-1 max-sm:justify-center">
               <span aria-hidden className="cp-cta-sheen" />
               {stage === "saving" ? <Loader2 className="relative h-4 w-4 animate-spin" /> : <CalendarPlus className="relative h-4 w-4" />}
-              <span className="relative">{stage === "saving" ? "Adding to your training…" : chosen.length ? `Add ${plural(chosen.length, "session")}` : "Add sessions"}</span>
+              <span className="relative">
+                {stage === "saving" ? "Adding to your training…" : chosen.length ? `Add ${plural(chosen.length, "session")}${cost ? ` · ${tokenCount(cost * chosen.length)}` : ""}` : "Add sessions"}
+              </span>
             </button>
           </footer>
         )}

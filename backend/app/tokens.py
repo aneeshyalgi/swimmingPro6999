@@ -55,7 +55,7 @@ TOKENS_TERMS = "2026-10-26"
 CHANGEOVER = timedelta(days=7)
 # What each AI feature costs, and what the athlete's token history calls it.
 COSTS = {
-    "coach_chat": 1, "voice_reply": 1, "coach_plan": 1, "swim_week": 10, "swim_replan": 6, "gym_week": 4, "week_coach": 3,
+    "coach_chat": 4, "voice_reply": 4, "coach_plan": 1, "swim_week": 10, "swim_replan": 6, "gym_week": 4, "week_coach": 3,
     "race_plan": 4, "stroke_recognition": 1, "video_analysis": 4, "daily_plan": 3,
 }
 LABELS = {

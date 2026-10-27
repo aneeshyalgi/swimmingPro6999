@@ -67,6 +67,7 @@ class VideoAccessTestCase(unittest.TestCase):
             ("app.video_access._through_proxy", {"return_value": True}),
             ("app.main.settings", {"new": SimpleNamespace(openai_api_key="test-openai")}),
             # A subscriber's tokens (tests/test_tokens.py tests them).
+            ("app.tokens.require", {"return_value": None}),
             ("app.tokens.charge", {"return_value": None}),
         ]:
             patcher = patch(target, **options)

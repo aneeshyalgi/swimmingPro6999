@@ -63,6 +63,13 @@ export function readPlanFor(id: string, body: { reply: string; request: string; 
   return read
 }
 
+/**
+ * Whether a plan's sessions still have the ids its read gave them (version 8 UUIDs, signed by the backend: _session_id in
+ * coach_plan.py), under which adding them is paid for by the read. Under any other id (a copy's, "Add again") adding
+ * them costs a token a session; a plan kept from before reads gave such ids is read again, at no cost.
+ */
+export const fromRead = (plan: CoachPlan) => plan.sessions.every((session) => session.id[14] === "8")
+
 /** Put sessions on the days picked for them. Sent again after a lost reply, each is still added once (by its id). */
 export const addCoachPlan = (sessions: { session: PlanSession; date: string }[]) =>
   trainingRequest("/coach-plan/add", addedSchema, {

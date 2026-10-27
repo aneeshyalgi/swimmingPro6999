@@ -14,6 +14,7 @@ and generating or re-planning a week works around it instead of replacing it.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import itertools
 import json
 import logging
@@ -23,7 +24,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
-from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from app import gym, tokens, training
 from app.auth import get_authenticated_profile
 from app.coach_programs import EFFORT_WORDS, INTENSITY_COLOURS, program_for
+from app.config import get_settings
 from app.context import athlete_coach
 from app.swim_planner import main_strokes
 from app.today import SwimSession, SwimSet
@@ -610,6 +611,24 @@ def _remember_read(key: tuple[str, str], plan: dict[str, Any]) -> None:
         _reads[key] = (now + READS_KEPT, json.loads(json.dumps(plan)))
 
 
+def _session_id(profile_id: str, nonce: str) -> str:
+    """The id a read gives a session (`nonce`: its reply and place in it), signed for the athlete with the backend's secret.
+    It's shaped like a UUID of version 8 (one its maker designs), so the chat can tell it from the ids of its own copies.
+    Adding the session under it is part of the read the athlete paid for, and it names the same calendar entry every time,
+    so adding it again (even from a fresh read of the reply) moves that entry rather than making a second one."""
+    mark = hmac.new(get_settings().supabase_secret_key.encode(), f"coach-plan:{profile_id}:{nonce}".encode(), hashlib.sha256).hexdigest()
+    raw = nonce + mark[:15]
+    return f"{raw[:8]}-{raw[8:12]}-8{raw[12:15]}-{raw[15:19]}-{raw[19:]}"
+
+
+def _read_gave(profile_id: str, session_id: str) -> bool:
+    """Whether `session_id` is one a read gave this athlete (_session_id), rather than a copy's."""
+    raw = session_id.replace("-", "")
+    if len(raw) != 32 or raw[12] != "8":
+        return False
+    return hmac.compare_digest(_session_id(profile_id, (raw[:12] + raw[13:])[:16]), session_id)
+
+
 @router.post("/read")
 def read_plan(request: PlanRead, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """The sessions in a coach's reply, each in the app's own format and with any day the reply gives it, ready to put on
@@ -620,8 +639,9 @@ def read_plan(request: PlanRead, authorization: str | None = Header(default=None
     the same time, and one that can't be is listed in `skipped` (with any the coach only named) rather than failing the rest.
 
     It costs a token a session (app/tokens.py), charged once the split has found them and given back for any that can't
-    be copied; an athlete without a token isn't read for at all. A reply read before comes back as it was read, with no
-    tokens or AI work (READS_KEPT), and its tokens are never charged twice, even when it has to be read again."""
+    be copied; an athlete without a token isn't read for at all. That pays for adding each session once (add_plan). A reply
+    read before comes back as it was read, with no tokens or AI work (READS_KEPT), and its tokens are never charged twice,
+    even when it has to be read again."""
     profile = get_authenticated_profile(authorization)
     read_key = hashlib.sha256(f"{int(request.spoken)}\n{request.reply}".encode()).hexdigest()[:40]
     remembered = (str(profile["id"]), read_key)
@@ -682,7 +702,7 @@ How to write them:
     def write(kind: str, title: str | None, day: str | None, excerpt: str, alone: bool) -> dict[str, Any]:
         """One session copied out: `title` and `day` from the split (no title yet when it's copied before the split
         is in); `alone`: the reply's only session."""
-        heading = {"id": str(uuid4()), "kind": kind, "day": day}
+        heading = {"kind": kind, "day": day}
         which = (f'"{title}", for {day}' if day else f'"{title}"') if title else "the whole reply"
         named = f'"{title}"' if title else TITLE_RULE
         # Defence in depth: a sentence can name two days, so the copy keeps to its own.
@@ -812,6 +832,9 @@ When the reply has no complete session, return no sessions.""",
                 tokens.charge(profile, "coach_plan", len(sessions), ref=f"{read_key}:{len(sessions)}")
             except tokens.OutOfTokens:
                 logger.warning("A coach's plan's copied sessions couldn't be charged after a part failed; they're free")
+        # Each session's id is the one this reply's read always gives it (_session_id): its first add is paid for here.
+        sessions = [{"id": _session_id(str(profile["id"]), hashlib.sha256(f"{read_key}:{place}".encode()).hexdigest()[:16]), **session}
+                    for place, session in enumerate(sessions)]
         plan = {"title": outline.title, "coach": coach, "sessions": sessions, "skipped": skipped}
         _remember_read(remembered, plan)
         return plan
@@ -880,7 +903,11 @@ def _check_swim_days(profile, swims: list[AddSwim]) -> None:
 @router.post("/add")
 def add_plan(request: PlanAdd, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """Put a coach's sessions on the days the athlete picked: every session is checked first, so nothing is saved when
-    one can't go where it was put. Returns what was added and the week each went in ({"added": [...]})."""
+    one can't go where it was put. Returns what was added and the week each went in ({"added": [...]}).
+
+    A session under the id its read gave it was paid for with the read. Any other is a copy ("Add again": the same
+    sessions under new ids) and costs what reading it did, a token a session (app/tokens.py), given back if it isn't saved;
+    a copy already saved (sent again after a lost reply) is only saved again."""
     profile = get_authenticated_profile(authorization)
     today = datetime.now(timezone.utc).date()
     for item in request.sessions:
@@ -920,8 +947,21 @@ def add_plan(request: PlanAdd, authorization: str | None = Header(default=None))
         rows.append({"id": training.record_id(profile["id"], key), "user_id": profile["id"], "session_type": kind, "session_name": title,
                      "session_date": f"{item.date.isoformat()}T00:00:00+00:00", "details": details})
         added.append({"kind": item.kind, "date": item.date.isoformat(), "title": title, "week_start": week.isoformat()})
-    # One statement for the whole plan: all of it is saved or none of it, in one trip to the database.
-    saved = training.get_supabase_client().table("user_training_sessions").upsert(rows, on_conflict="id").execute().data or []
-    if len(saved) != len(rows):
-        raise HTTPException(status_code=500, detail="Your sessions weren't saved. Please try again: nothing will be added twice.")
+    database = training.get_supabase_client()
+    copies = [row["id"] for item, row in zip(request.sessions, rows) if not _read_gave(str(profile["id"]), item.id)]
+    receipt = None
+    if copies and tokens.available() and tokens.uses_tokens(profile):
+        found = database.table("user_training_sessions").select("id").eq("user_id", profile["id"]).in_("id", copies).execute().data
+        new = sorted(set(copies) - {row["id"] for row in found or []})
+        # Named by the copies, so the same ones sent twice at once are paid for once.
+        if new:
+            receipt = tokens.charge(profile, "coach_plan", len(new), ref="copy:" + hashlib.sha256(",".join(new).encode()).hexdigest()[:40])
+    try:
+        # One statement for the whole plan: all of it is saved or none of it, in one trip to the database.
+        saved = database.table("user_training_sessions").upsert(rows, on_conflict="id").execute().data or []
+        if len(saved) != len(rows):
+            raise HTTPException(status_code=500, detail="Your sessions weren't saved. Please try again: nothing will be added twice.")
+    except BaseException:
+        tokens.give_back(receipt)
+        raise
     return {"added": added}

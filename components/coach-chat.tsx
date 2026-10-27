@@ -42,7 +42,7 @@ import {
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { randomId } from "@/lib/training"
-import { readPlanFor, type AddedSession, type CoachPlan, type PlanKind, type TrainingTarget } from "@/lib/coach-plan"
+import { fromRead, readPlanFor, type AddedSession, type CoachPlan, type PlanKind, type TrainingTarget } from "@/lib/coach-plan"
 import { TokensNeeded, openTokenStore, tokensChanged, tokensNeededIn } from "@/lib/token-events"
 import { tokenCount } from "@/lib/tokens"
 
@@ -521,8 +521,10 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
   const planMessage = planIndex >= 0 ? planThread[planIndex] : null
   // The athlete's message the reply answered, for reading it in context.
   const planRequest = planMessage ? [...planThread.slice(0, planIndex)].reverse().find((message) => message.role === "user")?.content ?? "" : ""
-  // Sessions added before are added again as new ones: same sessions, new ids.
-  const planCached = planMessage?.planDraft ? (planFor?.fresh ? withNewIds(planMessage.planDraft) : planMessage.planDraft) : null
+  // Sessions added before are added again as new ones: same sessions, new ids (which cost a token a session to add). A plan
+  // not added yet whose ids aren't its read's (kept from before reads signed them) is read again, at no cost.
+  const planCached = !planMessage?.planDraft ? null
+    : planFor?.fresh ? withNewIds(planMessage.planDraft) : fromRead(planMessage.planDraft) ? planMessage.planDraft : null
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -856,7 +858,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
                               <button
                                 type="button"
                                 onClick={() => openPlan(message)}
-                                title={planCost && !message.planAdded ? `${tokenCount(planCost)} a session` : undefined}
+                                title={planCost ? `${tokenCount(planCost)} a session` : undefined}
                                 className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-white/[0.05] hover:text-slate-200"
                               >
                                 <CalendarPlus className="h-3.5 w-3.5" />
@@ -1081,7 +1083,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
               tokensChanged()   // reading it costs a token a session (once per reply)
               return planFor.fresh ? withNewIds(plan) : plan
             })}
-          cached={planCached} swimsPerWeek={swimsPerWeek}
+          cached={planCached} cost={planFor.fresh ? planCost : null} swimsPerWeek={swimsPerWeek}
           onRead={(plan) => updateMessage(planFor.coach, planFor.messageId, { planDraft: plan })}
           onAdded={(added) => {
             updateMessage(planFor.coach, planFor.messageId, {

@@ -762,6 +762,8 @@ class AddPlanTests(unittest.TestCase):
         self.patch(training, "get_supabase_client", return_value=self.database)
         clock = self.patch(coach_plan, "datetime")
         clock.now.return_value.date.return_value = TODAY
+        # Tokens off (tests/test_tokens.py tests what adding a plan again costs).
+        self.patch(tokens, "available", return_value=False)
 
     def patch(self, target, name, **options):
         patcher = patch.object(target, name, **options)
