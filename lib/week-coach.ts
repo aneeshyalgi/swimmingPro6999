@@ -225,8 +225,10 @@ export function suggestions(kind: WeekKind, week: TrainingWeek | GymWeek | null,
     const next = days.find((day) => day.workouts.some((item) => !item.completed))
     const free = days.find((day) => !day.workouts.length && day.date !== next?.date)
     const later = days.find((day) => day.date > (next?.date ?? today) && day.workouts.length < 2 && day.date !== next?.date)
+    // About a third shorter, in fives and 20 minutes at most: "20 minutes shorter" made a 27-minute swim 7 minutes long.
+    const minutes = next?.workouts.find((item) => !item.completed)?.workout.estimated_duration_minutes ?? 0
     return [
-      next && `Make ${weekday(next.date)}'s swim about 20 minutes shorter`,
+      next && minutes >= 20 && `Make ${weekday(next.date)}'s swim about ${Math.min(20, Math.round(minutes / 15) * 5)} minutes shorter`,
       next && `Add more kick to ${weekday(next.date)}'s swim`,
       next && later && `Move ${weekday(next.date)}'s swim to ${weekday(later.date)}`,
       free && `Add an easy recovery swim on ${weekday(free.date)}`,
@@ -238,8 +240,9 @@ export function suggestions(kind: WeekKind, week: TrainingWeek | GymWeek | null,
   const days = ahead as GymWeek["days"]
   const next = days.find((day) => day.workouts.some((item) => !item.completed))
   const free = days.find((day) => !day.workouts.length)
+  const minutes = next?.workouts.find((item) => !item.completed)?.workout.estimated_duration_minutes ?? 0
   return [
-    next && `Make ${weekday(next.date)}'s workout 30 minutes`,
+    next && minutes > 35 && `Make ${weekday(next.date)}'s workout 30 minutes`,
     next && `Swap an exercise in ${weekday(next.date)}'s workout for one that's easier on my shoulders`,
     `Add a core workout on ${weekday((free ?? days[days.length - 1] ?? week.days[6]).date)}`,
     next && "I only have bands and bodyweight this week",

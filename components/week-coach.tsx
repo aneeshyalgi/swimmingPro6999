@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 import { CoachAvatar } from "@/components/coach-avatar"
 import { shortDate } from "@/components/training-ui"
+import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 import { randomId, type BuilderSection, type GymWeek, type GymWorkoutData, type SwimWorkout, type TrainingWeek } from "@/lib/training"
 import {
@@ -17,7 +18,8 @@ import {
 
 type Week = TrainingWeek | GymWeek
 type Draft = ReadyChange & { state: "writing" | "ready" | "failed"; detail?: string; include: boolean }
-type Outcome = { state: "applying" | "applied" | "undoing" | "undone" | "discarded"; id?: string; undo?: boolean }
+/** `highlight`: the sessions an applied change changed, to show on the week. */
+type Outcome = { state: "applying" | "applied" | "undoing" | "undone" | "discarded"; id?: string; undo?: boolean; highlight?: string[] }
 type CoachMessage = {
   id: string; role: "coach"; text: string
   /** The athlete's message it answers, to ask again. */
@@ -42,9 +44,23 @@ type Message = { id: string; role: "athlete"; text: string } | CoachMessage
 export type WeekLink = { scanning: boolean; pending: Record<string, ChangeAction>; focus: string | null }
 
 /** Each week's chat and anything half written in it, kept while the dashboard is open: closing the chat and opening it
- *  again carries on. */
+ *  again carries on. An answer, a save or an undo still under way when the chat closes goes on and lands in its week's
+ *  chat all the same, and the chat open on that week (`showing`) shows it. (Stopped as the chat closed, an answer was
+ *  paid for and never seen, and the chat waited on it until the page was loaded again.) */
 const threads = new Map<string, Message[]>()
 const drafts = new Map<string, string>()
+const showing = new Map<string, (messages: Message[]) => void>()
+function changeThread(thread: string, change: (messages: Message[]) => Message[]) {
+  const messages = change(threads.get(thread) ?? [])
+  threads.set(thread, messages)
+  showing.get(thread)?.(messages)
+}
+// Signing out forgets them, so whoever signs in next on this page never sees them.
+if (typeof window !== "undefined") {
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === "SIGNED_OUT") { threads.clear(); drafts.clear() }
+  })
+}
 
 const TONES = {
   swim: {
@@ -161,6 +177,10 @@ export function WeekCoachButton({ kind, coach, week, today, open, disabled, onOp
   }, [])
   const name = firstName(coach)
   const tone = TONES[kind]
+  // The week it changes: this one, or another named by its dates.
+  const start = week?.days[0]?.date
+  const current = !week || !start || (start <= today && today <= week.days[6].date)
+  const which = current ? "This week" : weekSpan(start)
   return (
     <>
       <button ref={ref} type="button" onClick={onOpen} disabled={disabled} aria-haspopup="dialog" aria-expanded={open}
@@ -169,7 +189,7 @@ export function WeekCoachButton({ kind, coach, week, today, open, disabled, onOp
           tone.tone, open && "wc-launch-open")}>
         <WeekRing coach={coach} week={week} today={today} size={38} avatar="h-[26px] w-[26px]" live={open} />
         <span className="flex flex-col leading-none">
-          <span className={cn("text-[9px] font-bold uppercase tracking-[0.2em]", tone.accent)}>{open ? "Live · this week" : "This week"}</span>
+          <span className={cn("text-[9px] font-bold uppercase tracking-[0.2em]", tone.accent)}>{open ? `Live · ${which}` : which}</span>
           <span className="mt-1 whitespace-nowrap text-sm font-semibold">Re-plan with {name}</span>
         </span>
         <span aria-hidden className="wc-launch-sheen" />
@@ -177,7 +197,7 @@ export function WeekCoachButton({ kind, coach, week, today, open, disabled, onOp
       {mounted && away && !open && !disabled && createPortal(
         <button type="button" onClick={onOpen} aria-label={`Re-plan this ${tone.name.toLowerCase()} with ${coach}`}
           className={cn("wc-dock group fixed bottom-5 right-5 z-[44] flex items-center rounded-full", tone.tone)}>
-          <span className="wc-dock-label pointer-events-none mr-2 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold text-white">Re-plan this week</span>
+          <span className="wc-dock-label pointer-events-none mr-2 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold text-white">Re-plan {current ? "this week" : which}</span>
           <span className="wc-dock-orb relative grid h-14 w-14 place-items-center rounded-full">
             <span aria-hidden className="wc-dock-ring absolute inset-0 rounded-full" />
             <WeekRing coach={coach} week={week} today={today} size={52} avatar="h-9 w-9" />
@@ -286,17 +306,15 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
   onLink?: (link: WeekLink | null) => void
 }) {
   const thread = `${kind}:${weekStart}`
-  const [messages, setMessages] = useState<Message[]>(() => threads.get(thread) ?? [])
+  const [messages, show] = useState<Message[]>(() => threads.get(thread) ?? [])
   const [input, setInput] = useState(() => drafts.get(thread) ?? "")
   const [leaving, setLeaving] = useState(false)
   const [mounted, setMounted] = useState(false)
-  const [highlights, setHighlights] = useState<Record<string, string[]>>({})
   const [focus, setFocus] = useState<string | null>(null)
   const [beams, setBeams] = useState<Beam[]>([])
   const panel = useRef<HTMLElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLTextAreaElement>(null)
-  const request = useRef<AbortController | null>(null)
   const tone = TONES[kind]
   const name = firstName(coach)
   const working = messages.some((item) => item.role === "coach" && (item.streaming || item.outcome?.state === "applying" || item.outcome?.state === "undoing"))
@@ -309,9 +327,15 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
     document.body.classList.add("wc-docked")
     return () => document.body.classList.remove("wc-docked")
   }, [leaving])
-  useEffect(() => { threads.set(thread, messages) }, [thread, messages])
+  // The week's chat as it changes (see `threads`), and anything that came since the first render.
+  useEffect(() => {
+    showing.set(thread, show)
+    const latest = threads.get(thread)
+    if (latest) show(latest)
+    return () => { if (showing.get(thread) === show) showing.delete(thread) }
+  }, [thread])
+  const setMessages = useCallback((change: (messages: Message[]) => Message[]) => changeThread(thread, change), [thread])
   useEffect(() => { drafts.set(thread, input) }, [thread, input])
-  useEffect(() => () => request.current?.abort(), [])
   // The field is ready to type in, except on a touch screen: there the keyboard would come up over the sheet before the
   // athlete has read it, so the field waits for a tap.
   useEffect(() => {
@@ -429,6 +453,13 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
     const element = body.current
     if (element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
   }
+  // Opened again on a chat already under way: its latest part is in view (the welcome stays at its top).
+  useLayoutEffect(() => {
+    const element = body.current
+    if (mounted && element && messages.length) element.scrollTop = element.scrollHeight
+    // Once, as the panel opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted])
   // With the keyboard up less of the chat is seen: its latest part stays in view.
   useLayoutEffect(() => {
     const element = body.current
@@ -447,8 +478,6 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
     setMessages((list) => [...list, { id: randomId(), role: "athlete", text: message },
       { id: coachId, role: "coach", text: "", request: message, phase: "thinking", streaming: true, changes: [], notes: [] }])
     setInput("")
-    const controller = new AbortController()
-    request.current = controller
     const unfinished = (detail: string) => (item: Draft): Draft => (item.state === "writing" ? { ...item, state: "failed", include: false, detail } : item)
     try {
       await askWeekCoach({ kind, week_start: weekStart, message, history }, (event) => {
@@ -464,16 +493,13 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
         } else if (event.type === "error") {
           update(coachId, (item) => ({ ...item, phase: item.phase === "answered" ? "answered" : "failed", error: event.detail }))
         }
-      }, controller.signal)
+      })
       update(coachId, (item) => ({ ...item, streaming: false, changes: item.changes.map(unfinished("This change didn't finish writing.")),
         ...(item.phase === "thinking" && { phase: "failed", error: item.error ?? "Your coach didn't answer. Please try again." }) }))
     } catch (failure) {
-      if (controller.signal.aborted) return
       update(coachId, (item) => ({ ...item, streaming: false, phase: item.phase === "answered" ? "answered" : "failed",
         error: failure instanceof Error ? failure.message : "Your coach couldn't answer just now. Please try again.",
         changes: item.changes.map(unfinished("The connection dropped before this was written.")) }))
-    } finally {
-      if (request.current === controller) request.current = null
     }
   }
 
@@ -482,7 +508,7 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
     const pairs = changes.flatMap((change) => {
       const card = panel.current?.querySelector(`[data-change-id="${change.id}"]`) ?? null
       const dates = change.action === "replan" ? (week?.days ?? []).map((day) => day.date).filter((date) => date >= change.date)
-        : [change.date, ...(change.to ? [change.to] : [])]
+        : [change.date, ...(change.to && change.to !== change.date ? [change.to] : [])]
       return dates.map((date) => ({ from: card, date, action: change.action }))
     })
     // After the week has drawn what's saved.
@@ -504,8 +530,7 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
     const changeId = randomId()
     try {
       const result = await guard(() => applyWeekChanges(kind, weekStart, changeId, chosen))
-      update(message.id, (item) => ({ ...item, outcome: { state: "applied", id: changeId, undo: result.change.undo } }))
-      setHighlights((current) => ({ ...current, [message.id]: result.change.highlight }))
+      update(message.id, (item) => ({ ...item, outcome: { state: "applied", id: changeId, undo: result.change.undo, highlight: result.change.highlight } }))
       onApplied(result.week, result.change.highlight)
       shineChanges(chosen)
     } catch (failure) {
@@ -558,8 +583,7 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
   const ideas = useMemo(() => suggestions(kind, week, today), [kind, week, today])
   const restart = () => {
     if (working) return
-    request.current?.abort()
-    setMessages([])
+    setMessages(() => [])
   }
 
   if (!mounted) return null
@@ -609,7 +633,7 @@ export function WeekCoach({ kind, coach, weekStart, week, today, busy, guard, on
                       onDiscard={() => update(message.id, (item) => ({ ...item, outcome: { state: "discarded" } }))}
                       onOpenChat={onOpenChat ? () => onOpenChat(message.request) : undefined}
                       onShow={() => {
-                        onShow(highlights[message.id] ?? [])
+                        onShow(message.outcome?.highlight ?? [])
                         if (window.matchMedia("(max-width: 639px)").matches) close()
                       }} />
                   </div>
@@ -880,7 +904,9 @@ function ChangeCard({ change, index, today, selectable, onToggle, onFocus }: {
   const action = ACTIONS[change.action]
   const facts = figures(change)
   const ready = change.state === "ready"
-  const day = change.to ? <>{dayLabel(change.date)}<ArrowRight className="mx-0.5 inline h-3 w-3" />{dayLabel(change.to)}</> : dayLabel(change.date)
+  // A copy can go on its own day ("twice on Tuesday").
+  const to = change.to && change.to !== change.date ? change.to : null
+  const day = to ? <>{dayLabel(change.date)}<ArrowRight className="mx-0.5 inline h-3 w-3" />{dayLabel(to)}</> : dayLabel(change.date)
   const KindIcon = change.kind === "swim" ? Waves : change.kind === "mobility" ? Heart : Dumbbell
   const detailed = ready && (change.action === "edit" || change.action === "add")
   return (
@@ -908,7 +934,8 @@ function ChangeCard({ change, index, today, selectable, onToggle, onFocus }: {
           )}
           {ready && change.action === "remove" && <p className="mt-1.5 text-xs text-slate-400">Comes off {weekday(change.date)}{facts.from ? ` (${facts.from.toLocaleString()} ${facts.unit === "m" ? "m" : facts.unit})` : ""}.</p>}
           {ready && change.action === "move" && <p className="mt-1.5 text-xs text-slate-400">The same session, on {weekday(change.to ?? change.date)} instead.</p>}
-          {ready && change.action === "copy" && <p className="mt-1.5 text-xs text-slate-400">An exact copy on {weekday(change.to ?? change.date)}; {weekday(change.date)} keeps its session.</p>}
+          {ready && change.action === "copy" && <p className="mt-1.5 text-xs text-slate-400">{to ? `An exact copy on ${weekday(to)}; ${weekday(change.date)} keeps its session.`
+            : `A second, exact copy on ${weekday(change.date)}.`}</p>}
           {detailed && (
             <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}
               className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-slate-300 transition-colors hover:text-white">

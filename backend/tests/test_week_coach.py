@@ -296,6 +296,18 @@ class AnswerTests(WeekCoachCase):
         self.assertIn("Wednesday would have 4 workouts", self.issues(*adds, kind="gym")[0])
         self.assertEqual(self.issues(*adds[:2], kind="gym"), [])
 
+    def test_a_session_is_asked_for_a_length_its_form_can_hold(self):
+        # A 27-minute swim made "20 minutes shorter": 7 minutes is under what a swim lasts, so the coach is sent back.
+        [short] = self.issues(change("edit", "S3", instruction="Shorter", minutes=7))
+        self.assertIn("a swim lasts 10 to 180 minutes, so it can't last 7. Make it 10 minutes (or remove it", short)
+        [new] = self.issues(change("add", day="Sunday", new="swim", instruction="Easy", minutes=5))
+        self.assertIn("Make it 10 minutes and say so", new)
+        self.assertIn("Make it 180 minutes", self.issues(change("edit", "S3", instruction="Longer", minutes=200))[0])
+        self.assertEqual(self.issues(change("edit", "S3", instruction="Shorter", minutes=10), change("edit", "M1", instruction="Less", minutes=3)), [])
+        # An AI workout of the gym week lasts at most 90 minutes; the athlete's own Workout Builder workout, longer.
+        self.assertIn("a workout lasts 10 to 90 minutes", self.issues(change("edit", "G1", instruction="Longer", minutes=120), kind="gym")[0])
+        self.assertEqual(self.issues(change("edit", "G2", instruction="Longer", minutes=120), kind="gym"), [])
+
 
 class EditTests(unittest.TestCase):
     def setUp(self):
@@ -370,6 +382,17 @@ class EditTests(unittest.TestCase):
         self.assertEqual(week_coach._relabelled("Warm-Down: 300 easy", (1, 300), (1, 50)), "Warm-Down: 50 easy")
         # Only hard work: nothing to even out.
         self.assertEqual(week_coach.evened([sets[2]], 300), {})
+
+    def test_a_changed_swims_length_goes_with_its_distance(self):
+        # 900 m in 27 minutes cut to 225 m, written to last 70: put right to the 10 minutes a swim lasts at least.
+        self.assertEqual(week_coach._length_fit(70, 225, 27 / 900, 7), 10)
+        self.assertEqual(week_coach._length_fit(70, 225, 27 / 900, None), 10)
+        # 4,000 m at 80 minutes' pace can't take 20.
+        self.assertEqual(week_coach._length_fit(20, 4000, 80 / 4000, None), 80)
+        # About right (more rest, a slower set, the length asked for): kept.
+        self.assertIsNone(week_coach._length_fit(35, 1200, 45 / 1400, None))
+        self.assertIsNone(week_coach._length_fit(60, 2000, 60 / 3000, 75))
+        self.assertIsNone(week_coach._length_fit(30, 3000, None, None))
 
 
 class ApplyTests(WeekCoachCase):
@@ -606,6 +629,51 @@ class ChatTests(WeekCoachCase):
         self.assertEqual([event["type"] for event in events], ["plan", "failed", "done"])
         self.assertEqual(events[1]["detail"], training.GENERATION_FAILED)
 
+    def test_an_answer_with_nothing_left_to_apply_gives_its_tokens_back(self):
+        receipt = tokens.charge.return_value = object()
+        given = self.patch(tokens, "give_back")
+        add = {"action": "add", "session": None, "new": "swim", "day": "Sunday", "instruction": "Easy", "meters": 1500, "minutes": None, "label": "Easy swim"}
+        self.answers = [{"message": "Here.", "changes": [add], "elsewhere": False}, HTTPException(status_code=502, detail=training.GENERATION_FAILED)]
+        self.chat()
+        given.assert_called_once_with(receipt)
+        # A change that needs no writing is still there to apply: the answer was worth its tokens.
+        given.reset_mock()
+        removal = {"action": "remove", "session": "S4", "new": None, "day": None, "instruction": "", "meters": None, "minutes": None, "label": "Rest"}
+        self.answers = [{"message": "Here.", "changes": [add, removal], "elsewhere": False}, HTTPException(status_code=502, detail=training.GENERATION_FAILED)]
+        _, events = self.chat()
+        self.assertEqual([event["type"] for event in events], ["plan", "failed", "done"])
+        given.assert_not_called()
+
+    def test_a_copy_onto_its_own_day_carries_the_day_so_it_can_be_applied(self):
+        # "Wednesday's swim twice on Wednesday": a copy of it onto Wednesday.
+        self.answers = [{"message": "Twice it is.", "changes": [
+            {"action": "copy", "session": "S2", "new": None, "day": "Wednesday", "instruction": "", "meters": None, "minutes": None, "label": "Second swim"}],
+            "elsewhere": False}]
+        _, events = self.chat("Do Wednesday's swim twice on Wednesday")
+        [copy] = events[0]["changes"]
+        self.assertEqual((copy["date"], copy["to"]), (TODAY.isoformat(), TODAY.isoformat()))
+        # Applied as the web app sends it (lib/week-coach.ts appliedBody): a copy goes on its `to`.
+        response = self.client.post("/api/training/week-coach/apply", headers=HEADERS, json={
+            "id": CHANGE_SET, "kind": "swim", "week_start": MONDAY.isoformat(),
+            "changes": [{"id": copy["id"], "action": "copy", "kind": copy["kind"], "key": copy["key"], "base": copy["base"], "date": copy["to"]}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        wednesday = next(day for day in response.json()["week"]["days"] if day["date"] == TODAY.isoformat())
+        self.assertEqual([item["workout"]["title"] for item in wednesday["workouts"]], ["Wednesday aerobic", "Wednesday aerobic"])
+
+    def test_a_changed_swim_lasts_what_its_distance_takes(self):
+        self.answers = [
+            {"message": "Much shorter.", "changes": [
+                {"action": "edit", "session": "S2", "new": None, "day": None, "instruction": "Only the warm-up and warm-down", "meters": 300, "minutes": None,
+                 "label": "Short swim"}], "elsewhere": False},
+            # 1,400 m in 45 minutes cut to 300 m, written to last 70.
+            {"working": "100 + 200 = 300", "title": None, "objective": None, "notes": None, "estimated_duration_minutes": 70, "sets": [
+                {"adjust": 1, "name": "Warm-Up: 100 easy", "rounds": None, "repetitions": None, "distance_meters": 100, "interval": None, "target_time": None,
+                 "training_zone": None, "description": None}, {"keep": 3}]},
+        ]
+        _, events = self.chat()
+        self.assertEqual([event["type"] for event in events], ["plan", "change", "done"])
+        self.assertEqual(events[1]["workout"]["estimated_duration_minutes"], 10)
+
     def test_an_answer_that_cant_be_given_says_so(self):
         self.answers = [HTTPException(status_code=503, detail=training.GENERATION_SLOW)]
         response, events = self.chat()
@@ -650,6 +718,7 @@ class ChatTests(WeekCoachCase):
         self.assertIn("Athlete: Hi", objective)
         self.assertIn("THE ATHLETE'S NEW MESSAGE: Add more kick", objective)
         self.assertIn("TODAY: Wednesday 2026-10-21", objective)
+        self.assertIn("a swim is at most 12,000 m and lasts 10 to 180 minutes", objective)
 
 
 if __name__ == "__main__":

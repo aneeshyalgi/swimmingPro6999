@@ -52,6 +52,9 @@ MAX_CHANGES = 12
 SWIMS_A_DAY, METERS_A_DAY, METERS_A_SWIM = 2, 16000, 12000
 WORKOUTS_A_DAY = 3
 MOBILITY_A_DAY = 7
+# How long a session the coach writes can last, in minutes, as each form holds it: a swim, an AI workout of the gym week,
+# a Workout Builder workout.
+SWIM_MINUTES, WORKOUT_MINUTES, BUILDER_MINUTES = (10, 180), (10, 90), (5, 300)
 # What a change touched, kept so it can be undone: a record of its own, without a date, so nothing that reads a week
 # ever counts it. The latest few are kept.
 CHANGE_KIND = "week_coach_change"
@@ -290,6 +293,7 @@ def answer_issues(answer: CoachAnswer, board: Board) -> list[str]:
                     issues.append(f"{label}: this swim week isn't generated yet, and a day's mobility comes with generating it. Say so instead.")
                 elif (same := next((entry for entry in board.entries if entry.kind == "mobility" and entry.date == day.isoformat()), None)):
                     issues.append(f"{label}: {change.day} already has mobility ({same.ref}): edit it instead.")
+            issues += _length_issues(label, board, change, None)
             continue
         entry = board.entry(change.session)
         if entry is None:
@@ -307,11 +311,31 @@ def answer_issues(answer: CoachAnswer, board: Board) -> list[str]:
             issues.append(f"{label}: {entry.ref} is already on {change.day}.")
         if change.action == "edit" and not change.instruction.strip():
             issues.append(f"{label}: say in instruction exactly what changes.")
+        if change.action == "edit":
+            issues += _length_issues(label, board, change, entry)
         if entry.kind == "mobility" and change.action in ("move", "copy") and day:
             there = next((other for other in board.entries if other.kind == "mobility" and other.date == day.isoformat()), None)
             if there and len(there.content) + len(entry.content) > MOBILITY_A_DAY:
                 issues.append(f"{label}: {change.day} would have more than {MOBILITY_A_DAY} mobility exercises.")
     return issues or limit_issues(answer.changes, board)
+
+
+def _length_issues(label: str, board: Board, change: Change, entry: Entry | None) -> list[str]:
+    """A length the session a change writes can't have. Written anyway, it comes out wrong: a swim asked to last 7
+    minutes (27 minutes, "20 minutes shorter") was refused for being under 10, and the model's next try made it 70."""
+    if not change.minutes:
+        return []
+    if board.kind == "swim":
+        if (entry.kind if entry else change.new) != "swim":
+            return []        # a day's mobility: exercises of their own lengths
+        what, (low, high) = "swim", SWIM_MINUTES
+    else:
+        what, (low, high) = "workout", BUILDER_MINUTES if entry and entry.builder else WORKOUT_MINUTES
+    if low <= change.minutes <= high:
+        return []
+    shorter = change.minutes < low
+    return [f"{label}: a {what} lasts {low} to {high} minutes, so it can't last {change.minutes}. Make it {low if shorter else high} minutes"
+            f"{' (or remove it, when that is still too long for the athlete)' if shorter and entry else ''} and say so in the message."]
 
 
 def limit_issues(changes: list[Change], board: Board) -> list[str]:
@@ -379,7 +403,7 @@ def plan_prompt(board: Board, profile, coach: str, message: str, turns: list["Tu
                   "focus or the sets.")
         label, refs = "Swim week", "S2 for a swim, M1 for a day's mobility"
         rules = (f"THE WEEK'S RULES: at most {SWIMS_A_DAY} swims and {METERS_A_DAY:,} m of swimming a day; a swim is at most "
-                 f"{METERS_A_SWIM:,} m. The athlete's plan has {profile.get('swim_sessions_per_week') or 'an unknown number of'} swims a week"
+                 f"{METERS_A_SWIM:,} m and lasts {SWIM_MINUTES[0]} to {SWIM_MINUTES[1]} minutes. The athlete's plan has {profile.get('swim_sessions_per_week') or 'an unknown number of'} swims a week"
                  f"{f' of at most {max_minutes} minutes' if max_minutes else ''}: their usual week, not a limit. A swim they ask for is "
                  "added even when it makes more than that (your message can say it's one more than usual).")
         new = ('"swim" (a new swim) or "mobility" (a day\'s mobility work, on a day that has none; only in a generated week)')
@@ -395,7 +419,7 @@ def plan_prompt(board: Board, profile, coach: str, message: str, turns: list["Tu
                   "(all of the week while it hasn't started); the athlete's own workouts, ticked-off ones and ones from you stay. It "
                   "follows only the athlete's plan, never a request: it can't pick the days, a focus or the exercises, or leave mobility out.")
         label, refs = "Gym week", "G2"
-        rules = (f"THE WEEK'S RULES: at most {WORKOUTS_A_DAY} workouts a day. The athlete's plan has {profile.get('gym_sessions_per_week') or 0} "
+        rules = (f"THE WEEK'S RULES: at most {WORKOUTS_A_DAY} workouts a day, each at least {WORKOUT_MINUTES[0]} minutes long. The athlete's plan has {profile.get('gym_sessions_per_week') or 0} "
                  "strength sessions a week: their usual week, not a limit. A workout they ask for is added even when it makes more "
                  "than that (your message can say it's one more than usual). Mobility workouts are light and can go on any day.")
         new = '"strength" (a strength, power or core workout) or "mobility" (a mobility or recovery workout)'
@@ -434,7 +458,8 @@ Answer as {coach}, in the chat beside the athlete's {label}.
   the sessions on the days the athlete doesn't want onto the days they do (within a day's limit), and remove only what
   they want gone or what can't fit.
 - action: edit (rewrite a session), add (a new session on a day), remove (delete a session), move (the same session on
-  another day), copy (an exact copy of a session on another day, the session staying where it is), or replan: {replan}
+  another day), copy (an exact copy of a session on a day, its own or another, the session staying where it is: "twice on
+  Tuesday" is a copy to Tuesday), or replan: {replan}
   Only when the athlete asks for the whole week (or all of what's left of it) to be planned again and for nothing a fresh
   plan can't do; it's the only change then, with session, new and day null and instruction empty. When they want the week
   changed in a particular way (other days, a focus, more of something, less mobility), give the single changes that do
@@ -709,6 +734,16 @@ def _minutes_issue(minutes: int, target: int | None, what: str) -> list[str]:
     return [training.SoftIssue(f"The {what} lasts {minutes} min; the change asks for about {target} min.")]
 
 
+def _length_fit(minutes: int, meters: int, pace: float | None, target: int | None) -> int | None:
+    """The length a changed swim lasts instead of `minutes`, when that's far from the length the change asks for or,
+    without one, from what its distance takes at the swim's pace before (`pace`: minutes a metre, rest included); None
+    when it's about right. A swim cut to 225 m came back lasting 70 minutes, and showed as 27 → 70 min."""
+    if not target and not pace:
+        return None
+    expected = min(SWIM_MINUTES[1], max(SWIM_MINUTES[0], round(target or meters * pace)))
+    return None if expected / 1.5 - 5 <= minutes <= expected * 1.5 + 5 else expected
+
+
 def _odd_distances(sets: list[Any], allowed: set[int]) -> list[str]:
     return [training.SoftIssue(f"Set '{item.name}' uses {item.distance_meters} m repeats; use multiples of 25 m.")
             for item in sets if item.distance_meters > 50 and item.distance_meters % 25 and item.distance_meters not in allowed]
@@ -831,7 +866,10 @@ Write the swim after the change:
 - title: null to keep "{before['title']}", or a new name of at most 6 words when the change makes it a different session.
 - objective and notes: null to keep them; rewritten only when the change makes them wrong.
 - estimated_duration_minutes: how long the swim takes after the change, send-offs and rest included.""", check=check, max_tokens=5000)
-        return edited_swim(before, edit).model_dump(mode="json")
+        swim = edited_swim(before, edit)
+        length = _length_fit(swim.estimated_duration_minutes, swim.total_distance_meters, entry.minutes / entry.meters if entry.meters else None,
+                             change.minutes)
+        return (swim.model_copy(update={"estimated_duration_minutes": length}) if length else swim).model_dump(mode="json")
 
     def swim_new(self, day: date, change: Change) -> dict[str, Any]:
         best = training.best_pace(self.profile)
@@ -1059,10 +1097,12 @@ def chat(request: WeekChat, authorization: str | None = Header(default=None)) ->
             if change.action == "replan":
                 # Planned again by the week's own generation, from today (or all of it while it's still ahead).
                 day = max(board.today, board.week_start)
+            # `to`: the day a session moves to, or the day a copy goes on (its own day too: "twice on Tuesday").
             item = {"id": str(uuid4()), "action": change.action, "label": change.label.strip(), "ref": entry.ref if entry else None,
                     "kind": entry.kind if entry else ("gym" if board.kind == "gym" else change.new or "swim"),
                     "key": entry.key if entry else None, "date": entry.date if entry else day.isoformat(),
-                    "to": day.isoformat() if day and change.action not in ("add", "replan") and (not entry or day.isoformat() != entry.date) else None,
+                    "to": day.isoformat() if day and change.action not in ("add", "replan")
+                    and (change.action == "copy" or not entry or day.isoformat() != entry.date) else None,
                     "title": entry.title if entry else change.label.strip(), "before": entry.content if entry else None,
                     "base": entry.base if entry else None, "format": ("builder" if entry and entry.builder else "ai") if board.kind == "gym" else None,
                     "focus": change.new if board.kind == "gym" and change.action == "add" else None,
@@ -1086,6 +1126,7 @@ def chat(request: WeekChat, authorization: str | None = Header(default=None)) ->
             return
         # Not a `with` block: a change still being written when the athlete leaves is left to finish on its own.
         executor = ThreadPoolExecutor(max_workers=len(jobs))
+        failed = 0
         try:
             futures = {executor.submit(write, *job): change_id for change_id, job in jobs.items()}
             for future in as_completed(futures):
@@ -1093,10 +1134,15 @@ def chat(request: WeekChat, authorization: str | None = Header(default=None)) ->
                 try:
                     yield _line({"type": "change", "id": change_id, **future.result()})
                 except HTTPException as exc:
+                    failed += 1
                     yield _line({"type": "failed", "id": change_id, "detail": exc.detail})
                 except Exception:
+                    failed += 1
                     logger.exception("A week coach change couldn't be written")
                     yield _line({"type": "failed", "id": change_id, "detail": training.GENERATION_FAILED})
+            if failed == len(changes):
+                # Not one change came of the answer to apply, so it's free (as a request that fails is).
+                tokens.give_back(receipt)
             yield _line({"type": "done"})
             logger.info("Week coach wrote %d changes in %.1f s", len(jobs), time.monotonic() - started)
         finally:
