@@ -73,9 +73,9 @@ LABELS = {
 }
 # The token store, in cents of CURRENCY.
 PACKS = {
-    "starter": {"tokens": 50, "amount": 999},
-    "plus": {"tokens": 150, "amount": 2599},
-    "pro": {"tokens": 400, "amount": 5999},
+    "starter": {"tokens": 100, "amount": 999},
+    "plus": {"tokens": 300, "amount": 2599},
+    "pro": {"tokens": 800, "amount": 5999},
 }
 CURRENCY = "usd"
 

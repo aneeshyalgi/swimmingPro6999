@@ -549,6 +549,11 @@ function BalanceFlow({ now, add }: { now: number; add: number }) {
 // Coins rising off the chosen pack's stage: where each starts and when.
 const FLYERS = [{ x: "22%", d: "0s" }, { x: "70%", d: "0.9s" }, { x: "46%", d: "1.8s" }]
 
+/** What a pack's token costs, to a tenth of a cent when that matters: 7.5¢ shows as $0.075, never rounded to $0.07. */
+const tokenPrice = (pack: TokenPack) => new Intl.NumberFormat("en-US", {
+  style: "currency", currency: pack.currency.toUpperCase(), minimumFractionDigits: 2, maximumFractionDigits: 3,
+}).format(pack.amount / pack.tokens / 100)
+
 /** One pack, as a radio: its coins on a lit stage, how many tokens, what they're worth, the price and what it saves.
  *  A row on a phone, a card above; the chosen one lifts, with light running round it. */
 function PackCard({ name, pack, index, look, chosen, best, save, worth, disabled, onChoose }: {
@@ -605,7 +610,7 @@ function PackCard({ name, pack, index, look, chosen, best, save, worth, disabled
                 <div className="mt-3 flex items-end justify-between gap-2 sm:mt-5 sm:border-t sm:border-white/[0.07] sm:pt-4">
                   <div>
                     <p className="font-mono text-lg font-bold tabular-nums text-white sm:text-2xl">{formatPrice(pack.amount, pack.currency)}</p>
-                    <p className="text-[11px] text-slate-500">{formatPrice(Math.round(pack.amount / pack.tokens), pack.currency)} a token</p>
+                    <p className="text-[11px] text-slate-500">{tokenPrice(pack)} a token</p>
                   </div>
                   <span className={cn("inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-xs font-semibold transition-all duration-300",
                     chosen ? "text-slate-950" : "border border-white/12 text-slate-300 group-hover:border-white/25 group-hover:text-white")}
