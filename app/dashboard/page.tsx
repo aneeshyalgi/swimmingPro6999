@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react"
+import { useEffect, useRef, useState, type MouseEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import Link from "next/link"
@@ -20,7 +20,6 @@ import {
   Layers,
   LogOut,
   MessageSquare,
-  PencilRuler,
   Phone,
   Plus,
   RefreshCw,
@@ -48,7 +47,6 @@ import { GettingStarted, GuideSpotlight, type GuideEvent, type GuideTarget } fro
 import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
 import { SubscriptionDialog } from "@/components/subscription-dialog"
 import { ChangePasswordDialog } from "@/components/change-password-dialog"
-import { WorkoutBuilderSection } from "@/components/workout-builder-section"
 import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
 import { Banner } from "@/components/training-ui"
 import { Coin, TokenStore, type StoreNotice } from "@/components/token-store"
@@ -67,7 +65,6 @@ const navGroups = [
     items: [
       { value: "overview", label: "Dashboard", icon: LayoutDashboard },
       { value: "swim", label: "Training", icon: Waves },
-      { value: "builder", label: "Workout Builder", icon: PencilRuler },
     ],
   },
   {
@@ -88,13 +85,9 @@ const navGroups = [
 // The token store (lib/tokens.ts), once the backend has tokens.
 const tokenGroup = { label: "Account", items: [{ value: "tokens", label: "Token store", icon: Coins }] }
 
-/** Directions the Workout Builder's launch sparks fly out in. */
-const SPARKS = [0, 45, 90, 135, 180, 225, 270, 315]
-
 const pageTitles: Record<string, [string, string]> = {
   overview: ["Dashboard", "Your training at a glance"],
   swim: ["Training", "Your plan, schedule and competitions"],
-  builder: ["Workout Builder", "Build a strength or dryland session, exercise by exercise. It saves to your gym week as you go."],
   nutrition: ["Nutrition", "Your daily fuel plan, built around your training"],
   mental: ["Mental Performance", "Confidence, focus and calm when it counts"],
   paces: ["Pace Calculator", "Training paces for every zone, for you and your athletes"],
@@ -180,8 +173,6 @@ export default function DashboardPage() {
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [coachSwitcherOpen, setCoachSwitcherOpen] = useState(false)
   const [switchReturn, setSwitchReturn] = useState<SwitchReturn | null>(null)
-  // Counts Workout Builder clicks; each one replays its launch animation in the nav.
-  const [builderBurst, setBuilderBurst] = useState(0)
   // Summary refreshes can overlap (ticks save in the background): only the latest one is shown, so a slow older one
   // can't bring back a summary from before a later change.
   const overviewRequest = useRef(0)
@@ -464,16 +455,6 @@ export default function DashboardPage() {
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
   const [pageTitle, pageSubtitle] = pageTitles[activeTab] ?? pageTitles.overview
   const groups = tokens?.available ? [...navGroups, tokenGroup] : navGroups
-  const changeTab = (value: string) => {
-    setActiveTab(value)
-    if (value === "builder") setBuilderBurst((count) => count + 1)
-  }
-  /** Training, on the Gym week (where the builder's workouts live). */
-  const openGymWeek = () => {
-    setActiveTab("swim")
-    setGuide(null)
-    requestAnimationFrame(() => setGuide("gym-week"))
-  }
 
   const asking = terms?.required === true || termsOpen
   // Not over the Terms question while it waits for an answer.
@@ -486,7 +467,7 @@ export default function DashboardPage() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(87,229,234,0.10),transparent_50%),radial-gradient(ellipse_at_bottom_left,rgba(56,120,220,0.10),transparent_55%)]" />
       </div>
 
-      <Tabs value={activeTab} onValueChange={changeTab} activationMode="manual" className="relative w-full gap-0">
+      <Tabs value={activeTab} onValueChange={setActiveTab} activationMode="manual" className="relative w-full gap-0">
         <div className="flex min-h-screen">
           {/* Sidebar */}
           <aside
@@ -541,25 +522,9 @@ export default function DashboardPage() {
                           "data-[state=active]:border-accent/25 data-[state=active]:bg-[linear-gradient(90deg,rgba(87,229,234,0.16),rgba(87,229,234,0.04))] data-[state=active]:text-white data-[state=active]:shadow-[0_0_20px_rgba(87,229,234,0.10)]",
                           "before:absolute before:left-0 before:top-1/2 before:h-0 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent before:transition-all before:duration-300 data-[state=active]:before:h-5",
                           sidebarCollapsed && "justify-center px-0",
-                          item.value === "builder" && "hover:bg-violet-400/[0.07] active:scale-[0.97]",
                         )}
                       >
-                        {item.value === "builder" ? (
-                          <>
-                            {builderBurst > 0 && <span key={builderBurst} aria-hidden className="wb-flash" />}
-                            <span className="relative grid shrink-0 place-items-center">
-                              <item.icon key={`icon-${builderBurst}`} className={cn("h-[18px] w-[18px] text-violet-300 transition-colors group-hover:text-violet-200", builderBurst > 0 && "wb-icon")} />
-                              {builderBurst > 0 && (
-                                <span key={`burst-${builderBurst}`} aria-hidden>
-                                  <span className="wb-ring" />
-                                  <span className="wb-sparks">{SPARKS.map((angle) => <i key={angle} style={{ "--a": `${angle}deg` } as CSSProperties} />)}</span>
-                                </span>
-                              )}
-                            </span>
-                          </>
-                        ) : (
-                          <item.icon className="h-[18px] w-[18px] shrink-0 transition-colors group-data-[state=active]:text-accent" />
-                        )}
+                        <item.icon className="h-[18px] w-[18px] shrink-0 transition-colors group-data-[state=active]:text-accent" />
                         {!sidebarCollapsed && <span className="relative truncate">{item.label}</span>}
                       </TabsTrigger>
                     ))}
@@ -727,12 +692,10 @@ export default function DashboardPage() {
                       key={item.value}
                       value={item.value}
                       className={cn("relative h-auto flex-none gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-sm text-slate-300 data-[state=active]:border-accent data-[state=active]:bg-accent data-[state=active]:text-accent-foreground",
-                        item.value === "builder" && "border-violet-300/25 active:scale-[0.96]",
                         // On a phone the balance in front (TokenTab) is the token store's tab.
                         item.value === "tokens" && "max-sm:hidden")}
                     >
-                      {item.value === "builder" && builderBurst > 0 && <span key={builderBurst} aria-hidden className="wb-flash" />}
-                      <item.icon key={item.value === "builder" ? `icon-${builderBurst}` : undefined} className={cn("relative h-4 w-4", item.value === "builder" && "text-violet-300", item.value === "builder" && builderBurst > 0 && "wb-icon")} />
+                      <item.icon className="relative h-4 w-4" />
                       <span className="relative">{item.label}</span>
                     </TabsTrigger>
                   ))}
@@ -811,9 +774,6 @@ export default function DashboardPage() {
               <TabsContent value="swim" className="mt-0 space-y-6">
                 <TrainingPanel onChanged={refreshOverview} guide={guide} onGuideEvent={(type) => setGuideEvent({ type, at: Date.now() })}
                   refresh={trainingRefresh} reveal={trainingReveal} coach={coach} onOpenCoachChat={(draft) => openCoachChat(false, undefined, draft)} />
-              </TabsContent>
-              <TabsContent value="builder" className="mt-0">
-                <WorkoutBuilderSection onChanged={refreshOverview} onOpenGymWeek={openGymWeek} />
               </TabsContent>
               <TabsContent value="nutrition" className="mt-0">
                 <HealthConsentGate feature="nutrition">
