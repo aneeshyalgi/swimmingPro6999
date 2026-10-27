@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 import json
+import threading
+import time
 import re
 from types import SimpleNamespace
 import unittest
@@ -325,7 +327,8 @@ class CoachChatLiveTests(unittest.TestCase):
             "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Give me a sprint set", "mode": "conversation"})
         chat = self.openai.chat.completions.create.call_args.kwargs
         self.assertEqual(live["messages"], chat["messages"])
-        self.assertEqual({key: value for key, value in live.items() if key != "stream"}, chat)
+        # A call's reply also has time limits of its own (main.REPLY_STALL).
+        self.assertEqual({key: value for key, value in live.items() if key not in ("stream", "timeout")}, chat)
 
     def test_a_reply_that_breaks_off_ends_with_an_error(self):
         stream = _ReplyStream(["Start with a 300 loosen"], failure=RuntimeError("connection reset"))
@@ -350,14 +353,15 @@ class CoachChatLiveTests(unittest.TestCase):
             "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
         self.assertEqual(response.status_code, 502)
 
-    def test_a_calls_turns_reuse_the_athletes_records_for_a_minute(self):
+    def test_a_calls_turns_reuse_the_athletes_records_for_ten_minutes(self):
         lookups = [main.get_authenticated_profile, main.recent_athlete_feedback, main.recent_race_results, main.pacing_context, main.coach_line]
         for _ in range(3):
             self.live(_ReplyStream(["Fine."]))
         self.assertEqual([lookup.call_count for lookup in lookups], [1] * 5)
         prompts = [call.kwargs["messages"][1]["content"] for call in self.openai.chat.completions.create.call_args_list]
         self.assertEqual(len(set(prompts)), 1)
-        # Another session's call is its own, and so is this one's once the minute is up.
+        self.assertEqual(main.CALL_CONTEXT_SECONDS, 600)
+        # Another session's call is its own, and so is this one's once the ten minutes are up.
         self.openai.chat.completions.create.return_value = _ReplyStream(["Fine."])
         self.client.post("/api/coach-chat/live", headers={"Authorization": "Bearer other"}, json={
             "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
@@ -366,6 +370,59 @@ class CoachChatLiveTests(unittest.TestCase):
             main._call_context[key] = (0.0, profile, looked_up)
         self.live(_ReplyStream(["Fine."]))
         self.assertEqual(main.get_authenticated_profile.call_count, 3)
+
+    def test_a_reply_slow_to_begin_is_asked_for_again_and_the_first_to_begin_is_spoken(self):
+        released = threading.Event()
+
+        class Slow(_ReplyStream):
+            def __iter__(self):
+                released.wait(5)
+                yield from super().__iter__()
+
+        slow, quick = Slow(["Slow reply."]), _ReplyStream(["Quick ", "reply."])
+        self.openai.chat.completions.create.side_effect = [slow, quick]
+        with patch.object(main, "REPLY_AGAIN_AFTER", 0.05):
+            response = self.client.post("/api/coach-chat/live", headers=HEADERS, json={
+                "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
+        lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+        self.assertEqual([line["delta"] for line in lines[:-1]], ["Quick ", "reply."])
+        self.assertEqual(lines[-1]["content"], "Quick reply.")
+        self.assertEqual(self.openai.chat.completions.create.call_count, 2)
+        released.set()                     # the slow one begins after all: it's closed, never spoken
+        for _ in range(50):
+            if slow.closed:
+                break
+            time.sleep(0.02)
+        self.assertTrue(slow.closed)
+        self.assertTrue(quick.closed)
+
+    def test_a_reply_that_fails_to_begin_is_asked_for_again_at_once(self):
+        self.openai.chat.completions.create.side_effect = [RuntimeError("busy"), _ReplyStream(["Here you go."])]
+        with patch.object(main, "REPLY_AGAIN_AFTER", 30):
+            response = self.client.post("/api/coach-chat/live", headers=HEADERS, json={
+                "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.text.splitlines()[-1])["content"], "Here you go.")
+
+    def test_a_reply_that_never_begins_is_an_error_in_the_end(self):
+        stuck = threading.Event()
+
+        class Stuck(_ReplyStream):
+            def __iter__(self):
+                stuck.wait(5)
+                yield from super().__iter__()
+
+        self.openai.chat.completions.create.side_effect = [Stuck(["Late."]), Stuck(["Late."])]
+        with patch.object(main, "REPLY_AGAIN_AFTER", 0.05), patch.object(main, "REPLY_LIMIT", 0.3):
+            response = self.client.post("/api/coach-chat/live", headers=HEADERS, json={
+                "user_key": "key-1", "selected_coaches": ["Coach Brad"], "message": "Hi", "mode": "conversation"})
+        stuck.set()
+        self.assertEqual(response.status_code, 502)
+
+    def test_a_call_reply_has_a_time_limit_for_its_words_to_keep_coming(self):
+        self.live(_ReplyStream(["Fine."]))
+        limit = self.openai.chat.completions.create.call_args.kwargs["timeout"]
+        self.assertEqual((limit.read, limit.connect), (main.REPLY_STALL, 5.0))
 
     def test_the_typed_chat_always_looks_everything_up(self):
         self.live(_ReplyStream(["Fine."]))

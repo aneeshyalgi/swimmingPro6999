@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,10 +13,11 @@ from app.main import app
 
 
 class _Streamed:
-    """What the OpenAI client's streaming speech request gives: a context manager around a response read in chunks."""
+    """What the OpenAI client's streaming speech request gives: a context manager around a response read in chunks.
+    `hang_after`: how many chunks come before the audio stops coming (None: it never stops)."""
 
-    def __init__(self, chunks=(b"\x01\x00", b"\x02\x00\x03"), failure=None):
-        self.chunks, self.failure, self.closed = chunks, failure, False
+    def __init__(self, chunks=(b"\x01\x00", b"\x02\x00\x03"), failure=None, hang_after=None):
+        self.chunks, self.failure, self.hang_after, self.closed = chunks, failure, hang_after, False
 
     async def __aenter__(self):
         if self.failure:
@@ -27,8 +29,12 @@ class _Streamed:
         return False
 
     async def iter_bytes(self):
-        for chunk in self.chunks:
+        for index, chunk in enumerate(self.chunks):
+            if index == self.hang_after:
+                await asyncio.Event().wait()
             yield chunk
+        if self.hang_after is not None and self.hang_after >= len(self.chunks):
+            await asyncio.Event().wait()
 
 
 class CoachAudioTests(unittest.TestCase):
@@ -41,6 +47,7 @@ class CoachAudioTests(unittest.TestCase):
         )
         self.profile = {"recommended_coaches": list(COACH_VOICES)}
         self.provider = MagicMock()
+        self.provider.with_options.return_value = self.provider
         self.provider.audio.transcriptions.create = AsyncMock(return_value=SimpleNamespace(text="Give me a sprint set."))
         self.provider.audio.speech.create = AsyncMock(return_value=SimpleNamespace(content=b"mp3-audio"))
         self.streamed = _Streamed()
@@ -95,10 +102,11 @@ class CoachAudioTests(unittest.TestCase):
             with self.subTest(coach=coach):
                 response = self.speak(coach)
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.content, b"mp3-audio")
+                self.assertEqual(response.content, b"\x01\x00\x02\x00\x03")
                 self.assertEqual(response.headers["content-type"], "audio/mpeg")
                 self.assertEqual(response.headers["cache-control"], "no-store")
-                options = self.provider.audio.speech.create.call_args.kwargs
+                # The Listen button's MP3 comes from the streaming request too, so it can be hedged.
+                options = self.provider.audio.speech.with_streaming_response.create.call_args.kwargs
                 self.assertEqual(options["voice"], voice)
                 self.assertEqual(options["model"], "gpt-4o-mini-tts")
                 self.assertEqual(options["input"], "Swim four easy lengths.")
@@ -126,7 +134,7 @@ class CoachAudioTests(unittest.TestCase):
 
     def test_provider_errors_are_actionable(self):
         self.provider.audio.transcriptions.create.side_effect = OpenAIError("provider failure")
-        self.provider.audio.speech.create.side_effect = OpenAIError("provider failure")
+        self.streamed = _Streamed(failure=OpenAIError("provider failure"))
         with self.assertLogs("app.coach_audio", level="ERROR"):
             transcription = self.transcribe()
             speech = self.speak()
@@ -141,8 +149,9 @@ class CoachAudioTests(unittest.TestCase):
         self.assertEqual(self.speak().status_code, 503)
         self.openai_mock.assert_not_called()
         self.settings.openai_api_key = "test-dummy"
-        self.provider.audio.speech.create.return_value = SimpleNamespace(content=b"")
-        self.assertEqual(self.speak().status_code, 502)
+        self.streamed = _Streamed(chunks=())
+        with self.assertLogs("app.coach_audio", level="ERROR"):
+            self.assertEqual(self.speak().status_code, 502)
 
     def test_a_voice_call_sends_wav(self):
         response = self.transcribe(content=b"RIFF-wav", content_type="audio/wav")
@@ -171,8 +180,8 @@ class CoachAudioTests(unittest.TestCase):
 
     def test_speech_is_mp3_unless_pcm_is_asked_for(self):
         self.assertEqual(self.speak(format="mp3").headers["content-type"], "audio/mpeg")
+        self.assertEqual(self.provider.audio.speech.with_streaming_response.create.call_args.kwargs["response_format"], "mp3")
         self.assertEqual(self.speak(format="ogg").status_code, 422)
-        self.provider.audio.speech.with_streaming_response.create.assert_not_called()
 
     def test_a_sessions_coach_is_remembered_for_a_minute(self):
         headers = {"Authorization": "Bearer token-1"}
@@ -206,6 +215,150 @@ class CoachAudioTests(unittest.TestCase):
             for _ in range(3):
                 client.post("/api/coach-chat/speech", json={"coach": "Coach Brad", "text": "Go."})
         self.assertEqual(self.openai_mock.call_count, 1)
+
+
+class HedgedAudioTests(CoachAudioTests):
+    """OpenAI's speech and transcription now and then stall: the same request is made again, and the first answer used."""
+
+    def setUp(self):
+        super().setUp()
+        for name, value in [("SPEECH_AGAIN_AFTER", (0.05, 0.15)), ("SPEECH_LIMIT", 1.0), ("SPEECH_STALL", 0.2),
+                            ("TRANSCRIPTION_AGAIN_AFTER", (0.05, 0.15)), ("TRANSCRIPTION_LIMIT", 1.0)]:
+            patcher = patch.object(coach_audio, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def answers(self, *streams):
+        """The speech requests answer, in turn, with these streams."""
+        queue = list(streams)
+        self.provider.audio.speech.with_streaming_response.create = MagicMock(side_effect=lambda **_: queue.pop(0))
+
+    def test_a_speech_that_sends_no_audio_is_asked_for_again_and_the_quick_one_is_heard(self):
+        stuck, quick = _Streamed(chunks=(b"\x09\x09",), hang_after=0), _Streamed()
+        self.answers(stuck, quick)
+        response = self.speak(format="pcm")
+        self.assertEqual((response.status_code, response.content), (200, b"\x01\x00\x02\x00\x03"))
+        self.assertEqual(self.provider.audio.speech.with_streaming_response.create.call_count, 2)
+        self.assertTrue(quick.closed)
+
+    def test_the_listen_buttons_speech_is_asked_for_again_too(self):
+        self.answers(_Streamed(chunks=(b"\x09",), hang_after=0), _Streamed())
+        response = self.speak()
+        self.assertEqual((response.status_code, response.content), (200, b"\x01\x00\x02\x00\x03"))
+
+    def test_a_speech_failing_at_once_is_asked_for_again_at_once(self):
+        self.answers(_Streamed(failure=OpenAIError("busy")), _Streamed())
+        response = self.speak(format="pcm")
+        self.assertEqual((response.status_code, response.content), (200, b"\x01\x00\x02\x00\x03"))
+
+    def test_speech_that_never_starts_is_an_error_in_the_end(self):
+        self.answers(*[_Streamed(hang_after=0) for _ in range(3)])
+        with self.assertLogs("app.coach_audio", level="ERROR"):
+            response = self.speak(format="pcm")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(self.provider.audio.speech.with_streaming_response.create.call_count, 3)
+
+    def test_the_third_try_uses_the_model_that_doesnt_stall_in_the_coachs_voice(self):
+        self.answers(_Streamed(hang_after=0), _Streamed(hang_after=0), _Streamed())
+        response = self.speak(format="pcm")
+        self.assertEqual((response.status_code, response.content), (200, b"\x01\x00\x02\x00\x03"))
+        calls = [call.kwargs for call in self.provider.audio.speech.with_streaming_response.create.call_args_list]
+        self.assertEqual([call["model"] for call in calls], ["gpt-4o-mini-tts", "gpt-4o-mini-tts", "tts-1"])
+        self.assertEqual({call["voice"] for call in calls}, {"onyx"})
+        self.assertNotIn("instructions", calls[2])   # tts-1 takes none
+        self.assertEqual(calls[2]["response_format"], "pcm")
+
+    def test_a_voice_the_fallback_model_lacks_keeps_to_the_usual_model(self):
+        self.answers(_Streamed(hang_after=0), _Streamed(hang_after=0), _Streamed())
+        self.assertEqual(self.speak("Coach Tony", format="pcm").status_code, 200)
+        calls = [call.kwargs for call in self.provider.audio.speech.with_streaming_response.create.call_args_list]
+        self.assertEqual([(call["model"], call["voice"]) for call in calls], [("gpt-4o-mini-tts", "cedar")] * 3)
+
+    def test_speech_that_stops_partway_ends_there_and_the_call_goes_on(self):
+        stalls = _Streamed(chunks=(b"\x01\x00", b"\x02\x00", b"\x03\x00"), hang_after=2)
+        self.answers(stalls)
+        with self.assertLogs("app.coach_audio", level="WARNING"):
+            response = self.speak(format="pcm")
+        self.assertEqual((response.status_code, response.content), (200, b"\x01\x00\x02\x00"))
+        self.assertTrue(stalls.closed)
+
+    def test_a_listen_mp3_that_stops_partway_is_made_again_whole(self):
+        self.answers(_Streamed(chunks=(b"a", b"b"), hang_after=1), _Streamed(chunks=(b"whole", b"-mp3")))
+        response = self.speak()
+        self.assertEqual((response.status_code, response.content), (200, b"whole-mp3"))
+
+    def test_a_slow_transcription_is_asked_for_again_and_the_first_answer_used(self):
+        calls = []
+
+        async def transcription(**options):
+            calls.append(options)
+            if len(calls) == 1:
+                await asyncio.Event().wait()
+            return SimpleNamespace(text="Give me a kick set.")
+        self.provider.audio.transcriptions.create = AsyncMock(side_effect=transcription)
+        response = self.transcribe(content=b"RIFF-wav", content_type="audio/wav")
+        self.assertEqual((response.status_code, response.json()), (200, {"text": "Give me a kick set."}))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["file"], calls[1]["file"])
+
+
+class HedgeTests(unittest.TestCase):
+    """_hedged on its own."""
+
+    @staticmethod
+    def after(seconds, value=None, failure=None):
+        async def attempt():
+            await asyncio.sleep(seconds)
+            if failure:
+                raise failure
+            return value
+        return attempt
+
+    def run_hedged(self, attempts, again_after=(0.05, 0.1), limit=0.5, close=None):
+        made = []
+
+        def start(number):
+            made.append(number)
+            return attempts[number]()
+        return asyncio.run(coach_audio._hedged(start, again_after, limit, close)), made
+
+    def test_a_quick_answer_needs_no_second_request(self):
+        self.assertEqual(self.run_hedged([self.after(0.01, "first")]), ("first", [0]))
+
+    def test_the_first_answer_wins_whoever_was_asked_first(self):
+        self.assertEqual(self.run_hedged([self.after(0.4, "slow"), self.after(0.01, "quick")]), ("quick", [0, 1]))
+
+    def test_every_failure_is_followed_by_another_request_until_none_are_left(self):
+        with self.assertRaises(ValueError):
+            self.run_hedged([self.after(0, failure=ValueError(n)) for n in range(3)])
+
+    def test_no_answer_within_the_limit_is_a_timeout(self):
+        with self.assertRaises(TimeoutError):
+            self.run_hedged([self.after(5, "late") for _ in range(3)], limit=0.3)
+
+    def test_an_answer_that_loses_the_race_is_closed(self):
+        closed = []
+
+        async def close(value):
+            closed.append(value)
+
+        async def scenario():
+            answering = asyncio.Event()
+            made = []
+
+            async def attempt(name):
+                await answering.wait()
+                return name
+
+            def start(number):
+                made.append(number)
+                if number == 1:  # once it's asked again, both answer at the same moment
+                    asyncio.get_running_loop().call_later(0.01, answering.set)
+                return attempt("ab"[number])
+            return await coach_audio._hedged(start, (0.05,), 0.5, close)
+        result = asyncio.run(scenario())
+        self.assertIn(result, ("a", "b"))
+        self.assertEqual(closed, ["b" if result == "a" else "a"])
 
 
 if __name__ == "__main__":

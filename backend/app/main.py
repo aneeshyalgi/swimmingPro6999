@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import asynccontextmanager, nullcontext
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
@@ -263,9 +264,18 @@ _coach_lookups = ThreadPoolExecutor(max_workers=4, thread_name_prefix="coach-cha
 _chat_clients: dict[tuple[str, Any], OpenAI] = {}
 _chat_clients_lock = threading.Lock()
 # A voice call asks the coach every few seconds: its turns reuse the athlete's profile and records (check-ins, chosen
-# days, race results, pacing) for a minute, so each turn after the first goes straight to the coach.
-CALL_CONTEXT_SECONDS = 60.0
+# days, race results, pacing) for ten minutes (a long reply and the athlete's answer to it can take a few), so each turn
+# after the first goes straight to the coach.
+CALL_CONTEXT_SECONDS = 600.0
 _call_context: dict[str, tuple[float, dict[str, Any], tuple[Any, ...]]] = {}
+# A call's reply that hasn't begun REPLY_AGAIN_AFTER seconds after it was asked for is asked for again, and the first to
+# begin is the one spoken: the voice model usually begins within 1.5 s, but now and then takes 3-4 s (2 replies in 40,
+# measured on 2026-10-27). Neither beginning within REPLY_LIMIT is an error, and a reply whose words then stop coming for
+# REPLY_STALL seconds breaks off (the call says so, with Try again) rather than leave the call silent.
+REPLY_AGAIN_AFTER = 2.0
+REPLY_LIMIT = 30.0
+REPLY_STALL = 15.0
+_reply_starts = ThreadPoolExecutor(max_workers=32, thread_name_prefix="call-reply")
 
 
 def _chat_openai() -> OpenAI:
@@ -386,6 +396,59 @@ def _reply_action(request: CoachChatRequest) -> str:
     return "voice_reply" if request.mode == "conversation" else "coach_chat"
 
 
+def _reply_attempt(request: CoachChatRequest, messages: list[dict[str, str]]) -> tuple[Any, Any, list[Any]]:
+    """One request for a call's reply, read as far as its first words: (its stream, where its reading has got to, the
+    chunks read so far)."""
+    stream = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages, stream=True,
+                                                    timeout=httpx.Timeout(REPLY_LIMIT, connect=5.0, read=REPLY_STALL))
+    chunks = iter(stream)
+    opening: list[Any] = []
+    try:
+        for chunk in chunks:
+            opening.append(chunk)
+            if chunk.choices and chunk.choices[0].delta.content:
+                break
+    except BaseException:
+        stream.close()
+        raise
+    return stream, chunks, opening
+
+
+def _close_spare_reply(attempt: Future) -> None:
+    """A call's reply that began after another had (or as the call gave up on it): closed."""
+    if not attempt.cancelled() and attempt.exception() is None:
+        attempt.result()[0].close()
+
+
+def _started_reply(request: CoachChatRequest, messages: list[dict[str, str]]) -> tuple[Any, Any, list[Any]]:
+    """A call's reply from whichever of two requests begins first: its stream, reading and chunks so far (_reply_attempt).
+    The second is made when the first hasn't begun after REPLY_AGAIN_AFTER, or has failed; the other is closed once it
+    begins. Raises the last failure, or TimeoutError when neither has begun within REPLY_LIMIT."""
+    began = time.monotonic()
+    attempts = [_reply_starts.submit(_reply_attempt, request, messages)]
+    winner: Future | None = None
+    try:
+        while True:
+            winner = next((attempt for attempt in attempts if attempt.done() and attempt.exception() is None), None)
+            if winner:
+                return winner.result()
+            running = [attempt for attempt in attempts if not attempt.done()]
+            asked_again = len(attempts) > 1
+            if not asked_again and (not running or time.monotonic() - began >= REPLY_AGAIN_AFTER):
+                attempts.append(_reply_starts.submit(_reply_attempt, request, messages))
+                continue
+            if not running:
+                raise attempts[-1].exception()
+            left = began + (REPLY_LIMIT if asked_again else REPLY_AGAIN_AFTER) - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("The coach's reply didn't begin.")
+            wait(running, timeout=left, return_when=FIRST_COMPLETED)
+    finally:
+        for attempt in attempts:
+            if attempt is not winner:
+                attempt.add_done_callback(_close_spare_reply)
+
+
 @app.post("/api/coach-chat", response_model=CoachChatResponse)
 def coach_chat(request: CoachChatRequest, authorization: str | None = Header(default=None)) -> CoachChatResponse:
     if not settings.openai_api_key:
@@ -428,7 +491,7 @@ def coach_chat_live(request: CoachChatRequest, authorization: str | None = Heade
     # athlete (the call moved on: they went on talking, or hung up). Once some of it has, it's theirs.
     receipt = tokens.charge(profile, _reply_action(request))
     try:
-        stream = _chat_openai().chat.completions.create(**_reply_options(request), messages=messages, stream=True)
+        stream, chunks, opening = _started_reply(request, messages)
     except Exception as exc:
         tokens.give_back(receipt)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Coach response failed: {exc}") from exc
@@ -441,7 +504,7 @@ def coach_chat_live(request: CoachChatRequest, authorization: str | None = Heade
     def events():
         written: list[str] = []
         try:
-            for chunk in stream:
+            for chunk in itertools.chain(opening, chunks):
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 if delta:
                     written.append(delta)
