@@ -917,6 +917,60 @@
   background: linear-gradient(rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.03));
 }
 
+/* The phone's token tab (TokenTab in the dashboard), a wallet: a gold rim with light running round it and a glint passing
+   over now and then, a TOKENS label and a gold "+". Gold fills it while the store is open; it turns rose, the "+" pulsing,
+   when tokens run low. */
+.tk-tab {
+  background: conic-gradient(from var(--store-angle), rgba(252, 211, 77, 0.3) 0deg, rgba(252, 211, 77, 0.3) 205deg, #fff1b8 285deg, rgba(252, 211, 77, 0.3) 360deg);
+  box-shadow: 0 6px 20px -8px rgba(252, 211, 77, 0.6);
+  animation: store-spin 6s linear infinite;
+  transition: box-shadow 0.4s ease, transform 0.2s ease;
+}
+.tk-tab:active { transform: scale(0.96); }
+.tk-tab:focus-visible { outline: 2px solid #fde68a; outline-offset: 3px; }
+.tk-tab-inner {
+  color: #fef3c7;
+  background: radial-gradient(130% 160% at 0% 50%, rgba(252, 211, 77, 0.2), transparent 62%), linear-gradient(180deg, #17130b, #0a0c0f);
+  transition: color 0.3s ease, background 0.3s ease;
+}
+.tk-tab-inner::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 244, 214, 0.32) 50%, transparent 65%);
+  transform: translateX(-120%); animation: store-cta 4.2s ease-in-out 1.5s infinite;
+}
+.tk-tab-coin { filter: drop-shadow(0 0 6px rgba(252, 211, 77, 0.55)); }
+.tk-tab-label { color: rgba(253, 230, 138, 0.72); }
+.tk-tab-plus {
+  color: #1c1204;
+  background: linear-gradient(140deg, #fff1b8, #fcd34d 50%, #f59e0b);
+  box-shadow: 0 0 10px -2px rgba(252, 211, 77, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: color 0.3s ease, background 0.3s ease;
+}
+.tk-tab[data-active] {
+  background: linear-gradient(110deg, #fff1b8, #fcd34d 45%, #f59e0b);
+  box-shadow: 0 0 0 1px rgba(253, 230, 138, 0.45), 0 8px 26px -6px rgba(245, 158, 11, 0.85);
+  animation: none;
+}
+.tk-tab[data-active] .tk-tab-inner { color: #1c1204; background: transparent; }
+.tk-tab[data-active] .tk-tab-coin { filter: drop-shadow(0 1px 2px rgba(120, 72, 6, 0.55)); }
+.tk-tab[data-active] .tk-tab-label { color: rgba(66, 40, 4, 0.72); }
+.tk-tab[data-active] .tk-tab-plus { color: #fde68a; background: #1c1204; box-shadow: none; }
+.tk-tab[data-low]:not([data-active]) {
+  background: conic-gradient(from var(--store-angle), rgba(251, 113, 133, 0.35) 0deg, rgba(251, 113, 133, 0.35) 205deg, #fecdd3 285deg, rgba(251, 113, 133, 0.35) 360deg);
+  box-shadow: 0 6px 20px -8px rgba(251, 113, 133, 0.65);
+}
+.tk-tab[data-low]:not([data-active]) .tk-tab-inner { color: #ffe4e6; }
+.tk-tab[data-low]:not([data-active]) .tk-tab-label { color: rgba(254, 205, 211, 0.78); }
+.tk-tab[data-low]:not([data-active]) .tk-tab-plus {
+  color: #fff1f2; background: linear-gradient(140deg, #fecdd3, #fb7185);
+  animation: tk-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tk-pulse { 50% { transform: scale(1.1); box-shadow: 0 0 12px 1px rgba(251, 113, 133, 0.85); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tk-tab, .tk-tab-inner::after, .tk-tab[data-low]:not([data-active]) .tk-tab-plus { animation: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ts-aurora i, .ts-halo, .ts-arc, .ts-orbit, .ts-sats, .ts-coin-body, .ts-coin-shine::after, .ts-chip, .ts-cta::after,
   .ts-chevrons i, .ts-beam i, .ts-stagger > * { animation: none; }

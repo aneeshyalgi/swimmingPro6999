@@ -158,7 +158,7 @@ function Celebration({ text }: { text: string }) {
 }
 
 /** A SwimGPT token: a gold coin with the waves on it. */
-function Coin({ size = 32, className, style }: { size?: number; className?: string; style?: CSSProperties }) {
+export function Coin({ size = 32, className, style }: { size?: number; className?: string; style?: CSSProperties }) {
   const id = `coin${svgId(useId())}`
   return (
     <svg viewBox="0 0 64 64" width={size} height={size} className={className} style={style} aria-hidden>

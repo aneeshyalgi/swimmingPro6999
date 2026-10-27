@@ -22,6 +22,7 @@ import {
   MessageSquare,
   PencilRuler,
   Phone,
+  Plus,
   RefreshCw,
   Repeat,
   ScanLine,
@@ -50,7 +51,7 @@ import { ChangePasswordDialog } from "@/components/change-password-dialog"
 import { WorkoutBuilderSection } from "@/components/workout-builder-section"
 import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
 import { Banner } from "@/components/training-ui"
-import { TokenStore, type StoreNotice } from "@/components/token-store"
+import { Coin, TokenStore, type StoreNotice } from "@/components/token-store"
 import { TokensNeededDialog } from "@/components/tokens-needed-dialog"
 import { TermsEnding, TermsUpdate } from "@/components/legal/terms-update"
 import { loadTermsState, type TermsState } from "@/lib/consents"
@@ -113,6 +114,28 @@ function TokenCount({ balance, onOpen, className }: { balance: number; onOpen: (
       <Coins className="h-4 w-4 text-amber-200" />
       {balance.toLocaleString()}
       <span className="hidden font-medium text-slate-400 @4xl:inline">tokens</span>
+    </button>
+  )
+}
+
+/** On a phone the balance leads the section tabs and is the token store's tab, laid out like a game's wallet: a gold coin,
+ *  the balance under a TOKENS label, and a "+" to get more, in a ring of running light. Filled with gold while the store is
+ *  open; rose, its "+" pulsing, when the tokens are nearly gone (globals.css). */
+function TokenTab({ balance, active, onOpen }: { balance: number; active: boolean; onOpen: () => void }) {
+  return (
+    <button type="button" onClick={onOpen} title="Token store" aria-label={`${tokenCount(balance)} left. Open the token store`}
+      aria-current={active ? "page" : undefined} data-active={active || undefined} data-low={balance < 10 || undefined}
+      className="tk-tab relative flex-none rounded-full p-[1.5px] sm:hidden">
+      <span className="tk-tab-inner relative flex items-center gap-2 overflow-hidden rounded-full py-[3px] pl-1.5 pr-1">
+        <Coin size={22} className="tk-tab-coin relative" />
+        <span className="relative flex flex-col items-start leading-none">
+          <span className="tk-tab-label text-[9px] font-bold uppercase tracking-[0.16em]">Tokens</span>
+          <span className="mt-[2px] text-sm font-bold leading-none">{balance.toLocaleString()}</span>
+        </span>
+        <span aria-hidden className="tk-tab-plus relative grid h-[22px] w-[22px] place-items-center rounded-full">
+          <Plus className="h-3.5 w-3.5" strokeWidth={3} />
+        </span>
+      </span>
     </button>
   )
 }
@@ -698,13 +721,15 @@ export default function DashboardPage() {
               {/* Mobile section tabs */}
               <div className="border-t border-white/[0.05] lg:hidden">
                 <TabsList className="flex h-auto w-full justify-start gap-2 overflow-x-auto rounded-none bg-transparent px-4 py-2.5 [scrollbar-width:none] sm:px-6">
-                  {tokens?.available && <TokenCount balance={tokens.balance} onOpen={() => openStore.current()} className="h-auto flex-none px-3.5 py-1.5 sm:hidden" />}
+                  {tokens?.available && <TokenTab balance={tokens.balance} active={activeTab === "tokens"} onOpen={() => openStore.current()} />}
                   {groups.flatMap((group) => group.items).map((item) => (
                     <TabsTrigger
                       key={item.value}
                       value={item.value}
                       className={cn("relative h-auto flex-none gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-sm text-slate-300 data-[state=active]:border-accent data-[state=active]:bg-accent data-[state=active]:text-accent-foreground",
-                        item.value === "builder" && "border-violet-300/25 active:scale-[0.96]")}
+                        item.value === "builder" && "border-violet-300/25 active:scale-[0.96]",
+                        // On a phone the balance in front (TokenTab) is the token store's tab.
+                        item.value === "tokens" && "max-sm:hidden")}
                     >
                       {item.value === "builder" && builderBurst > 0 && <span key={builderBurst} aria-hidden className="wb-flash" />}
                       <item.icon key={item.value === "builder" ? `icon-${builderBurst}` : undefined} className={cn("relative h-4 w-4", item.value === "builder" && "text-violet-300", item.value === "builder" && builderBurst > 0 && "wb-icon")} />
