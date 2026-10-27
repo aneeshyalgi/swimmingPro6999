@@ -33,6 +33,7 @@ from app.auth import get_authenticated_profile
 from app.coach_programs import EFFORT_WORDS, INTENSITY_COLOURS, program_for
 from app.config import get_settings
 from app.context import athlete_coach
+from app.paces import with_current_pbs
 from app.swim_planner import main_strokes
 from app.today import SwimSession, SwimSet
 
@@ -649,6 +650,7 @@ def read_plan(request: PlanRead, authorization: str | None = Header(default=None
     if earlier is not None:
         return earlier
     tokens.require(profile, "coach_plan")
+    profile = with_current_pbs(profile)  # sets checked against their PBs as they stand now (races logged since onboarding too)
     coach = athlete_coach(profile)
     pieces = reply_pieces(request.reply)
     main_events = profile.get("main_events") or []

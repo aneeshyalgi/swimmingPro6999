@@ -166,7 +166,7 @@ class CoachChatPlanTests(unittest.TestCase):
         self.openai = MagicMock()
         for name, value in [("get_authenticated_profile", {**PROFILE, "user_key": "key-1"}), ("recent_athlete_feedback", []),
                             ("chat_context", ("PROGRAM", [], ["Coach Brad"])), ("recent_race_results", []), ("pacing_context", {}),
-                            ("coach_line", ""),
+                            ("coach_line", ""), ("coach_weeks", ""), ("with_current_pbs", {"current_pbs": {}}),
                             ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_voice_model="gpt-4o-mini",
                                                          openai_reasoning_effort="low"))]:
             patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
@@ -223,6 +223,27 @@ class CoachChatPlanTests(unittest.TestCase):
             self.chat(CHAT_SWIM)
         prompt = self.openai.chat.completions.create.call_args.kwargs["messages"][1]["content"]
         self.assertIn("The athlete's chosen training days: swims on Mon, Wed, Fri. When you write a week of sessions, put them on these days.", prompt)
+
+    def test_the_coach_sees_the_athletes_training_weeks_and_pbs_from_races(self):
+        self.chat(CHAT_SWIM)
+        prompt = self.openai.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        for absent in ("THE ATHLETE'S TRAINING below", "PBS SET IN RACES", "Pace them from their PBs as they stand now"):
+            self.assertNotIn(absent, prompt)                     # nothing to say: the prompt is as it was
+        weeks = "THE ATHLETE'S TRAINING IN SWIMGPT (today is Wednesday 21 October 2026): ...\n- Mon 19 Oct: swim \"Threshold\", 3,000 m, 60 min, done"
+        raced = {"current_pbs": {"pbs_lcm": {"100m Freestyle": {"time": "58.50", "date": "2026-10-03", "race": "Club champs", "profile_pb": "1:00.00"}}}}
+        with patch.object(main, "coach_weeks", return_value=weeks) as asked, patch.object(main, "with_current_pbs", return_value=raced):
+            for mode in ("chat", "conversation"):
+                self.chat(CHAT_SWIM, mode=mode)
+                prompt = self.openai.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+                self.assertIn(weeks + "\nRECENT ATHLETE CHECK-INS:", prompt)
+                self.assertIn("- THE ATHLETE'S TRAINING below is their swim and gym weeks here and what they ticked off", prompt)
+                self.assertIn("ask rather than assume", prompt)
+                self.assertIn("PBS SET IN RACES SINCE ONBOARDING (faster than the profile's PB for the event and course, so these are their PBs "
+                              "now):\n[{\"course\": \"LCM\", \"event\": \"100m Freestyle\", \"time\": \"58.50\", \"date\": \"2026-10-03\", "
+                              "\"race\": \"Club champs\", \"profile_pb\": \"1:00.00\"}]", prompt)
+                self.assertIn("- Pace them from their PBs as they stand now", prompt)
+        profile, today = asked.call_args.args
+        self.assertEqual((profile["id"], type(today)), ("row-1", date))  # the athlete's weeks around today
 
     def test_on_gpt_5_the_chat_reasons_and_a_call_answers_at_once(self):
         with patch.object(main, "settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_voice_model="gpt-5.5",
@@ -283,7 +304,8 @@ class CoachChatLiveTests(unittest.TestCase):
         self.openai = MagicMock()
         for name, value in [("get_authenticated_profile", {**PROFILE, "user_key": "key-1"}), ("recent_athlete_feedback", []),
                             ("chat_context", ("PROGRAM", [{"source_file": "Power 1", "coach_name": "Coach Brad", "similarity": 3.0}], ["Coach Brad"])),
-                            ("recent_race_results", []), ("pacing_context", {}), ("coach_line", ""),
+                            ("recent_race_results", []), ("pacing_context", {}), ("coach_line", ""), ("coach_weeks", ""),
+                            ("with_current_pbs", {"current_pbs": {}}),
                             ("settings", SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-5.5", openai_voice_model="gpt-5.5",
                                                          openai_reasoning_effort="low"))]:
             patcher = patch.object(main, name, **({"return_value": value} if name != "settings" else {"new": value}))
@@ -354,10 +376,11 @@ class CoachChatLiveTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
 
     def test_a_calls_turns_reuse_the_athletes_records_for_ten_minutes(self):
-        lookups = [main.get_authenticated_profile, main.recent_athlete_feedback, main.recent_race_results, main.pacing_context, main.coach_line]
+        lookups = [main.get_authenticated_profile, main.recent_athlete_feedback, main.recent_race_results, main.pacing_context, main.coach_line,
+                   main.coach_weeks, main.with_current_pbs]
         for _ in range(3):
             self.live(_ReplyStream(["Fine."]))
-        self.assertEqual([lookup.call_count for lookup in lookups], [1] * 5)
+        self.assertEqual([lookup.call_count for lookup in lookups], [1] * 7)
         prompts = [call.kwargs["messages"][1]["content"] for call in self.openai.chat.completions.create.call_args_list]
         self.assertEqual(len(set(prompts)), 1)
         self.assertEqual(main.CALL_CONTEXT_SECONDS, 600)
@@ -451,6 +474,7 @@ class ReadPlanTests(unittest.TestCase):
         self.outline = OUTLINE
         self.calls = []
         self.patch(coach_plan, "get_authenticated_profile", return_value=PROFILE)
+        self.patch(coach_plan, "with_current_pbs", side_effect=lambda profile: {**profile, "current_pbs": {}})
         self.patch(training, "athlete_brief", return_value={"main_events": PROFILE["main_events"]})
         self.patch(training, "best_pace", return_value=None)
         self.patch(training, "generate_structured", side_effect=self.generate)
@@ -473,6 +497,11 @@ class ReadPlanTests(unittest.TestCase):
 
     def read(self, **body):
         return self.client.post("/api/training/coach-plan/read", headers=HEADERS, json={"reply": REPLY, "request": "Plan my week", **body})
+
+    def test_sets_are_read_against_the_pbs_as_they_stand_now(self):
+        self.assertEqual(self.read().status_code, 200)
+        self.assertEqual(training.athlete_brief.call_args.args[0]["current_pbs"], {})
+        self.assertEqual(training.best_pace.call_args.args[0]["current_pbs"], {})
 
     def call(self, schema):
         """The call that wrote `schema` (the sessions are written at the same time, in no set order)."""

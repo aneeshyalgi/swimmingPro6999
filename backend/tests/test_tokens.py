@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
-from app import jobs, main, tokens, training, week_coach
+from app import jobs, main, paces, tokens, training, week_coach
 from app.main import app
 from app.schemas import CoachChatRequest
 from app.video_access import Visitor
@@ -433,7 +433,7 @@ class CoachReplyTests(TokensCase):
         self.openai.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Swim easy."))])
         for name, value in [("get_authenticated_profile", dict(PROFILE)), ("recent_athlete_feedback", []), ("coach_line", ""),
                             ("chat_context", ("PROGRAM", [], ["Coach Brad"])), ("recent_race_results", []), ("pacing_context", {}),
-                            ("_chat_openai", self.openai)]:
+                            ("coach_weeks", ""), ("with_current_pbs", {"current_pbs": {}}), ("_chat_openai", self.openai)]:
             self.patch(main, name, return_value=value)
         self.patch(main, "settings", new=SimpleNamespace(openai_api_key="test-dummy", openai_model="gpt-4o-mini", openai_voice_model="gpt-4o-mini",
                                                          openai_reasoning_effort="low"))
@@ -651,6 +651,7 @@ class WeekCoachTests(TokensCase):
         super().setUp()
         self.client = TestClient(app)
         self.patch(week_coach, "get_authenticated_profile", return_value=dict(PROFILE))
+        self.patch(week_coach, "with_current_pbs", side_effect=lambda profile: {**profile, "current_pbs": {}})
         self.patch(week_coach, "_now", return_value=datetime(2030, 1, 8, 9, tzinfo=timezone.utc))
         self.patch(week_coach, "load_board", return_value=MagicMock())
         self.patch(week_coach, "_grounding", return_value=("ATHLETE", []))
@@ -696,6 +697,7 @@ class RacePlanTests(TokensCase):
         self.client = TestClient(app)
         self.meet = {"id": str(uuid4()), "name": "Nationals", "date": "2030-03-01", "pool_length": 50, "events": ["100m Freestyle"], "races": []}
         self.patch(training, "get_authenticated_profile", return_value=dict(PROFILE))
+        self.patch(paces, "with_current_pbs", side_effect=lambda profile: {**profile, "current_pbs": {}})
         self.patch(training, "owned_competition", side_effect=lambda profile, identifier: self.meet)
         self.save = self.patch(training, "save_record")
         self.generate = self.patch(training, "generate_structured", return_value=({"races": [{
@@ -736,6 +738,7 @@ class CoachPlanCase(TokensCase):
         self.failing: set = set()
         self.calls = []
         self.patch(coach_plan, "get_authenticated_profile", return_value=dict(PROFILE))
+        self.patch(coach_plan, "with_current_pbs", side_effect=lambda profile: {**profile, "current_pbs": {}})
         self.patch(training, "athlete_brief", return_value={"main_events": PROFILE["main_events"]})
         self.patch(training, "best_pace", return_value=None)
         self.patch(training, "generate_structured", side_effect=self.generate)

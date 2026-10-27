@@ -296,7 +296,7 @@ def athlete_data(profile):
     return {key: value for key, value in profile.items() if key not in {
         "id", "auth_user_id", "user_key", "full_name", "created_at", "updated_at",
         "payment_status", "payment_plan_id", "stripe_checkout_session_id", "stripe_customer_id", "stripe_subscription_id",
-        "is_paid", "subscription_checked_at", "recommended_coaches",
+        "is_paid", "subscription_checked_at", "recommended_coaches", "current_pbs",
     }}
 
 
@@ -336,8 +336,23 @@ GYM_LEVELS = [
 ]
 
 
+def realistic_pace(per_100: float, yards: bool) -> bool:
+    """Whether a time comes to a pace per 100 (metres, or yards for SCY) a swimmer can swim: faster than 40 s per 100 m
+    (34 s per 100 yd) or slower than 4 minutes, it's a typo or a time for another distance, not a swim."""
+    return (34 if yards else 40) <= per_100 <= 240
+
+
+def pb_times(profile, field: str) -> dict[str, Any]:
+    """A profile field's times by event as they stand now (`field`: pbs_lcm, pbs_scm, pbs_scy, or one_year_goal_times,
+    which is the profile's): the profile's, with the PBs since beaten in a race the athlete logged (`current_pbs`, from
+    paces.with_current_pbs; none without it)."""
+    raced = ((profile.get("current_pbs") or {}).get(field) or {})
+    return {**(profile.get(field) or {}), **{event: pb["time"] for event, pb in raced.items()}}
+
+
 def athlete_brief(profile) -> dict[str, Any]:
-    """Coach-readable summary of onboarding, with data-quality flags the model must respect."""
+    """Coach-readable summary of onboarding, with data-quality flags the model must respect. Its PBs are the athlete's
+    current ones: a faster time from a race logged since onboarding replaces the profile's (see pb_times)."""
     facilities = profile.get("facilities") or []
     pools = [item for item in facilities if item.endswith("Pool")]
     strength_equipment = next((text for name, text in GYM_LEVELS if name in facilities),
@@ -347,8 +362,9 @@ def athlete_brief(profile) -> dict[str, Any]:
     for label, field in [("LCM PB", "pbs_lcm"), ("SCM PB", "pbs_scm"), ("SCY PB", "pbs_scy"), ("1-year goal", "one_year_goal_times")]:
         # SCY times are for yard events ("500y Freestyle"), paced per 100 yards.
         yards = field == "pbs_scy"
-        unit, fastest = ("yd", 34) if yards else ("m", 40)
-        for event, value in (profile.get(field) or {}).items():
+        unit = "yd" if yards else "m"
+        raced = ((profile.get("current_pbs") or {}).get(field) or {})
+        for event, value in pb_times(profile, field).items():
             if not isinstance(value, str) or not value.strip():
                 continue
             try:
@@ -359,7 +375,11 @@ def athlete_brief(profile) -> dict[str, Any]:
                 continue
             per_100 = seconds / distance * 100
             entry = {"time": value, "seconds": round(seconds, 2), f"pace_per_100{unit}_seconds": round(per_100, 1)}
-            if not fastest <= per_100 <= 240:
+            if event in raced:
+                entry["set_in_race"] = f"{raced[event]['race']} on {raced[event]['date']}"
+                if raced[event].get("profile_pb"):
+                    entry["onboarding_pb"] = raced[event]["profile_pb"]
+            if not realistic_pace(per_100, yards):
                 entry["usable_for_pacing"] = False
                 unusable.append(f"{label} {event} {value} (= {per_100:.0f}s per 100{unit}) is outside any realistic range")
             times.setdefault(event, {})[label] = entry
@@ -491,6 +511,52 @@ def line_shares(lines: list[Any], high: float, low: float = 0) -> dict[bool, flo
     return min(options, key=lambda item: (max(low - item[0], item[0] - high), -item[1][True], -item[1][False]))[1]
 
 
+# How far easing an athlete back in may trim a session ({main set?: lowest share kept of what it would keep}): the main
+# set, the session's hard work, gives up repetitions and rounds first, down to half; warm-up, pre-set and warm-down keep at
+# least 70%.
+EASE_FLOORS = {True: 0.5, False: 0.7}
+
+
+def eased_shares(lines: list[Any], keep: dict[bool, float], ease: float) -> dict[bool, float]:
+    """`keep` (a session fitted to the athlete's time, see line_shares) eased back to about `ease` of what it comes to, as
+    a coach eases an athlete back in after missed training (training_log.week_load): the main set alone gives it when it
+    can come close (within 5%); otherwise warm-up, pre-set and warm-down give some too, keeping as much of them as the
+    closest cut allows. Neither goes further than EASE_FLOORS. A cut lands on whole repetitions and rounds, so the closest
+    to the goal is taken, a little over or under it."""
+    if ease >= 1:
+        return keep
+
+    def kept(shares: dict[bool, float]) -> float:
+        return sum(line_target(line, shares[line.section == "Main-Set"]) for line in lines)
+
+    goal = kept(keep) * ease
+    mains = [keep[True] * share for share in _shares_down_to(EASE_FLOORS[True])]
+    others = [keep[False] * share for share in _shares_down_to(EASE_FLOORS[False])]
+    main_only = min(({True: main, False: keep[False]} for main in mains), key=lambda shares: (abs(kept(shares) - goal), -shares[True]))
+    if abs(kept(main_only) - goal) <= max(50, goal * 0.05):
+        return main_only
+    return min(({True: main, False: other} for main in mains for other in others),
+               key=lambda shares: (abs(kept(shares) - goal), -shares[False], -shares[True]))
+
+
+def session_fit(lines: list[Any], volume: int, per_minute: tuple[int, int], max_minutes: int,
+                ease: float = 1.0) -> tuple[dict[bool, float], int, int, list[str]]:
+    """How a coach session (its `lines`, `volume` metres as written) is fitted to the athlete: the share of its lines
+    their swim keeps ({main set?: share}, see line_shares), the band of metres the swim is checked against, and why it's
+    cut. The cut is decided on the lines as written, and the band is what that plan comes to (the athlete's band, or
+    the plan itself when even the deepest cut can't reach it). A week easing the athlete back in (`ease` < 1, see
+    eased_shares) trims what fits their time further, and the band with it."""
+    low, high = template_volume_band(volume, per_minute, max_minutes)
+    keep = line_shares(lines, high, low)
+    reasons = ["fit the athlete's time"] if min(keep.values()) < 0.97 else []
+    if ease < 1:
+        keep = eased_shares(lines, keep, ease)
+        low, high = int(low * ease) // 25 * 25, int(high * ease) // 25 * 25
+        reasons.append("ease them back in this week")
+    planned = int(sum(line_target(line, keep[line.section == "Main-Set"]) for line in lines))
+    return keep, min(low, planned), max(high, planned), reasons
+
+
 def part_targets(parts: list[tuple[Any, ...]], keep: dict[bool, float]) -> list[float]:
     """Metres for each part of a session written in parts, when the session keeps `keep` (see line_shares)."""
     return [sum(line_target(line, keep[line.section == "Main-Set"]) for line in part) for part in parts]
@@ -577,21 +643,28 @@ def _client(api_key: str) -> OpenAI:
 
 
 def build_grounding(profile, query: str, client: OpenAI | None = None, *,
-                    program: tuple[str, list[str]] | None = None) -> tuple[str, list[str]]:
+                    program: tuple[str, list[str]] | None = None, recent: dict[str, Any] | None = None) -> tuple[str, list[str]]:
     """Athlete data, pacing method, history and the coach's program shared by every generation call.
 
     `program`: the coach context and its sources when the caller already knows them (a week's own sessions); otherwise
-    the coach's overview and the sessions that best match `query`.
+    the coach's overview and the sessions that best match `query`. `recent`: the athlete's recent training
+    (training_log.recent_training) when the caller has it; otherwise it's read here. The athlete's PBs are their current
+    ones (paces.with_current_pbs).
     """
+    from app.paces import with_current_pbs  # it imports this module
+    from app.training_log import recent_training  # it imports this module
+    profile = with_current_pbs(profile)
     if program is None:
         context, sources, _ = chat_context([athlete_coach(profile)], query, limit=10)
         program = (context, [source["source_file"] for source in sources])
+    if recent is None:
+        recent = recent_training(profile, datetime.now(timezone.utc).date())
     text = f"""ATHLETE BRIEF (use this first): {json.dumps(athlete_brief(profile))}
 FULL ONBOARDING RECORD: {json.dumps(athlete_data(profile))}
 SHARED PACING METHODOLOGY: {json.dumps(pacing_context(profile["id"]))}
 RECENT CHECK-INS: {json.dumps(recent_athlete_feedback(profile["id"]))}
 RECENT ACTUAL RACE RESULTS: {json.dumps(recent_race_results(profile["id"]))}
-COACH PROGRAM (apply this coach's own methods, session types and sessions): {program[0]}"""
+{f"{recent['text']}{chr(10)}" if recent.get("text") else ""}COACH PROGRAM (apply this coach's own methods, session types and sessions): {program[0]}"""
     return text, sorted(set(program[1]))
 
 
@@ -1004,8 +1077,12 @@ def default_pool(profile) -> int | None:
     return None
 
 
-def library(profile):
-    records = load_records(profile["id"], ["week_plan", "daily_plan", "workout", "workout_state", "swim"])
+def library(profile, records: list[dict[str, Any]] | None = None):
+    """Every swim of the athlete's: their weeks' plan swims, older daily plans' and their own. `records`: their records
+    when they've just been read (those of other kinds are left alone); a set of them read for some days (training_log)
+    gives those days' swims."""
+    if records is None:
+        records = load_records(profile["id"], ["week_plan", "daily_plan", "workout", "workout_state", "swim"])
     states = {row["details"]["key"]: row["details"] for row in records if row["session_type"] == "workout_state"}
     completed = {row["details"].get("workout_key") for row in records
                  if row["session_type"] == "swim" and row["details"].get("completion_status") == "completed"}
@@ -1742,6 +1819,17 @@ def _spread(candidates: list[date], count: int) -> list[date]:
     return [candidates[int(index * len(candidates) / count)] for index in range(count)] if count else []
 
 
+def _share(swims: int, week_days: list[date], today: date, chosen_swims: list[int] | None) -> int:
+    """The swims a week's days from today get of its `swims` (all of them while the week is still ahead): each chosen day's
+    own, or the week's pro-rated to the days left (one at least), as a part-week of the gym week gets its share."""
+    left = [day for day in week_days if day >= today]
+    if chosen_swims is not None:
+        return sum(chosen_swims[day.weekday()] for day in left)
+    if len(left) == len(week_days):
+        return swims
+    return round(swims * len(left) / len(week_days)) or (1 if swims and left else 0)
+
+
 def _session_title(assignment: SwimAssignment) -> str:
     """A generated swim's title: the coach session it is."""
     return f"{assignment.session.type} #{assignment.session.number} ({assignment.coach.name})"
@@ -1752,15 +1840,24 @@ def _described(assignment: SwimAssignment) -> str:
     return f"{assignment.label} ({assignment.focus})" if assignment.focus else assignment.label
 
 
+# The plan of a day that was over before its week was planned.
+DAY_GONE = "This day was over before the week was planned, so nothing was planned for it."
+
+
 def build_week(profile, week_start: date) -> dict[str, Any]:
-    """Generate and save the athlete's swim week (returns the saved week unchanged when it was already generated)."""
+    """Generate and save the athlete's swim week (returns the saved week unchanged when it was already generated). A week
+    under way is planned from today, as re-planning one is: a day that's over gets nothing new and no plan."""
     existing = week_view(profile, week_start)
     if existing["generated"]:
         return existing
+    today = datetime.now(timezone.utc).date()
     end = week_start + timedelta(days=7)
-    if end <= datetime.now(timezone.utc).date():
+    if end <= today:
         raise HTTPException(status_code=409, detail="Past weeks cannot be generated retrospectively.")
     phase, swims = _week_settings(profile)
+    from app.paces import with_current_pbs  # it imports this module
+    from app.training_log import recent_training, week_load  # it imports this module
+    profile = with_current_pbs(profile)  # paced from their PBs as they stand now (races logged since onboarding too)
     fixed = []
     manual = [item for day in existing["days"] for item in day["workouts"] if item["origin"] in MANUAL_ORIGINS]
     for day in existing["days"]:
@@ -1780,16 +1877,22 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     own = {day: f"the athlete's own scheduled swim{'s' if len(titles) != 1 else ''}, which the objective covers: "
                 f"{'; '.join(titles)} (do not duplicate {'it' if len(titles) == 1 else 'them'})" for day, titles in own_swims.items()}
     week_days = [week_start + timedelta(days=index) for index in range(7)]
-    free_days = [day for day in week_days if day.isoformat() not in fixed_dates]
+    # Generated on a Thursday, a week had its swims spread from Monday, over days that were already gone.
+    gone = {day for day in week_days if day < today}
+    free_days = [day for day in week_days if day.isoformat() not in fixed_dates and day not in gone]
+    from app.training_days import chosen  # it imports this module
+    chosen_swims = (chosen(profile) or {}).get("swim")
     # Every swim already on the week stays and counts toward the athlete's swims, so only the ones still missing are
     # added: none when they've scheduled as many or more already (a coach's plan from chat can have more), as re-planning.
-    swims_to_place = max(0, swims - len(manual) - sum(len(day["swims"]) for day in fixed))
+    # A week under way gets the days left's share (see _share), less the swims already on them.
+    on_week = len(manual) + sum(len(day["swims"]) for day in fixed)
+    before = (sum(item["date"] < today.isoformat() for item in manual)
+              + sum(len(day["swims"]) for day in fixed if day["date"] < today.isoformat()))
+    swims_to_place = max(0, min(_share(swims, week_days, today, chosen_swims), swims - before) - (on_week - before))
     strength_to_place = 0  # Strength is planned in the Workout Library around this swim week.
 
     # Deterministic weekly layout: sessions are spread evenly; doubles only when there are more swims than days. On the
     # athlete's own days (chosen on the dashboard) instead, when they have them: as many as each day was given.
-    from app.training_days import chosen  # it imports this module
-    chosen_swims = (chosen(profile) or {}).get("swim")
     swim_plan = {day: 0 for day in free_days}
     remaining = swims_to_place
     for level in (1, 2):
@@ -1821,12 +1924,18 @@ def build_week(profile, week_start: date) -> dict[str, Any]:
     tapering = taper_meet(competitions(profile), week_start)
     assignments = dict(zip(swim_slots, assign_week(athlete_coach(profile), week_start, len(swim_slots), tapering is not None,
                                                    profile.get("main_events") or [])))
+    # How the athlete's swims have gone lately: a week after many missed swims eases them back in (training_log).
+    recent = recent_training(profile, today)
+    ease, load = week_load(recent, week_start, today, tapering is not None)
 
     layout = []
     for day in week_days:
         label = f"{day.isoformat()} ({day:%A}): "
         if day.isoformat() in fixed_dates:
             layout.append(label + "already planned; keep the preserved plan for this date unchanged.")
+            continue
+        if day in gone:
+            layout.append(label + "already over when the week is planned: nothing goes on it.")
             continue
         sessions_today = [_described(assignments[(day, index)]) for index in range(swim_plan.get(day, 0)) if (day, index) in assignments]
         parts = [f"exactly {swim_plan[day]} generated swim{'s' if swim_plan[day] != 1 else ''} ({'; '.join(sessions_today)})" if swim_plan[day] else "no generated swim"]
@@ -1846,16 +1955,22 @@ Day-by-day layout (already matches the athlete's weekly availability):
 User-entered competitions: {json.dumps([{"date": day["date"], "competitions": day["competitions"]} for day in existing["days"] if day["competitions"]])}.
 The athlete's own scheduled swims (never duplicate): {json.dumps([{"date": item["date"], "title": item["workout"]["title"]} for item in manual])}.
 Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
-{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
-    days_to_plan = [day for day in week_days if day.isoformat() not in fixed_dates]
+{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}
+{load}"""
+    days_to_plan = [day for day in week_days if day.isoformat() not in fixed_dates and day not in gone]
     week_jobs.charge("swim_week")  # the athlete's tokens, now the coach writes it (app/tokens.py)
-    note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments, days_to_plan)
+    note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments,
+                                           days_to_plan, recent, ease)
 
     fixed_by_date = {day["date"]: day for day in fixed}
     days = []
     for day in week_days:
         if day.isoformat() in fixed_dates:
             days.append(WeekDay.model_validate(fixed_by_date[day.isoformat()]))
+            continue
+        if day in gone:
+            days.append(WeekDay(date=day, objective=DAY_GONE, swims=[], strength=None, mobility=[], recovery=["Nothing planned for this day."],
+                                rest=False))
             continue
         swims = [written[(day, index)] for index in range(swim_plan.get(day, 0))]
         plan_day = day_plans[day]
@@ -1865,16 +1980,26 @@ Every generated swim is one of the coach's own sessions, already chosen from the
     sources = [assignment.label for assignment in assignments.values()]
     with week_jobs.committing():
         save_record(profile["id"], f"week:{week_start}", "week_plan", "Training week", week_start,
-                    {"plan": plan.model_dump(mode="json"), "pool_length": default_pool(profile), "source_files": sources}, True)
+                    {"plan": plan.model_dump(mode="json"), "pool_length": default_pool(profile), "source_files": sources,
+                     **_eased(recent, ease)}, True)
     return week_view(profile, week_start)
+
+
+def _eased(recent: dict[str, Any], ease: float) -> dict[str, Any]:
+    """What a swim week's record keeps of easing the athlete back in, when it did: the share of each session its swims
+    kept and the recent swims that decided it."""
+    return {"eased": {"kept": ease, "swims_planned": recent["planned"], "swims_ticked": recent["done"]}} if ease < 1 else {}
 
 
 def _write_week(profile, week_start: date, phase: str | None, layout: list[str], week_context: str, swim_plan: dict[date, int],
                 swim_slots: list[tuple[date, int]], assignments: dict[tuple[date, int], SwimAssignment],
-                days_to_plan: list[date]) -> tuple[WeekNote, dict[date, DayPlan], dict[tuple[date, int], SwimSession]]:
+                days_to_plan: list[date], recent: dict[str, Any] | None = None,
+                ease: float = 1.0) -> tuple[WeekNote, dict[date, DayPlan], dict[tuple[date, int], SwimSession]]:
     """Write a week: its note, the plan of each day in `days_to_plan` and each swim in `swim_slots` ((day, n): a day's
     n-th new swim, of the `swim_plan[day]` it gets), as the coach session `assignments` gives its slot. `layout` has a
-    line for each day of the week and `week_context` goes with every call. Generating a week and re-planning one share it."""
+    line for each day of the week and `week_context` goes with every call. Generating a week and re-planning one share it.
+    `recent`: the athlete's recent training (training_log.recent_training); `ease`: the share of each coach session the
+    swims keep when the week eases the athlete back in (training_log.week_load; eased_shares)."""
     pool = default_pool(profile) or 25
     max_minutes = int(profile.get("session_duration") or 180)
     main_events = profile.get("main_events") or []
@@ -1889,7 +2014,9 @@ def _write_week(profile, week_start: date, phase: str | None, layout: list[str],
     week_sessions = list({item.label: item for item in assignments.values()}.values())
     grounding = build_grounding(profile, f"{phase} weekly swim training plan for {', '.join(main_events)}", program=(
         f"=== {program.name} PROGRAM ===\n{render_overview(program)}",
-        [item.label for item in week_sessions]) if program and week_sessions else None)
+        [item.label for item in week_sessions]) if program and week_sessions else None, recent=recent)
+    eased = ("- This week eases the athlete back in after missed swims: cut each line as listed (mostly the main set's repetitions "
+             "and rounds), keeping what it trains and its efforts.\n") if ease < 1 else ""
 
     def event_rule(assignment: SwimAssignment) -> str:
         """The swim's `event`: the one a race-pace session trains, otherwise the athlete's event the session targets."""
@@ -1920,12 +2047,7 @@ Plan {layout[week_days.index(day)]}
     def swim_session(day: date, index: int) -> SwimSession:
         assignment = assignments[(day, index)]
         all_lines = session_lines(assignment.session)
-        low, high = template_volume_band(assignment.volume, per_minute, max_minutes)
-        # The cut is decided here, on the lines as written; the swim is then checked against what that plan comes to
-        # (the band, or the plan itself when even the deepest cut can't reach it).
-        keep = line_shares(all_lines, high, low)
-        planned = int(sum(line_target(line, keep[line.section == "Main-Set"]) for line in all_lines))
-        low, high = min(low, planned), max(high, planned)
+        keep, low, high, reasons = session_fit(all_lines, assignment.volume, per_minute, max_minutes, ease)
         # A set for each of the coach's sections that swims (some sessions warm up on dry land).
         min_sets = min(2, len({line.section for line in all_lines if line.meters > 0})) or 1
         others = [assignments[(day, other)].label for other in range(swim_plan[day]) if other != index]
@@ -1947,7 +2069,7 @@ Write swim {index + 1} for {day:%A} {day} by adapting this exact session from th
 
 {assignment.render()}
 
-Its lines and what to do with each: keep it exactly as written (every round and repetition){"; cut it to about the metres given to fit the athlete's time" if cut else ""}:
+Its lines and what to do with each: keep it exactly as written (every round and repetition){f"; cut it to about the metres given to {' and '.join(reasons)}" if cut else ""}:
 {listed_lines(all_lines, keep)}
 
 How to adapt it (keep the coach's session; never replace it with a different workout):
@@ -1955,7 +2077,7 @@ How to adapt it (keep the coach's session; never replace it with a different wor
 {adaptation_rules(strokes, pool, assignment.stroke)}
 - Fit the athlete: estimated_duration_minutes at most {max_minutes} and total distance {low}-{high} m. If the session is longer,
   shorten warm-up, pre-set and warm-down first, then reduce main-set rounds or repetitions; never change what the main set trains.
-- A Gym section belongs to the Gym week: leave it out of the sets and mention it in `notes`. Put the coach's rules that apply in `notes`
+{eased}- A Gym section belongs to the Gym week: leave it out of the sets and mention it in `notes`. Put the coach's rules that apply in `notes`
   (e.g. Pete's failure rule, Timothy's full-rest rule).
 - Title: "{title}". Set `event` to {event_rule(assignment)}.""",
             check=check_swim, attempts=3, grounding=grounding, max_tokens=5000, job=job)
@@ -1989,7 +2111,7 @@ lines, in order, and nothing else. {fit}
 {lines}
 
 {adapt}
-- estimated_minutes: how long your lines take, send-offs and rest included; at most {budgets[number - 1]}."""
+{eased}- estimated_minutes: how long your lines take, send-offs and rest included; at most {budgets[number - 1]}."""
 
         def check_part(part, target: float):
             coach_text = " ".join(line.text for line in part)
@@ -2138,6 +2260,9 @@ def replan_week(profile, week_start: date) -> dict[str, Any]:
     if state is None:
         return build_week(profile, week_start)  # nothing planned yet, so planning it again is planning it
     phase, swims = _week_settings(profile)
+    from app.paces import with_current_pbs  # it imports this module
+    from app.training_log import recent_training, week_load  # it imports this module
+    profile = with_current_pbs(profile)  # paced from their PBs as they stand now (races logged since onboarding too)
     row, days = state["row"], state["days"]
     week_days = [week_start + timedelta(days=index) for index in range(7)]
     planned = {day: info for day, info in zip(week_days, days) if not info["locked"]}
@@ -2154,7 +2279,10 @@ def replan_week(profile, week_start: date) -> dict[str, Any]:
     from app.training_days import chosen  # it imports this module
     chosen_swims = (chosen(profile) or {}).get("swim")
     swim_plan = {day: 0 for day in planned}
-    remaining = max(0, swims - staying)
+    # The days left get no more than their share (see _share): a week first planned once its first days were over had the
+    # swims those days never had squeezed into the days left.
+    before = sum(info["swims"] for day, info in zip(week_days, days) if info["locked"] and day < today)
+    remaining = max(0, min(_share(swims, week_days, today, chosen_swims), swims - before) - (staying - before))
     for level in (1, 2):
         candidates = [day for day in planned if swim_plan[day] + on_day[day] < level and swim_plan[day] < room[day]
                       and (chosen_swims is None or chosen_swims[day.weekday()] >= level)]
@@ -2183,6 +2311,9 @@ def replan_week(profile, week_start: date) -> dict[str, Any]:
         else:
             left.remove(match)
     assignments = dict(zip(swim_slots, [order[index] for index in left[unmatched:]]))
+    # How the athlete's swims have gone lately: a week after many missed swims eases them back in (training_log).
+    recent = recent_training(profile, today)
+    ease, load = week_load(recent, week_start, today, tapering is not None)
 
     layout = []
     for day, info in zip(week_days, days):
@@ -2208,9 +2339,11 @@ Day-by-day layout (already matches the athlete's weekly availability):
 User-entered competitions: {json.dumps([{"date": view["date"], "competitions": view["competitions"]} for view in state["week"]["days"] if view["competitions"]])}.
 Swims already planned on these days that stay (never duplicate): {json.dumps([item for info in planned.values() for item in info["kept"]])}.
 Every generated swim is one of the coach's own sessions, already chosen from their weekly order (named in the layout).
-{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}"""
+{f"Taper week: {tapering.get('name') or 'an A/B meet'} on {tapering['date']}; the coach's taper sessions are used where they wrote them." if tapering else ""}
+{load}"""
     week_jobs.charge("swim_replan")  # the athlete's tokens, now the coach writes it (app/tokens.py)
-    note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments, list(planned))
+    note, day_plans, written = _write_week(profile, week_start, phase, layout, week_context, swim_plan, swim_slots, assignments,
+                                           list(planned), recent, ease)
 
     details = row["details"]
     removed = set(details.get("removed", []))
@@ -2245,9 +2378,10 @@ Every generated swim is one of the coach's own sessions, already chosen from the
         })
     plan = {**details["plan"], "phase": phase or note.phase, "days": plan_days, "coaching_note": note.coaching_note}
     WeekPlan.model_validate(plan)  # the rules every week keeps: at most two swims a day, daily volume, rest days
-    replanned = {**details, "plan": plan, "pool_length": default_pool(profile) or details.get("pool_length"),
+    replanned = {**{key: value for key, value in details.items() if key != "eased"}, "plan": plan,
+                 "pool_length": default_pool(profile) or details.get("pool_length"),
                  "source_files": list(dict.fromkeys([*details.get("source_files", []), *(item.label for item in assignments.values())])),
-                 "replanned_at": datetime.now(timezone.utc).isoformat()}
+                 "replanned_at": datetime.now(timezone.utc).isoformat(), **_eased(recent, ease)}
     if removed or "removed" in details:
         replanned["removed"] = sorted(removed)
     with week_jobs.committing():
@@ -2324,7 +2458,9 @@ def generate_race_plan(identifier: UUID, authorization: str | None = Header(defa
     meet = owned_competition(profile, str(identifier))
     if meet["races"]:
         return meet
-    course_pbs = profile.get("pbs_lcm" if meet["pool_length"] == 50 else "pbs_scm") or {}
+    from app.paces import with_current_pbs  # it imports this module
+    profile = with_current_pbs(profile)  # their PBs as they stand now (races logged since onboarding too)
+    course_pbs = pb_times(profile, "pbs_lcm" if meet["pool_length"] == 50 else "pbs_scm")
     targets = {
         event: ((profile.get("one_year_goal_times") or {}).get(event) if meet["pool_length"] == 50 else None) or course_pbs.get(event)
         for event in meet["events"]

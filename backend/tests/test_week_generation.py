@@ -304,6 +304,84 @@ class PartTargetTests(unittest.TestCase):
         self.assertIn("keep: 4 x 200 m = 800 m", training.listed_lines([line], {True: 1.0, False: 1.0}))
 
 
+class EasedSessionTests(unittest.TestCase):
+    """A week easing the athlete back in after missed swims trims each coach session as a coach would: the main set first."""
+
+    @staticmethod
+    def lines(*sections):
+        from app.coach_programs import SessionLine
+        return [SessionLine(name, "x", None, float(meters)) for name, meters in sections]
+
+    @staticmethod
+    def kept(lines, keep):
+        return sum(training.line_target(line, keep[line.section == "Main-Set"]) for line in lines)
+
+    def test_a_week_that_doesnt_ease_keeps_every_session_as_it_was(self):
+        lines = self.lines(("Warm-Up", 800), ("Main-Set", 2000), ("Warm-Down", 400))
+        keep = {True: 1.0, False: 1.0}
+        self.assertIs(training.eased_shares(lines, keep, 1.0), keep)
+
+    def test_the_main_set_gives_up_its_repetitions_first(self):
+        lines = self.lines(("Warm-Up", 800), ("Main-Set", 2000), ("Warm-Down", 400))
+        keep = training.eased_shares(lines, {True: 1.0, False: 1.0}, 0.75)
+        self.assertEqual(keep[False], 1.0)                                  # warm-up and warm-down as written
+        self.assertLessEqual(self.kept(lines, keep), 3200 * 0.75 + 25)
+        self.assertGreaterEqual(self.kept(lines, keep), 3200 * 0.75 - 200)
+
+    def test_the_rest_gives_some_only_when_the_main_set_alone_cant_come_close(self):
+        lines = self.lines(("Warm-Up", 1600), ("Main-Set", 400), ("Warm-Down", 800))
+        keep = training.eased_shares(lines, {True: 1.0, False: 1.0}, 0.75)
+        self.assertEqual(training.line_target(lines[1], keep[True]), 200)   # the main set down to half...
+        self.assertTrue(0.7 <= keep[False] < 1.0)                           # ...and the rest trimmed, no further than 70%
+        self.assertEqual(self.kept(lines, keep), 2100)
+        # Several cuts come to 2,100 m: the one keeping the most warm-up and warm-down is taken.
+        self.assertEqual(keep[False], 0.8)
+
+    def test_the_closest_cut_is_taken_rather_than_one_far_below_the_goal(self):
+        # 3 rounds of 600 m can only drop whole rounds: 2 rounds alone is far below 85%, so the rest gives a little instead.
+        from app.coach_programs import SessionLine
+        lines = [SessionLine("Warm-Up", "x", None, 600.0), SessionLine("Main-Set", "600 @8:00", "3 rounds:", 1800.0, repeats=3),
+                 SessionLine("Warm-Down", "x", None, 400.0)]
+        keep = training.eased_shares(lines, {True: 1.0, False: 1.0}, 0.85)
+        self.assertAlmostEqual(self.kept(lines, keep) / 2800, 0.85, delta=0.05)
+
+    def test_every_coach_session_eases_within_its_floors_and_never_grows(self):
+        for program in PROGRAMS.values():
+            for session in [*program.sessions, *program.taper]:
+                if session.type in program.non_swim_types:
+                    continue
+                lines = session_lines(session)
+                volume = int(sum(line.meters for line in lines))
+                for minutes, rate in ((60, (30, 42)), (90, (36, 50)), (150, (45, 60))):
+                    fitted, low, high, reasons = training.session_fit(lines, volume, rate, minutes)
+                    full = self.kept(lines, fitted)
+                    for ease in (0.85, 0.75):
+                        eased, eased_low, eased_high, eased_reasons = training.session_fit(lines, volume, rate, minutes, ease)
+                        label = (program.key, session.type, session.number, minutes, ease)
+                        self.assertGreaterEqual(eased[True], fitted[True] * training.EASE_FLOORS[True] - 1e-9, label)
+                        self.assertGreaterEqual(eased[False], fitted[False] * training.EASE_FLOORS[False] - 1e-9, label)
+                        self.assertLessEqual(eased[True], fitted[True], label)
+                        self.assertLessEqual(eased[False], fitted[False], label)
+                        total = self.kept(lines, eased)
+                        self.assertLessEqual(total, full, label)
+                        self.assertTrue(eased_low <= total <= eased_high, label)   # the swim is checked against the eased plan
+                        self.assertEqual(eased_reasons[-1], "ease them back in this week")
+
+    def test_a_week_that_doesnt_ease_fits_each_session_exactly_as_before(self):
+        for program in PROGRAMS.values():
+            for session in program.sessions:
+                if session.type in program.non_swim_types:
+                    continue
+                lines = session_lines(session)
+                volume = int(sum(line.meters for line in lines))
+                for minutes, rate in ((45, (30, 42)), (60, (36, 50)), (120, (45, 60))):
+                    low, high = training.template_volume_band(volume, rate, minutes)
+                    keep = training.line_shares(lines, high, low)
+                    planned = int(self.kept(lines, keep))
+                    self.assertEqual(training.session_fit(lines, volume, rate, minutes),
+                                     (keep, min(low, planned), max(high, planned), ["fit the athlete's time"] if min(keep.values()) < 0.97 else []))
+
+
 class PaceCheckTests(unittest.TestCase):
     def set(self, distance, target, zone="Sprint"):
         return SwimSet(name="Main-Set: dive", rounds=1, repetitions=1, distance_meters=distance, stroke="Free", interval="As needed",

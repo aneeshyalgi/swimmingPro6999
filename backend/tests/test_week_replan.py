@@ -15,6 +15,8 @@ DAYS = [MONDAY + timedelta(days=index) for index in range(7)]
 MON, TUE, WED, THU, FRI, SAT, SUN = DAYS
 WEEK_ID = "week-row"
 PROFILE = {"id": "row-1", "facilities": ["50m Pool"], "recommended_coaches": ["Coach Robert"]}
+# An athlete who ticks their swims off and ticked off 2 of the last 10 (training_log.recent_training).
+MISSED = {"planned": 10, "done": 2, "ticks": True, "ease": 0.75, "text": "RECENT TRAINING: 2 of 10 swims ticked off."}
 
 
 class Frozen(datetime):
@@ -53,8 +55,13 @@ class Athlete:
         self.mobility_done: set[str] = set()
         self.meets: dict[str, str] = {}
         self.chosen: list[int] | None = None   # the swims a day the athlete chose on the dashboard, if they did
+        # How their swims went lately (training_log.recent_training): nothing to go on by default.
+        self.recent = {"planned": 0, "done": 0, "ticks": False, "ease": 1.0, "text": ""}
+        self.extra: dict = {}  # more of the week's record (an earlier easing)
         self.saved = None
         self.layout = None
+        self.context = None
+        self.ease = None
 
     def plan_swim(self, day, title):
         entry = self.days[day.isoformat()]
@@ -65,7 +72,7 @@ class Athlete:
     # ---- the records, as the training module reads them
     def row(self):
         details = {"plan": {"phase": "Build", "days": list(self.days.values()), "coaching_note": "Old note"}, "pool_length": 50,
-                   "source_files": ["Old session"], "removed": sorted(self.removed)}
+                   "source_files": ["Old session"], "removed": sorted(self.removed), **self.extra}
         return {"id": WEEK_ID, "details": details}
 
     def view(self, profile, week_start):
@@ -86,9 +93,10 @@ class Athlete:
         return ([{"session_type": "swim", "details": {"workout_key": item}} for item in self.ticked]
                 + [{"session_type": "workout_state", "details": {"key": item, **state}} for item, state in self.states.items()])
 
-    def write(self, profile, week_start, phase, layout, context, swim_plan, swim_slots, assignments, days_to_plan):
+    def write(self, profile, week_start, phase, layout, context, swim_plan, swim_slots, assignments, days_to_plan, recent=None, ease=1.0):
         """Stands in for the coach: every new swim is its coach session's title."""
         self.layout, self.swim_plan, self.assignments, self.days_to_plan = layout, swim_plan, assignments, days_to_plan
+        self.context, self.ease, self.written_for = context, ease, (profile, recent)
         note = training.WeekNote(phase="Build", coaching_note="New note")
         plans = {day: training.DayPlan(objective=f"New plan {day:%a}", mobility=mobility(f"New mobility {day:%a}"), recovery=["Rest"])
                  for day in days_to_plan}
@@ -112,10 +120,16 @@ class Athlete:
                                 "_write_week": write, "get_supabase_client": lambda: client, "datetime": Frozen}.items():
                 stack.enter_context(patch.object(training, name, value))
             stack.enter_context(patch("app.training_days.chosen", lambda profile: self.chosen and {"swim": self.chosen, "gym": None, "mobility": True}))
+            self.lookups(stack)
             training.replan_week(PROFILE, MONDAY)
         update = client.table.return_value.update
         self.saved = update.call_args.args[0]["details"] if update.called else None
         return self.saved
+
+    def lookups(self, stack):
+        """The athlete's PBs from races (none) and how their swims went lately (self.recent), as planning a week reads them."""
+        stack.enter_context(patch("app.paces.with_current_pbs", lambda profile: {**profile, "current_pbs": {}}))
+        stack.enter_context(patch("app.training_log.recent_training", lambda profile, today: self.recent))
 
     def saved_day(self, day):
         return next(item for item in self.saved["plan"]["days"] if item["date"] == day.isoformat())
@@ -127,6 +141,24 @@ class ReplanWeekTests(unittest.TestCase):
         self.sessions = {}
         for day in DAYS[:6]:
             self.sessions[day] = self.athlete.plan_swim(day, f"Old swim {day:%a}")
+
+    def test_after_many_missed_swims_the_days_left_ease_the_athlete_back_in(self):
+        athlete = self.athlete
+        athlete.recent = MISSED
+        saved = athlete.replan()
+        self.assertEqual(athlete.ease, 0.75)
+        self.assertIn("EASING BACK IN: the athlete ticked off only 2 of the 10 swims", athlete.context)
+        self.assertEqual(saved["eased"], {"kept": 0.75, "swims_planned": 10, "swims_ticked": 2})
+        self.assertIs(athlete.written_for[1], MISSED)                 # the coach is given what decided it
+        self.assertEqual(athlete.written_for[0]["current_pbs"], {})    # and paces from the PBs as they stand now
+
+    def test_a_re_plan_that_doesnt_ease_leaves_no_trace_of_an_earlier_easing(self):
+        athlete = self.athlete
+        athlete.extra = {"eased": {"kept": 0.75, "swims_planned": 10, "swims_ticked": 2}}
+        saved = athlete.replan()
+        self.assertEqual(athlete.ease, 1.0)
+        self.assertNotIn("eased", saved)
+        self.assertNotIn("EASING", athlete.context)
 
     def test_the_days_before_today_stay_exactly_as_they_were(self):
         athlete = self.athlete
@@ -283,6 +315,117 @@ class ReplanWeekTests(unittest.TestCase):
             with patch.object(training, "_replan_state", return_value=None), patch.object(training, "build_week", return_value={"built": True}) as build:
                 self.assertEqual(training.replan_week(PROFILE, MONDAY + timedelta(days=7)), {"built": True})
             build.assert_called_once_with(PROFILE, MONDAY + timedelta(days=7))
+
+    def test_a_week_first_planned_once_its_first_days_were_over_isnt_squeezed_into_the_days_left(self):
+        athlete = Athlete()                    # 6 a week, first planned on Wednesday: Monday and Tuesday have none
+        for day in DAYS[2:6]:
+            athlete.plan_swim(day, f"Old swim {day:%a}")
+        athlete.replan()
+        swims = [len(athlete.saved_day(day)["swims"]) for day in DAYS]
+        # The days left's share of six, without a second swim on a day to make up for the days that were over.
+        self.assertEqual(sum(swims[2:]), 4)
+        self.assertEqual(max(swims), 1)
+
+
+class WeekGenerationCase(unittest.TestCase):
+    """Generating a swim week (TODAY is a Wednesday)."""
+
+    def generate(self, swims=6, chosen=None, own=None, week_start=MONDAY, recent=None, meets=()):
+        """The week as build_week plans it from an empty one: each day's swims and plan, and the coach's layout."""
+        athlete = Athlete(swims)
+        athlete.recent = recent or athlete.recent
+        days = [week_start + timedelta(days=index) for index in range(7)]
+        own = own or {}
+        view = {"generated": False, "days": [
+            {"date": day.isoformat(), "day_name": f"{day:%A}", "objective": "", "recovery": [], "strength": None, "mobility": [], "competitions": [],
+             "workouts": [{"origin": "My workout", "date": day.isoformat(), "workout": swim(title)} for title in own.get(day, [])]} for day in days]}
+        saved = {}
+        with ExitStack() as stack:
+            for name, value in {"week_view": lambda profile, start: view, "_week_settings": lambda profile: ("Build", swims),
+                                "competitions": lambda profile: list(meets), "_write_week": athlete.write, "datetime": Frozen,
+                                "save_record": lambda *args: saved.update(details=args[5])}.items():
+                stack.enter_context(patch.object(training, name, value))
+            stack.enter_context(patch("app.training_days.chosen", lambda profile: chosen and {"swim": chosen, "gym": None, "mobility": True}))
+            athlete.lookups(stack)
+            training.build_week(PROFILE, week_start)
+        self.saved = saved["details"]
+        plan = {day["date"]: day for day in saved["details"]["plan"]["days"]}
+        return athlete, [plan[day.isoformat()] for day in days]
+
+
+class GenerateWeekUnderWayTests(WeekGenerationCase):
+    """Generating a swim week once some of its days are over."""
+
+    def test_the_days_over_get_nothing_and_the_days_left_their_share(self):
+        athlete, days = self.generate()
+        # Six a week, five days left: four swims, from Wednesday on, one a day.
+        self.assertEqual([len(day["swims"]) for day in days[:2]], [0, 0])
+        self.assertEqual(sum(len(day["swims"]) for day in days[2:]), 4)
+        self.assertEqual(max(len(day["swims"]) for day in days), 1)
+        self.assertEqual(athlete.days_to_plan, DAYS[2:])               # no plan written for a day that's over
+        for day in days[:2]:
+            self.assertEqual((day["objective"], day["mobility"], day["rest"]), (training.DAY_GONE, [], False))
+        self.assertTrue(all("already over when the week is planned" in line for line in athlete.layout[:2]))
+
+    def test_on_chosen_days_each_day_left_gets_its_own(self):
+        _, days = self.generate(chosen=[1, 1, 2, 0, 1, 0, 1])
+        self.assertEqual([len(day["swims"]) for day in days], [0, 0, 2, 0, 1, 0, 1])
+
+    def test_the_athletes_own_swims_count_toward_the_week(self):
+        # Two of their own on Monday and two on Tuesday: the week has two left of its six, not the days left's four.
+        _, days = self.generate(own={MON: ["Own 1", "Own 2"], TUE: ["Own 3", "Own 4"]})
+        self.assertEqual(sum(len(day["swims"]) for day in days), 2)
+
+    def test_a_week_still_ahead_is_planned_whole(self):
+        athlete, days = self.generate(week_start=MONDAY + timedelta(days=7))
+        self.assertEqual(sum(len(day["swims"]) for day in days), 6)
+        self.assertEqual(len(athlete.days_to_plan), 7)
+
+
+class EasingBackInTests(WeekGenerationCase):
+    """A swim week planned after many missed swims eases the athlete back in (training_log.week_load), and says why."""
+
+    def test_after_many_missed_swims_the_week_eases_them_back_in(self):
+        athlete, days = self.generate(recent=MISSED)
+        self.assertEqual(athlete.ease, 0.75)
+        self.assertIn("EASING BACK IN: the athlete ticked off only 2 of the 10 swims", athlete.context)
+        self.assertIn("about 75% of what it would be", athlete.context)
+        self.assertEqual(self.saved["eased"], {"kept": 0.75, "swims_planned": 10, "swims_ticked": 2})
+        self.assertIs(athlete.written_for[1], MISSED)
+        self.assertEqual(sum(len(day["swims"]) for day in days[2:]), 4)    # as many swims as ever: only shorter ones
+
+    def test_only_this_week_and_next_ease(self):
+        for weeks, ease in ((0, 0.75), (1, 0.75), (2, 1.0), (5, 1.0)):
+            athlete, _ = self.generate(recent=MISSED, week_start=MONDAY + timedelta(weeks=weeks))
+            self.assertEqual(athlete.ease, ease, weeks)
+        self.assertNotIn("eased", self.saved)
+        self.assertNotIn("EASING", athlete.context)
+
+    def test_a_taper_week_keeps_the_coachs_sessions(self):
+        meet = {"name": "Nationals", "date": (MONDAY + timedelta(days=12)).isoformat(), "priority": "A"}
+        athlete, _ = self.generate(recent=MISSED, meets=[meet])
+        self.assertEqual(athlete.ease, 1.0)
+        self.assertIn("Taper week: Nationals", athlete.context)
+        self.assertNotIn("EASING", athlete.context)
+
+    def test_a_consistent_athlete_has_full_sessions_and_the_coach_knows_it(self):
+        athlete, _ = self.generate(recent={"planned": 10, "done": 9, "ticks": True, "ease": 1.0, "text": "RECENT TRAINING: 9 of 10."})
+        self.assertEqual(athlete.ease, 1.0)
+        self.assertIn("ticked off 9 of the 10 swims planned over the last 14 days: they're swimming consistently", athlete.context)
+        self.assertNotIn("eased", self.saved)
+
+    def test_an_athlete_who_doesnt_tick_their_swims_off_is_planned_as_always(self):
+        for recent in ({"planned": 10, "done": 0, "ticks": False, "ease": 1.0, "text": "RECENT TRAINING: 0 of 10."},
+                       {"planned": 0, "done": 0, "ticks": False, "ease": 1.0, "text": ""}):
+            athlete, _ = self.generate(recent=recent)
+            self.assertEqual(athlete.ease, 1.0)
+            self.assertNotIn("EASING", athlete.context)
+            self.assertNotIn("consistently", athlete.context)
+            self.assertNotIn("eased", self.saved)
+
+    def test_the_week_is_paced_from_the_pbs_as_they_stand_now(self):
+        athlete, _ = self.generate()
+        self.assertEqual(athlete.written_for[0]["current_pbs"], {})
 
 
 if __name__ == "__main__":

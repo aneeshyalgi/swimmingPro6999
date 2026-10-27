@@ -81,6 +81,14 @@ class FakeQuery:
         self.filters.append(lambda row: row.get(key) in values)
         return self
 
+    def gte(self, key, value):
+        self.filters.append(lambda row: row.get(key) is not None and row[key] >= value)
+        return self
+
+    def lt(self, key, value):
+        self.filters.append(lambda row: row.get(key) is not None and row[key] < value)
+        return self
+
     def order(self, key, desc=False):
         self.sort.append((key, desc))
         return self
@@ -545,10 +553,12 @@ class ChatTests(WeekCoachCase):
     def setUp(self):
         super().setUp()
         self.patch(week_coach, "_grounding", return_value=("ATHLETE", []))
+        self.paced = self.patch(week_coach, "with_current_pbs", side_effect=lambda profile: {**profile, "current_pbs": {}})
         self.answers = []
         self.patch(training, "generate_structured", side_effect=self.generate)
 
     def generate(self, profile, schema, objective, check=None, **options):
+        self.asked_for = profile
         reply = self.answers.pop(0)
         if isinstance(reply, Exception):
             raise reply
@@ -563,6 +573,15 @@ class ChatTests(WeekCoachCase):
         response = self.client.post("/api/training/week-coach/chat", headers=HEADERS,
                                     json={"kind": kind, "week_start": week.isoformat(), "message": message, "history": [{"role": "athlete", "text": "Hi"}]})
         return response, [json.loads(line) for line in response.text.splitlines() if line.strip()]
+
+    def test_swims_are_paced_from_the_pbs_as_they_stand_now_and_a_gym_week_reads_no_races(self):
+        self.answers = [{"message": "Nothing to change.", "changes": [], "elsewhere": False}]
+        self.chat()
+        self.assertEqual((self.paced.call_count, self.asked_for["current_pbs"]), (1, {}))
+        self.answers = [{"message": "Nothing to change.", "changes": [], "elsewhere": False}]
+        self.chat("Make Friday easier", kind="gym")
+        self.assertEqual(self.paced.call_count, 1)
+        self.assertNotIn("current_pbs", self.asked_for)
 
     def test_the_answer_comes_first_then_each_change_as_its_written(self):
         self.answers = [

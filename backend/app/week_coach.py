@@ -35,6 +35,7 @@ from app import gym, tokens, training
 from app.auth import get_authenticated_profile
 from app.coach_plan import CoachSection, CoachSwim, GymDoc, as_swim, coach_terms
 from app.context import athlete_coach
+from app.paces import with_current_pbs
 from app.strength_planner import SOURCE_LABEL
 from app.today import MobilityWork, SwimSession, SwimSet, recent_athlete_feedback
 from app.training_days import coach_line
@@ -1064,6 +1065,8 @@ def chat(request: WeekChat, authorization: str | None = Header(default=None)) ->
     today = _now().date()
     if week_over(request.week_start, today):
         raise HTTPException(status_code=409, detail="This week is over, so it can't be changed any more. Pick this week or a later one.")
+    if request.kind == "swim":
+        profile = with_current_pbs(profile)  # swims paced from their PBs as they stand now (races logged since onboarding too)
     coach = athlete_coach(profile)
     with ThreadPoolExecutor(max_workers=3) as pool:
         board_future = pool.submit(load_board, profile, request.kind, request.week_start, today)
