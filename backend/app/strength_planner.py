@@ -545,13 +545,15 @@ def mobility_session(day: date, ctx: Context) -> PlannedSession:
 
 
 # ---------------------------------------------------------------- the week
-def plan_week(athlete: Athlete, week_start: date, open_days: list[date], today: date, kept_strength: int = 0) -> list[PlannedSession]:
+def plan_week(athlete: Athlete, week_start: date, open_days: list[date], today: date, kept_strength: int = 0,
+              done_strength: int = 0) -> list[PlannedSession]:
     """Strength & Mobility sessions on spread-out days, the coach's mobility routine on the other open days.
 
     A part-week (e.g. the week the athlete signs up) gets a pro-rated number of sessions; nothing hard lands on race
     day or the two days before it; the competition and taper blocks cap the number of sessions. With the athlete's own
     strength days, sessions go only on those (one on each day left, less the workouts that stay), and mobility goes on
-    the other days only when they keep it.
+    the other days only when they keep it. `kept_strength`: the strength workouts that stay on the days left;
+    `done_strength`: those on the days before today, which count toward the week (not toward the days left's share).
     """
     ctx = context_for(athlete, week_start)
     phase = PHASES[ctx.block.key]
@@ -563,6 +565,9 @@ def plan_week(athlete: Athlete, week_start: date, open_days: list[date], today: 
         wanted = athlete.gym_sessions if remaining >= 7 else round(athlete.gym_sessions * remaining / 7)
         if athlete.gym_sessions and remaining and not wanted:
             wanted = 1
+        # Never more than the week has left beside the days before today. (Taken off the share instead, a week of two
+        # re-planned on Wednesday after Monday's lost Thursday's: its share of the days left was already only one.)
+        wanted = min(wanted, max(0, athlete.gym_sessions - done_strength))
     wanted = max(0, wanted - kept_strength)
     if phase.max_sessions is not None:
         wanted = min(wanted, phase.max_sessions)

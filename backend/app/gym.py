@@ -338,7 +338,10 @@ def plan_gym_week(profile, week_start: date, notes: str = "") -> dict[str, Any]:
     if week_start + timedelta(days=7) <= today:
         raise HTTPException(status_code=409, detail="This week is over. Plan this week or a future one.")
     week = gym_week(profile, week_start)
-    replaced = [item for day in week["days"] for item in day["workouts"] if item["source"] == "ai" and not item["completed"]]
+    # Only today on is planned again. The days before today keep their workouts, done or not: deleted, a session done but
+    # not ticked off went from the athlete's week, and the days left were given one more to make up for it.
+    replaced = [item for day in week["days"] for item in day["workouts"]
+                if item["source"] == "ai" and not item["completed"] and day["date"] >= today.isoformat()]
     kept = [item for day in week["days"] for item in day["workouts"] if item not in replaced]
     kept_days = {item["date"] for item in kept}
     open_days = [date.fromisoformat(day["date"]) for day in week["days"]
@@ -346,10 +349,10 @@ def plan_gym_week(profile, week_start: date, notes: str = "") -> dict[str, Any]:
     if not open_days:
         raise HTTPException(status_code=409, detail="Every remaining day this week already has a workout of yours. Pick a future week.")
     athlete = strength_athlete(profile)
-    # On the athlete's own days, the days left are planned, so only the workouts on them count toward the week.
-    kept_strength = sum(not str(item["focus"]).startswith("Mobility") for item in kept
-                        if athlete.strength_days is None or item["date"] >= today.isoformat())
-    sessions = plan_week(athlete, week_start, open_days, today, kept_strength)
+    # The strength workouts that stay, on the days left and on the days before today (see plan_week).
+    strength = [item for item in kept if not str(item["focus"]).startswith("Mobility")]
+    left = sum(item["date"] >= today.isoformat() for item in strength)
+    sessions = plan_week(athlete, week_start, open_days, today, left, len(strength) - left)
     if not sessions:
         if athlete.strength_days is not None and not athlete.mobility_days:
             raise HTTPException(status_code=409, detail="There's nothing left to plan this week: your strength days already have their workouts "

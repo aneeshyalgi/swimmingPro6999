@@ -308,16 +308,60 @@ class ChosenStrengthDaysTests(unittest.TestCase):
         self.assertEqual(len(sessions), 3)
         self.assertTrue(all(days[session.day.weekday()] for session in sessions))
 
-    def test_on_chosen_days_only_the_workouts_from_today_on_count(self):
+    def test_the_workouts_that_stay_count_apart_on_the_days_left_and_the_days_before(self):
         thursday = MONDAY + timedelta(days=3)
         done = {"key": "done", "date": MONDAY.isoformat(), "source": "coach", "completed": True, "focus": "From your coach"}
-        week = {"days": [{"date": day.isoformat(), "workouts": [done] if day == MONDAY else []} for day in WEEK]}
-        for days, counted in ((self.MON_THU_SAT, 0), (None, 1)):
-            with patch("app.gym.gym_week", return_value=week), patch("app.gym.strength_athlete", return_value=athlete(strength_days=days)),                     patch("app.gym.plan_week", return_value=[]) as planner, patch("app.gym.datetime") as clock:
-                clock.now.return_value.date.return_value = thursday
-                with self.assertRaises(HTTPException):
-                    plan_gym_week({"id": "profile-a"}, MONDAY)        # nothing comes back from the stand-in planner
-            self.assertEqual(planner.call_args.args[4], counted)
+        own = {"key": "own", "date": WEEK[5].isoformat(), "source": "manual", "completed": False, "focus": "Your own workout"}
+        week = {"days": [{"date": day.isoformat(), "workouts": [item for item in (done, own) if item["date"] == day.isoformat()]} for day in WEEK]}
+        with patch("app.gym.gym_week", return_value=week), patch("app.gym.strength_athlete", return_value=athlete()), \
+                patch("app.gym.plan_week", return_value=[]) as planner, patch("app.gym.datetime") as clock:
+            clock.now.return_value.date.return_value = thursday
+            with self.assertRaises(HTTPException):
+                plan_gym_week({"id": "profile-a"}, MONDAY)        # nothing comes back from the stand-in planner
+        self.assertEqual(planner.call_args.args[4:], (1, 1))      # Saturday's own workout on the days left; Monday's before them
+
+    def test_on_chosen_days_only_the_workouts_from_today_on_count(self):
+        thursday = MONDAY + timedelta(days=3)
+        # Thursday and Saturday left: Monday's workout, done, doesn't take one of them; one that stays on Saturday does.
+        self.assertEqual(len(strength(plan_week(athlete(strength_days=self.MON_THU_SAT), MONDAY, WEEK[3:], thursday, 0, 1))), 2)
+        self.assertEqual(len(strength(plan_week(athlete(strength_days=self.MON_THU_SAT), MONDAY, WEEK[3:5] + WEEK[6:], thursday, 1, 1))), 1)
+
+
+class WeekUnderWayTests(unittest.TestCase):
+    """A gym week planned once some of its days are over (WEDNESDAY is today)."""
+    WEDNESDAY = MONDAY + timedelta(days=2)
+
+    def test_the_days_left_get_what_the_week_has_left_beside_the_days_before_today(self):
+        two = athlete(gym_sessions=2)
+        # Two a week and Monday's done: the days left get the other one. (Taken off their share of one, it was lost.)
+        self.assertEqual(len(strength(plan_week(two, MONDAY, WEEK[2:], self.WEDNESDAY, 0, 1))), 1)
+        self.assertEqual(len(strength(plan_week(two, MONDAY, WEEK[2:], self.WEDNESDAY, 0, 2))), 0)
+        # Planned for the first time on Wednesday (the week the athlete signs up): the days left's share.
+        self.assertEqual(len(strength(plan_week(two, MONDAY, WEEK[2:], self.WEDNESDAY))), 1)
+        self.assertEqual(len(strength(plan_week(athlete(), MONDAY, WEEK[2:], self.WEDNESDAY, 0, 1))), 2)
+
+    def plan(self, monday_ticked: bool):
+        monday = {"key": "monday-ai", "date": MONDAY.isoformat(), "source": "ai", "completed": monday_ticked, "focus": "Neural strength"}
+        friday = {"key": "friday-ai", "date": WEEK[4].isoformat(), "source": "ai", "completed": False, "focus": "Race power"}
+        week = {"days": [{"date": day.isoformat(), "workouts": [item for item in (monday, friday) if item["date"] == day.isoformat()]} for day in WEEK]}
+        database = MagicMock()
+        with patch("app.gym.gym_week", return_value=week), patch("app.gym.strength_athlete", return_value=athlete(gym_sessions=2)), \
+                patch("app.gym.save_record") as save_record, patch("app.gym.get_supabase_client", return_value=database), \
+                patch("app.gym.generate_structured", side_effect=RuntimeError("model unavailable")), patch("app.gym.datetime") as clock:
+            clock.now.return_value.date.return_value = self.WEDNESDAY
+            with self.assertLogs("app.gym", level="WARNING"):
+                plan_gym_week({"id": "profile-a"}, MONDAY)
+        deleted = [call.args for call in database.table.return_value.delete.return_value.eq.return_value.eq.call_args_list]
+        saved = [call.args[5]["focus"] for call in save_record.call_args_list]
+        return deleted, [focus for focus in saved if not focus.startswith("Mobility")]
+
+    def test_planning_it_again_keeps_the_days_before_today(self):
+        for ticked in (False, True):
+            deleted, strength_saved = self.plan(ticked)
+            # Only Friday's is planned again: Monday's stays, ticked off or not (deleted, a session done but not ticked
+            # off went from the week), and counts, so the days left get the week's other session.
+            self.assertEqual(deleted, [("id", "friday-ai")])
+            self.assertEqual(len(strength_saved), 1)
 
 
 class WorkoutTitleTests(unittest.TestCase):
