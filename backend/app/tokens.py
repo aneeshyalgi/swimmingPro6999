@@ -9,7 +9,7 @@ last BOUGHT_MONTHS months from purchase and aren't refundable. Spending takes th
 
 Each AI feature costs COSTS[action] tokens, charged as its AI work starts (charge), never for a request refused before
 then: a reply from the coach (typed, or said on a voice call), a coach's plan from the chat read into sessions for the
-athlete's weeks (a token a session), generating or re-planning a week, a week coach message, race plans, recognising
+athlete's weeks (for each session), generating or re-planning a week, a week coach message, race plans, recognising
 the stroke in a clip, a video analysis. If the work then fails (an error, running out of time, the athlete leaving
 before their week is saved), the tokens go back (give_back). Every charge has its own id, made here and never taken
 from the browser (one reused there would get AI work for free), so the database client's retry of a dropped call can't
@@ -55,7 +55,7 @@ TOKENS_TERMS = "2026-10-26"
 CHANGEOVER = timedelta(days=7)
 # What each AI feature costs, and what the athlete's token history calls it.
 COSTS = {
-    "coach_chat": 4, "voice_reply": 4, "coach_plan": 1, "swim_week": 10, "swim_replan": 6, "gym_week": 4, "week_coach": 3,
+    "coach_chat": 2, "voice_reply": 2, "coach_plan": 2, "swim_week": 10, "swim_replan": 6, "gym_week": 4, "week_coach": 3,
     "race_plan": 4, "stroke_recognition": 1, "video_analysis": 4, "daily_plan": 3,
 }
 LABELS = {
@@ -267,7 +267,7 @@ def charge(profile: dict[str, Any], action: str, count: int = 1, ref: str | None
 
 def require(profile: dict[str, Any], action: str, count: int = 1, then: str | None = None) -> None:
     """Raises OutOfTokens, spending nothing, when the athlete hasn't `count` times `action`'s tokens: checked before AI
-    work whose cost is known only once it has begun (a coach's plan, a token a session), so it doesn't run for someone
+    work whose cost is known only once it has begun (a coach's plan, priced by its sessions), so it doesn't run for someone
     who can't pay for any of it. `then`: what the work leads to, needed as well (a stroke recognised for the analysis
     after it: one taken for a clip that then can't be analysed would be wasted). Free as charge() is: tokens off, an
     account that doesn't use them, or tokens that can't be read just now."""

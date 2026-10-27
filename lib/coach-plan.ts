@@ -49,7 +49,7 @@ export type TrainingTarget = { tab: "week" | "library"; weekStart: string }
 export const readCoachPlan = (body: { reply: string; request: string; spoken: boolean }, signal?: AbortSignal) =>
   trainingRequest("/coach-plan/read", coachPlanSchema, { body, signal })
 
-// Reads by reply (the chat message's id), started when the athlete opens it to add (reading costs a token a session,
+// Reads by reply (the chat message's id), started when the athlete opens it to add (reading costs tokens for each session,
 // app/tokens.py, so nothing is read they didn't ask for): opening it again shows the plan straight away, or waits on the
 // read already under way. A failed read is forgotten, so opening it again tries again.
 const reads = new Map<string, Promise<CoachPlan>>()
@@ -66,7 +66,7 @@ export function readPlanFor(id: string, body: { reply: string; request: string; 
 /**
  * Whether a plan's sessions still have the ids its read gave them (version 8 UUIDs, signed by the backend: _session_id in
  * coach_plan.py), under which adding them is paid for by the read. Under any other id (a copy's, "Add again") adding
- * them costs a token a session; a plan kept from before reads gave such ids is read again, at no cost.
+ * them costs tokens for each session; a plan kept from before reads gave such ids is read again, at no cost.
  */
 export const fromRead = (plan: CoachPlan) => plan.sessions.every((session) => session.id[14] === "8")
 

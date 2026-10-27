@@ -521,7 +521,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
   const planMessage = planIndex >= 0 ? planThread[planIndex] : null
   // The athlete's message the reply answered, for reading it in context.
   const planRequest = planMessage ? [...planThread.slice(0, planIndex)].reverse().find((message) => message.role === "user")?.content ?? "" : ""
-  // Sessions added before are added again as new ones: same sessions, new ids (which cost a token a session to add). A plan
+  // Sessions added before are added again as new ones: same sessions, new ids (which cost tokens for each session added). A plan
   // not added yet whose ids aren't its read's (kept from before reads signed them) is read again, at no cost.
   const planCached = !planMessage?.planDraft ? null
     : planFor?.fresh ? withNewIds(planMessage.planDraft) : fromRead(planMessage.planDraft) ? planMessage.planDraft : null
@@ -1080,7 +1080,7 @@ export function CoachChat({ userKey, coaches, call = false, origin, draft, swims
         <CoachPlanSheet key={`${planFor.messageId}:${planFor.fresh}`} coach={planFor.coach} coachName={getCoachDisplayName(planFor.coach)}
           read={() => readPlanFor(planFor.messageId, { reply: planMessage.content, request: planRequest, spoken: !!planMessage.voice })
             .then((plan) => {
-              tokensChanged()   // reading it costs a token a session (once per reply)
+              tokensChanged()   // reading it costs tokens for each session (once per reply)
               return planFor.fresh ? withNewIds(plan) : plan
             })}
           cached={planCached} cost={planFor.fresh ? planCost : null} swimsPerWeek={swimsPerWeek}

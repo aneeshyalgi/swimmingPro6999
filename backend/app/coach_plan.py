@@ -638,7 +638,7 @@ def read_plan(request: PlanRead, authorization: str | None = Header(default=None
     copied out whole: the split confirms it, so one session is ready about as soon as its copy. Sessions are copied at
     the same time, and one that can't be is listed in `skipped` (with any the coach only named) rather than failing the rest.
 
-    It costs a token a session (app/tokens.py), charged once the split has found them and given back for any that can't
+    It costs coach_plan's tokens for each session (app/tokens.py), charged once the split has found them and given back for any that can't
     be copied; an athlete without a token isn't read for at all. That pays for adding each session once (add_plan). A reply
     read before comes back as it was read, with no tokens or AI work (READS_KEPT), and its tokens are never charged twice,
     even when it has to be read again."""
@@ -791,7 +791,7 @@ When the reply has no complete session, return no sessions.""",
         kept = [session for session in outline.sessions if prescribed(session.kind, _excerpt(pieces, session.pieces))]
         if not kept:
             raise HTTPException(status_code=422, detail=NO_SESSION)
-        # A token for each session, as their copying starts (app/tokens.py); given back for the ones that can't be copied.
+        # The tokens for each session, as their copying starts (app/tokens.py); given back for the ones that can't be copied.
         receipt = tokens.charge(profile, "coach_plan", len(kept), ref=read_key)
 
         def copy(session: OutlineSession) -> dict[str, Any]:
@@ -906,7 +906,7 @@ def add_plan(request: PlanAdd, authorization: str | None = Header(default=None))
     one can't go where it was put. Returns what was added and the week each went in ({"added": [...]}).
 
     A session under the id its read gave it was paid for with the read. Any other is a copy ("Add again": the same
-    sessions under new ids) and costs what reading it did, a token a session (app/tokens.py), given back if it isn't saved;
+    sessions under new ids) and costs what reading it did, coach_plan's tokens for each session (app/tokens.py), given back if it isn't saved;
     a copy already saved (sent again after a lost reply) is only saved again."""
     profile = get_authenticated_profile(authorization)
     today = datetime.now(timezone.utc).date()

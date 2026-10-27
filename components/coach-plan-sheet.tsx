@@ -121,7 +121,7 @@ export function CoachPlanSheet({ coach, coachName, read, cached, cost = null, sw
   const first = coachName.replace(/^Coach\s+/i, "")
   const [plan, setPlan] = useState<CoachPlan | null>(cached)
   const [readError, setReadError] = useState<string | null>(null)
-  // The read was refused for want of tokens (reading a plan costs a token a session): the way on is the token store.
+  // The read was refused for want of tokens (reading a plan costs tokens for each session): the way on is the token store.
   const [outOfTokens, setOutOfTokens] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [step, setStep] = useState(0)
