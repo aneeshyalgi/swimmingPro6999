@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useRef, useState, type CSSProperties } from "react"
-import { AlertTriangle, ArrowRight, CalendarDays, Check, Dumbbell, Heart, Loader2, Moon, Plus, RotateCcw, Waves } from "lucide-react"
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react"
+import { AlertTriangle, ArrowRight, CalendarDays, Check, Dumbbell, Heart, Loader2, Moon, Pencil, Plus, RotateCcw, Waves } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { trainingDaysSchema, trainingRequest, type TrainingDays } from "@/lib/training"
 import { cn } from "@/lib/utils"
@@ -29,6 +29,9 @@ function dayTag(swims: number, strength: boolean) {
  * The days the athlete trains, on the dashboard: how many swims each day of the week (none, one or two), which days have
  * a strength session, and whether the coach's mobility routine goes on the other days. Saving sets the athlete's swims
  * and strength sessions a week to match; the weeks they generate or re-plan from then on are built on these days.
+ *
+ * Once the athlete has chosen their days it shows them at a glance, and opens to change them; until then it's open. It
+ * stays open while a change isn't saved, and after a save to say so.
  */
 export function TrainingDaysEditor({ onSaved, onOpenTraining }: {
   /** Saved: the athlete's swims and strength sessions a week now. */
@@ -45,6 +48,9 @@ export function TrainingDaysEditor({ onSaved, onOpenTraining }: {
   const [pulse, setPulse] = useState<Record<string, number>>({})  // "swim3" / "gym3" → when it last changed (replays its animation)
   const [today] = useState(weekday)
   const [attempt, setAttempt] = useState(0)
+  // Opened or closed by the athlete; null until they do (then it's open only until they've chosen their days).
+  const [open, setOpen] = useState<boolean | null>(null)
+  const editorId = useId()
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -108,6 +114,7 @@ export function TrainingDaysEditor({ onSaved, onOpenTraining }: {
       setDraft(draftOf(days))
       setJustSaved((count) => count + 1)
       setFresh(true)
+      setOpen(true)  // it stays open to say it's saved, until the athlete closes it
       onSaved({ swims: days.swim.reduce((sum, count) => sum + count, 0), strength: days.gym.filter(Boolean).length })
     } catch (failure) {
       if (mounted.current) setError(failure instanceof Error ? failure.message : "Your training days weren't saved. Please try again.")
@@ -165,11 +172,48 @@ export function TrainingDaysEditor({ onSaved, onOpenTraining }: {
     { key: "mobility", value: mobilityDays, label: mobilityDays === 1 ? "mobility day" : "mobility days", icon: Heart, tone: "text-emerald-200 bg-emerald-300/10 border-emerald-300/20" },
     { key: "rest", value: restDays, label: restDays === 1 ? "rest day" : "rest days", icon: Moon, tone: "text-amber-100 bg-amber-200/10 border-amber-200/20" },
   ]
+  const statChips = (
+    <div className="flex flex-wrap gap-2">
+      {stats.map((stat) => (
+        <span key={stat.key} className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs", stat.tone)}>
+          <stat.icon aria-hidden className="h-3.5 w-3.5" />
+          <span key={stat.value} className="td-tick font-bold tabular-nums">{stat.value}</span>
+          {stat.label}
+        </span>
+      ))}
+    </div>
+  )
+  // Open while a change isn't saved; otherwise as the athlete left it, or until they've chosen their days.
+  const expanded = dirty || phase === "saving" || (open ?? !chosen)
+
+  if (!expanded) {
+    return (
+      <section id={editorId} aria-labelledby="training-days-title" className="td-card relative overflow-hidden rounded-[26px] border border-white/[0.08] p-5 sm:p-6">
+        <div aria-hidden className="td-aurora pointer-events-none absolute inset-0" />
+        <Header chosen={chosen} action={
+          <Button type="button" size="sm" variant="outline" aria-expanded={false} aria-controls={editorId} onClick={() => setOpen(true)}
+            className="rounded-full border-white/15 bg-white/[0.04] text-slate-200 hover:bg-white/10 hover:text-white">
+            <Pencil className="mr-1.5 h-3.5 w-3.5" />Change days
+          </Button>} />
+        <div role="list" aria-label="Your training days" className="relative mt-5 grid grid-cols-7 gap-1.5 sm:gap-2.5">
+          {DAY_NAMES.map((name, day) => (
+            <GlanceDay key={name} name={name} swims={saved.swim[day]} gym={saved.gym[day]} mobility={saved.mobility} today={day === today} />
+          ))}
+        </div>
+        <div className="relative mt-4">{statChips}</div>
+      </section>
+    )
+  }
 
   return (
-    <section aria-labelledby="training-days-title" className={cn("td-card relative overflow-hidden rounded-[26px] border border-white/[0.08] p-5 sm:p-6", dirty && "td-card-dirty")}>
+    <section id={editorId} aria-labelledby="training-days-title" className={cn("td-card relative overflow-hidden rounded-[26px] border border-white/[0.08] p-5 sm:p-6", dirty && "td-card-dirty")}>
       <div aria-hidden className="td-aurora pointer-events-none absolute inset-0" />
-      <Header chosen={chosen} />
+      <Header chosen={chosen} action={!dirty && phase !== "saving" && (
+        <Button type="button" size="sm" variant="ghost" aria-expanded aria-controls={editorId} onClick={() => { setOpen(false); setFresh(false) }}
+          className="rounded-full text-slate-300 hover:bg-white/10 hover:text-white">
+          Done
+        </Button>
+      )} />
 
       <div className="relative mt-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-slate-400">
         <span className="flex items-center gap-1.5"><span className="td-key td-key-swim" />Tap a pool: one swim, two, or none</span>
@@ -248,15 +292,7 @@ export function TrainingDaysEditor({ onSaved, onOpenTraining }: {
 
       {/* The week in numbers */}
       <div className="relative mt-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          {stats.map((stat) => (
-            <span key={stat.key} className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs", stat.tone)}>
-              <stat.icon aria-hidden className="h-3.5 w-3.5" />
-              <span key={stat.value} className="td-tick font-bold tabular-nums">{stat.value}</span>
-              {stat.label}
-            </span>
-          ))}
-        </div>
+        {statChips}
         <button type="button" role="switch" aria-checked={draft.mobility} onClick={toggleMobility} disabled={phase === "saving"}
           className="group flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.03] py-1.5 pl-3 pr-1.5 text-xs text-slate-300 outline-none transition-colors hover:border-emerald-300/30 focus-visible:ring-2 focus-visible:ring-emerald-200/60">
           <Heart aria-hidden className={cn("h-3.5 w-3.5 transition-colors", draft.mobility ? "text-emerald-300" : "text-slate-500")} />
@@ -311,8 +347,8 @@ export function TrainingDaysEditor({ onSaved, onOpenTraining }: {
   )
 }
 
-/** `chosen`: whether the athlete chose their days (null while that isn't known yet). */
-function Header({ chosen }: { chosen: boolean | null }) {
+/** `chosen`: whether the athlete chose their days (null while that isn't known yet); `action`: a button beside it. */
+function Header({ chosen, action }: { chosen: boolean | null; action?: ReactNode }) {
   return (
     <header className="relative flex flex-wrap items-start justify-between gap-3">
       <div className="flex min-w-0 items-start gap-3.5">
@@ -325,11 +361,37 @@ function Header({ chosen }: { chosen: boolean | null }) {
           <p className="mt-1 text-sm leading-6 text-slate-400">Choose when you swim and lift. Every week you generate or re-plan is built on these days.</p>
         </div>
       </div>
-      {chosen !== null && <span key={String(chosen)} className={cn("td-note inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
-        chosen ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100" : "border-white/10 bg-white/[0.04] text-slate-400")}>
-        <span className={cn("h-1.5 w-1.5 rounded-full", chosen ? "bg-emerald-300" : "bg-slate-500")} />
-        {chosen ? "Your days" : "Evenly spread by SwimGPT"}
-      </span>}
+      <div className="flex shrink-0 items-center gap-2">
+        {chosen !== null && <span key={String(chosen)} className={cn("td-note inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
+          chosen ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100" : "border-white/10 bg-white/[0.04] text-slate-400")}>
+          <span className={cn("h-1.5 w-1.5 rounded-full", chosen ? "bg-emerald-300" : "bg-slate-500")} />
+          {chosen ? "Your days" : "Evenly spread by SwimGPT"}
+        </span>}
+        {action}
+      </div>
     </header>
+  )
+}
+
+/** A day of the week at a glance (the editor closed): its swims as a pool that's half full or full, and a strength
+ *  session, the mobility routine or rest under it, as the editor shows them. */
+function GlanceDay({ name, swims, gym, mobility, today }: { name: string; swims: number; gym: boolean; mobility: boolean; today: boolean }) {
+  return (
+    <div role="listitem" aria-label={`${name}: ${SWIM_WORDS[swims]}${gym ? " and a strength session" : mobility ? " and the mobility routine" : ", otherwise rest"}`}
+      className="flex min-w-0 flex-col items-center gap-1.5">
+      <span aria-hidden className={cn("flex h-4 items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] sm:text-[11px]", today ? "text-accent" : "text-slate-400")}>
+        {today && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+        {name.slice(0, 3)}
+      </span>
+      <span aria-hidden className={cn("relative grid h-11 w-full place-items-center overflow-hidden rounded-xl border sm:h-12",
+        swims ? "border-cyan-300/25 bg-[#06111a]" : "border-white/[0.07] bg-white/[0.02]")}>
+        {swims > 0 && <span className="absolute inset-x-0 bottom-0 bg-gradient-to-b from-sky-400/55 to-cyan-800/80" style={{ height: swims === 1 ? "52%" : "100%" }} />}
+        {swims > 0 && <span className="relative flex items-center gap-1 text-sm font-bold tabular-nums text-white drop-shadow-[0_1px_4px_rgba(0,0,0,0.5)]">{swims}<Waves className="h-3 w-3 text-white/80" /></span>}
+      </span>
+      <span aria-hidden className={cn("grid h-7 w-full place-items-center rounded-lg", gym ? "bg-gradient-to-br from-violet-400/80 to-fuchsia-500/70" : "bg-white/[0.03]")}>
+        {gym ? <Dumbbell className="h-3.5 w-3.5 text-white" /> : mobility ? <Heart className="h-3.5 w-3.5 text-emerald-300/50" /> : <Moon className="h-3.5 w-3.5 text-slate-500/70" />}
+      </span>
+      <span aria-hidden className={cn("w-full truncate text-center text-[9px] font-medium sm:text-[11px]", swims || gym ? "text-slate-200" : "text-slate-500")}>{dayTag(swims, gym)}</span>
+    </div>
   )
 }

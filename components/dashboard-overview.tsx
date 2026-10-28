@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button"
 import type { DashboardOverviewData } from "@/lib/dashboard"
 import { cn } from "@/lib/utils"
 import { ProgressRing, Reveal, Tile, TileHeader, isMissing } from "@/components/dashboard-ui"
+import { ClampText } from "@/components/training-ui"
 import { TrainingDaysEditor } from "@/components/training-days"
 
 type Metric = DashboardOverviewData["weekly"][number]
+type Session = DashboardOverviewData["today"][number]
 
 const categoryStyle: Record<string, { icon: LucideIcon; chip: string; bar: string }> = {
   swim: { icon: Waves, chip: "bg-accent/12 text-accent", bar: "from-cyan-300 to-sky-400" },
@@ -28,6 +30,10 @@ const ratio = (metric?: Metric) => {
   return { done, total, percent: total > 0 ? (done / total) * 100 : 0 }
 }
 
+/**
+ * The dashboard's summary, in the order an athlete reads it: today's training, how the week is going and the next meet,
+ * their coach's priority, then the days they train (a glance at the week, opened to change them).
+ */
 export function DashboardOverview({
   data,
   onViewToday,
@@ -47,17 +53,19 @@ export function DashboardOverview({
   const competition = pickMetric(data.training_status, "Next major competition")
   const daysUntil = pickMetric(data.training_status, "Days until competition")
   const daysNumber = daysUntil && /^-?\d+$/.test(daysUntil.value) ? Number(daysUntil.value) : null
+  const done = data.today.filter((session) => session.status === "Completed").length
 
   return (
     <div className="space-y-5">
-      {/* Today + highlight tiles */}
-      <div className="grid gap-5 xl:grid-cols-3">
+      {/* Today beside the rest of the week and the coach's priority (one after another on smaller screens). */}
+      <div className="grid gap-5 xl:grid-cols-3 xl:items-start">
+        {/* Today */}
         <Reveal index={0} className="xl:col-span-2">
           <Tile glow>
             <TileHeader
               icon={Clock}
               title="Today's training"
-              subtitle={`${data.date} · your swim and workout for today`}
+              subtitle={data.today.length ? `${data.date} · ${done} of ${data.today.length} done` : data.date}
               action={
                 <Button onClick={onViewToday} size="sm" className="rounded-full bg-accent px-4 text-accent-foreground hover:bg-accent/90">
                   Open swim week <ArrowRight className="h-4 w-4" />
@@ -65,99 +73,78 @@ export function DashboardOverview({
               }
             />
             {data.today.length ? (
-              <div className="grid gap-3 md:grid-cols-2">
-                {data.today.map((session, index) => {
-                  const style = categoryStyle[session.category] ?? categoryStyle.mobility
-                  const done = session.status === "Completed"
-                  return (
-                    <div
-                      key={`${session.category}-${index}`}
-                      className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4 transition-colors duration-300 hover:border-white/15"
-                    >
-                      <div className={cn("absolute inset-y-0 left-0 w-1 bg-gradient-to-b", style.bar)} />
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider", style.chip)}>
-                          <style.icon className="h-3.5 w-3.5" />
-                          {session.category}
-                        </span>
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs",
-                            done ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/10 text-slate-300",
-                          )}
-                        >
-                          {done && <CheckCircle2 className="h-3 w-3" />}
-                          {session.status}
-                        </span>
-                      </div>
-                      <h4 className="mt-3 text-base font-semibold text-white">{session.name}</h4>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-slate-200">
-                          <Clock className="h-3.5 w-3.5 text-slate-400" />
-                          {session.time}
-                        </span>
-                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-slate-200">
-                          <Timer className="h-3.5 w-3.5 text-slate-400" />
-                          {session.duration}
-                        </span>
-                      </div>
-                      <p className="mt-3 text-sm leading-6 text-slate-300">{session.objective}</p>
-                      <p className="mt-2 text-[11px] text-slate-500">{session.basis}</p>
-                    </div>
-                  )
-                })}
-              </div>
+              <ul className="space-y-2.5">
+                {data.today.map((session, index) => <TodaySession key={`${session.category}-${index}`} session={session} />)}
+              </ul>
             ) : (
-              <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center">
+              <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
                 <p className="text-sm text-slate-400">No swim or workout planned for today.</p>
               </div>
             )}
           </Tile>
         </Reveal>
 
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-1">
+        <div className="space-y-5">
+          {/* This week: consistency, and the next meet */}
           <Reveal index={1}>
             <Tile>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Consistency this week</p>
-              <div className="mt-4 grid grid-cols-2 gap-4">
+              <div className="mt-4 grid grid-cols-2 gap-3">
                 {consistency.map(({ label, metric, tone, icon: Icon, iconTone }) => {
                   const value = ratio(metric)
                   return (
                     <div key={label} className="flex min-w-0 flex-col items-center text-center">
-                      <ProgressRing size={96} stroke={9} tone={tone} value={value?.percent ?? 0} label={`${label} consistency`}>
-                        <span className="text-xl font-bold tabular-nums text-white">{value ? `${Math.round(value.percent)}%` : "—"}</span>
+                      <ProgressRing size={84} stroke={8} tone={tone} value={value?.percent ?? 0} label={`${label} consistency`}>
+                        <span className="text-lg font-bold tabular-nums text-white">{value ? `${Math.round(value.percent)}%` : "—"}</span>
                       </ProgressRing>
-                      <p className="mt-3 flex items-center gap-1.5 text-sm font-semibold text-white"><Icon className={cn("h-3.5 w-3.5", iconTone)} />{label}</p>
+                      <p className="mt-2.5 flex items-center gap-1.5 text-sm font-semibold text-white"><Icon className={cn("h-3.5 w-3.5", iconTone)} />{label}</p>
                       <p className="mt-0.5 text-xs tabular-nums text-slate-300">{value ? `${value.done} of ${value.total} done` : metric?.value ?? "Not recorded"}</p>
                       {metric?.detail && <p className="mt-0.5 text-[11px] leading-4 text-slate-500">{metric.detail.split(" · ")[0]}</p>}
                     </div>
                   )
                 })}
               </div>
-            </Tile>
-          </Reveal>
-          <Reveal index={2}>
-            <Tile>
-              <div className="flex h-full items-center gap-5">
-                <div className="flex h-[112px] w-[112px] shrink-0 flex-col items-center justify-center rounded-full border border-amber-300/25 bg-[radial-gradient(circle,rgba(252,211,77,0.12),transparent_70%)]">
+              <div className="mt-5 flex items-center gap-4 border-t border-white/[0.06] pt-4">
+                <div className="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-full border border-amber-300/25 bg-[radial-gradient(circle,rgba(252,211,77,0.12),transparent_70%)]">
                   {daysNumber !== null ? (
                     <>
-                      <span className="text-3xl font-bold tabular-nums text-white">{daysNumber}</span>
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200">days</span>
+                      <span className="text-xl font-bold tabular-nums leading-none text-white">{daysNumber}</span>
+                      <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-200">days</span>
                     </>
                   ) : (
-                    <Flag className="h-8 w-8 text-amber-200/70" />
+                    <Flag className="h-6 w-6 text-amber-200/70" />
                   )}
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Next competition</p>
-                  <p className={cn("mt-1 font-semibold", competition && !isMissing(competition.value) ? "text-lg text-white" : "text-base text-slate-400")}>
+                  <p className={cn("mt-0.5 font-semibold", competition && !isMissing(competition.value) ? "text-white" : "text-slate-400")}>
                     {competition?.value ?? "Not scheduled"}
                   </p>
-                  {competition?.detail && <p className="mt-1 text-xs leading-5 text-slate-500">{competition.detail}</p>}
+                  {competition?.detail && <p className="mt-0.5 text-xs leading-5 text-slate-500">{competition.detail}</p>}
                 </div>
               </div>
             </Tile>
+          </Reveal>
+
+          {/* The coach's priority: a column of its own beside Today, a row across the page on its own (container query) */}
+          <Reveal index={2}>
+            <div className="@container relative overflow-hidden rounded-[22px] border border-accent/25 bg-[linear-gradient(120deg,rgba(87,229,234,0.12),rgba(14,22,30,0.92)_45%,rgba(56,120,220,0.12))] p-5 shadow-[0_18px_50px_rgba(0,0,0,0.3)] sm:p-6">
+              <div className="pointer-events-none absolute -left-10 -top-16 h-48 w-48 rounded-full bg-accent/15 blur-3xl" />
+              <div className="relative flex flex-col gap-4 @xl:flex-row @xl:items-start">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground shadow-[0_0_26px_rgba(87,229,234,0.35)]">
+                  <Sparkles className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">AI performance insight</p>
+                  <h3 className="mt-1 text-lg font-semibold text-white">{data.insight.title}</h3>
+                  <ClampText text={data.insight.body} clamp="line-clamp-3" className="mt-1.5 text-sm leading-6 text-slate-300" />
+                  <p className="mt-2 text-xs text-slate-500">{data.insight.basis}</p>
+                </div>
+                <Button onClick={onOpenChat} className="shrink-0 cursor-pointer self-start rounded-full bg-white/10 text-white hover:bg-white/15">
+                  Discuss with coach <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </Reveal>
         </div>
       </div>
@@ -166,27 +153,39 @@ export function DashboardOverview({
       <Reveal index={3}>
         <TrainingDaysEditor onSaved={onDaysSaved} onOpenTraining={onViewToday} />
       </Reveal>
-
-      {/* AI insight */}
-      <Reveal index={4}>
-        <div className="relative overflow-hidden rounded-[22px] border border-accent/25 bg-[linear-gradient(120deg,rgba(87,229,234,0.14),rgba(14,22,30,0.92)_45%,rgba(56,120,220,0.14))] p-6 shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-7">
-          <div className="pointer-events-none absolute -left-10 -top-16 h-48 w-48 rounded-full bg-accent/20 blur-3xl" />
-          <div className="relative flex flex-col gap-5 md:flex-row md:items-center">
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground shadow-[0_0_30px_rgba(87,229,234,0.4)]">
-              <Sparkles className="h-6 w-6" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">AI performance insight</p>
-              <h3 className="mt-1 text-xl font-semibold text-white">{data.insight.title}</h3>
-              <p className="mt-2 text-sm leading-7 text-slate-300">{data.insight.body}</p>
-              <p className="mt-2 text-xs text-slate-500">{data.insight.basis}</p>
-            </div>
-            <Button onClick={onOpenChat} className="shrink-0 cursor-pointer rounded-full bg-white/10 text-white hover:bg-white/15">
-              Discuss with coach <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </Reveal>
     </div>
+  )
+}
+
+/** One of today's sessions, on a line of its own: what it is and how it stands, when and how long, and what it's for. */
+function TodaySession({ session }: { session: Session }) {
+  const style = categoryStyle[session.category] ?? categoryStyle.mobility
+  const done = session.status === "Completed"
+  return (
+    <li className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025] py-3.5 pl-5 pr-4 transition-colors duration-300 hover:border-white/15">
+      <div className={cn("absolute inset-y-0 left-0 w-1 bg-gradient-to-b", style.bar)} />
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider", style.chip)}>
+              <style.icon className="h-3 w-3" />
+              {session.category}
+            </span>
+            <span className="text-[11px] text-slate-500">{session.basis}</span>
+          </div>
+          <h4 className="mt-1.5 font-semibold leading-6 text-white">{session.name}</h4>
+        </div>
+        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs",
+          done ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/10 text-slate-300")}>
+          {done && <CheckCircle2 className="h-3 w-3" />}
+          {session.status}
+        </span>
+      </div>
+      <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-slate-400">
+        <span className="inline-flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-slate-500" />{session.time}</span>
+        <span className="inline-flex items-center gap-1.5"><Timer className="h-3.5 w-3.5 text-slate-500" />{session.duration}</span>
+      </p>
+      <ClampText text={session.objective} clamp="line-clamp-2" className="mt-2 text-sm leading-6 text-slate-300" />
+    </li>
   )
 }

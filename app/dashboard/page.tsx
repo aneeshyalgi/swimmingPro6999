@@ -48,7 +48,7 @@ import { GuidedSetup, type SetupStep } from "@/components/guided-setup"
 import { SubscriptionDialog } from "@/components/subscription-dialog"
 import { ChangePasswordDialog } from "@/components/change-password-dialog"
 import { SurveyLink, useSurvey } from "@/components/survey/survey-link"
-import { Banner } from "@/components/training-ui"
+import { Banner, ClampText } from "@/components/training-ui"
 import { Coin, TokenStore, type StoreNotice } from "@/components/token-store"
 import { TokensNeededDialog } from "@/components/tokens-needed-dialog"
 import { TermsEnding, TermsUpdate } from "@/components/legal/terms-update"
@@ -707,41 +707,40 @@ export default function DashboardPage() {
               {terms?.declined && <TermsEnding endsAt={terms.ends_at} onAgree={() => setTermsOpen(true)} />}
               {activeTab === "overview" ? (
                 <Reveal>
-                  <section className="relative mb-6 overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(87,229,234,0.16),rgba(12,20,28,0.94)_42%,rgba(56,120,220,0.12))] p-6 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-8">
+                  <section className="relative mb-5 overflow-hidden rounded-[26px] border border-white/[0.08] bg-[linear-gradient(125deg,rgba(87,229,234,0.16),rgba(12,20,28,0.94)_42%,rgba(56,120,220,0.12))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6">
                     <div className="pointer-events-none absolute inset-0 opacity-50">
                       <WaterBubbles />
                     </div>
-                    <div className="relative grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
-                      <div className="max-w-2xl">
+                    {/* Who and what the plan is for, then its four facts (each in full, never cut short), then its tags. */}
+                    <div className="relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                      <div className="min-w-0 max-w-3xl">
                         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent">Training hub</p>
-                        <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">{userData.fullName}</h1>
-                        <p className="mt-3 text-base leading-7 text-slate-300">{dashboardPlan.focus}</p>
-                        <div className="mt-5 flex flex-wrap gap-2">
-                          {dashboardPlan.tags.map((tag: string) => (
-                            <span key={tag} className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs font-medium text-slate-200 backdrop-blur-md">
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
+                        <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-white sm:text-3xl">{userData.fullName}</h1>
+                        <ClampText text={dashboardPlan.focus} clamp="line-clamp-3 sm:line-clamp-2" className="mt-2 text-sm leading-6 text-slate-300 sm:text-[15px]" />
                       </div>
-                      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
+                      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:w-[25rem] lg:grid-cols-2">
                         {[
                           { label: "Phase", value: dashboardPlan.phase, icon: Layers },
                           { label: "Block length", value: dashboardPlan.phase_duration, icon: Timer },
                           { label: "Swim / week", value: String(userData.swimSessionsPerWeek), icon: Waves },
                           { label: "Gym / week", value: String(userData.gymSessionsPerWeek), icon: Dumbbell },
                         ].map((stat) => (
-                          <div key={stat.label} className="min-w-0 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 backdrop-blur-md lg:w-44">
-                            <dt className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-400">
-                              <stat.icon className="h-3.5 w-3.5 text-accent" />
+                          <div key={stat.label} className="min-w-0 rounded-xl border border-white/10 bg-black/20 px-3 py-2 backdrop-blur-md">
+                            <dt className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+                              <stat.icon className="h-3 w-3 text-accent" />
                               {stat.label}
                             </dt>
-                            <dd className="mt-1 truncate text-lg font-semibold text-white" title={stat.value}>
-                              {stat.value}
-                            </dd>
+                            <dd className="mt-0.5 text-sm font-semibold leading-5 text-white">{stat.value}</dd>
                           </div>
                         ))}
                       </dl>
+                    </div>
+                    <div className="relative mt-4 flex flex-wrap gap-1.5">
+                      {dashboardPlan.tags.map((tag: string) => (
+                        <span key={tag} className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-0.5 text-[11px] font-medium text-slate-200 backdrop-blur-md">
+                          {tag}
+                        </span>
+                      ))}
                     </div>
                   </section>
                 </Reveal>
