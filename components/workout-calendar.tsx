@@ -15,31 +15,20 @@ import {
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Reveal, Tile, useCountUp } from "@/components/dashboard-ui"
+import { Reveal } from "@/components/dashboard-ui"
 import type { GuideEvent } from "@/components/dashboard-guide"
-import { DoseChip, GymWorkoutBody, GymWorkoutCard } from "@/components/gym-workout"
+import { DoseChip, GymWorkoutBody, GymWorkoutCard, GymWorkoutLine } from "@/components/gym-workout"
 import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
 import { CalendarDay } from "@/components/calendar-day"
 import { WorkoutBuilder } from "@/components/workout-builder"
 import { GenerationOverlay, useWeekGeneration } from "@/components/generation-overlay"
 import { WeekCoach, WeekCoachButton, type WeekLink } from "@/components/week-coach"
-import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, LoadingLane, TwoColumnFlow, WeekSkeleton, inputClass, shortDate, todayISO, useRemovals } from "@/components/training-ui"
+import { Banner, CompletionRow, DayTileSkeleton, ExportWeekButton, LoadingLane, WeekDay, WeekSkeleton, WeekStat, inputClass, shortDate, todayISO, useRemovals } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import { blankDoc, docFromItem, type BuilderDoc } from "@/lib/workout-builder"
 import { GENERATION_CANCELLED, downloadGymPdf, downloadWeekPdf, gymSavedSchema, gymWeekSchema, mondayISO, shiftWeek, trainingRequest, type GymItem, type GymWeek, type TrainingWeek } from "@/lib/training"
 
 const planSteps = ["Reading your onboarding, meets and check-ins", "Choosing your coach's sessions for this training block", "Matching every movement to your level and equipment", "Personalising warm-ups and mobility", "Adding them to your gym week"]
-
-function Stat({ icon: Icon, label, value, unit, tone }: { icon: typeof Dumbbell; label: string; value: number; unit?: string; tone: string }) {
-  const shown = useCountUp(value)
-  return (
-    <div className="rounded-[20px] border border-white/[0.08] bg-[linear-gradient(160deg,rgba(22,32,42,0.82),rgba(10,15,21,0.92))] p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-white/15">
-      <span className={cn("flex h-9 w-9 items-center justify-center rounded-xl", tone)}><Icon className="h-4 w-4" /></span>
-      <p className="mt-4 text-2xl font-bold tabular-nums tracking-tight text-white sm:text-3xl">{shown.toLocaleString()}{unit && <span className="ml-1 text-sm font-medium text-slate-400">{unit}</span>}</p>
-      <p className="mt-1 text-xs text-slate-400">{label}</p>
-    </div>
-  )
-}
 
 type Editing = { doc: BuilderDoc; key: string | null; isNew: boolean; token: number }
 type DateAction = { mode: "move" | "duplicate"; item: GymItem; date: string }
@@ -331,23 +320,29 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, refresh = 0, revealWe
     setFocusDate(null)
     setFocusSession(key)
   }
-  /** A day's workouts. `expanded` opens every card and always offers to add another (the full-screen day view); on the
-   *  page each card opens full screen instead. */
-  const daySessions = (item: Day, expanded = false) => {
+  const tickProps = (item: Day, workout: GymItem) => {
     const future = item.date > today
-    return (
-      <div className="space-y-3">
-        {item.workouts.map((workout) => <CompletionRow key={workout.key} checked={workout.completed} saving={ticking.has(workout.key)} locked={future} busy={busy} hint={future ? "You can tick this off on the day" : undefined}
-          label={workout.workout.title} onToggle={() => toggle(workout)} removal={removals.get(workout.key)} onDismissRemoval={() => removals.dismiss(workout.key)}>
-          <GymWorkoutCard item={workout} defaultOpen={expanded} onOpen={expanded ? undefined : (event) => openSession(workout.key, event.currentTarget)}
-            className={changed?.has(workout.key) ? "wc-changed wc-gym" : undefined}
-            onEdit={() => openBuilder(docFromItem(workout), workout.key, false)} actions={cardMenu(workout)} />
-        </CompletionRow>)}
-        {(expanded || !item.workouts.length) && <button type="button" disabled={busy} onClick={() => newWorkout(item.date)} className="group flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-500 transition-all hover:border-violet-300/40 hover:text-violet-100 disabled:opacity-50">
-          <Plus className="h-4 w-4 transition-transform duration-300 group-hover:rotate-90" />{item.workouts.length ? `Add another workout for ${item.day_name}` : `Build a workout for ${item.day_name}`}
-        </button>}
-      </div>
-    )
+    return {
+      checked: workout.completed, saving: ticking.has(workout.key), locked: future, busy, hint: future ? "You can tick this off on the day" : undefined,
+      label: workout.workout.title, onToggle: () => toggle(workout), removal: removals.get(workout.key), onDismissRemoval: () => removals.dismiss(workout.key),
+    }
+  }
+  /** A day's workouts in the full-screen day view: every card open, and a button to add another. */
+  const daySessions = (item: Day) => (
+    <div className="space-y-3">
+      {item.workouts.map((workout) => <CompletionRow key={workout.key} {...tickProps(item, workout)}>
+        <GymWorkoutCard item={workout} defaultOpen className={changed?.has(workout.key) ? "wc-changed wc-gym" : undefined}
+          onEdit={() => openBuilder(docFromItem(workout), workout.key, false)} actions={cardMenu(workout)} />
+      </CompletionRow>)}
+      <button type="button" disabled={busy} onClick={() => newWorkout(item.date)} className="group flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-500 transition-all hover:border-violet-300/40 hover:text-violet-100 disabled:opacity-50">
+        <Plus className="h-4 w-4 transition-transform duration-300 group-hover:rotate-90" />{item.workouts.length ? `Add another workout for ${item.day_name}` : `Build a workout for ${item.day_name}`}
+      </button>
+    </div>
+  )
+  /** Open a day full screen, growing out of what was clicked (its tile in the strip, or its date in the list). */
+  const openDay = (date: string, element: HTMLElement) => {
+    setFocusOrigin(tileCentre(element))
+    setFocusDate(date)
   }
   const focusDay = days.find((item) => item.date === focusDate) ?? null
   const weekSessions = days.flatMap((day) => day.workouts.map((workout) => ({ day, workout })))
@@ -398,7 +393,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, refresh = 0, revealWe
                   level={minutes / maxDayMinutes} amount={minutes ? String(minutes) : null} unit="min" {...dayProgress(item)} emptyLabel="Free"
                   changed={!!changed && item.workouts.some((workout) => changed.has(workout.key))}
                   coach={coachLink ? { scanning: coachLink.scanning, pending: coachLink.pending[item.date], focus: coachLink.focus === item.date } : undefined}
-                  onOpen={(event) => { setFocusOrigin(tileCentre(event.currentTarget)); setFocusDate(item.date) }}
+                  onOpen={(event) => openDay(item.date, event.currentTarget)}
                   icons={item.workouts.length > 0 && <>
                     <Dumbbell className="h-3 w-3 text-violet-200" />
                     {item.workouts.length > 1 && <span className="text-[9px] font-bold text-violet-100">×{item.workouts.length}</span>}
@@ -407,6 +402,12 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, refresh = 0, revealWe
             })}
           </div>
           {week && <p className="relative mt-3 flex items-center gap-1.5 text-[11px] text-slate-400"><Maximize2 className="h-3 w-3" />Tap a day to open its workouts full screen</p>}
+          {week && <div className="relative mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <WeekStat icon={Dumbbell} label="Workouts" value={week.summary.sessions} tone="bg-violet-400/12 text-violet-300" />
+            <WeekStat icon={CheckCircle2} label="Completed" value={week.summary.completed} tone="bg-emerald-400/12 text-emerald-300" />
+            <WeekStat icon={Timer} label="Planned minutes" value={week.summary.minutes} unit="min" tone="bg-amber-300/12 text-amber-200" />
+            <WeekStat icon={ListChecks} label="Exercises" value={week.summary.exercises} tone="bg-sky-400/12 text-sky-300" />
+          </div>}
         </section>
       </Reveal>
 
@@ -416,44 +417,28 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, refresh = 0, revealWe
         <LoadingLane tone="gym" title="Loading your gym week" messages={["Fetching this week's workouts", "Checking completed sessions", "Matching your equipment"]} />
         <WeekSkeleton />
       </>}
-      {week && <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[
-          { icon: Dumbbell, label: "Workouts this week", value: week.summary.sessions, tone: "bg-violet-400/12 text-violet-300" },
-          { icon: CheckCircle2, label: "Completed", value: week.summary.completed, tone: "bg-emerald-400/12 text-emerald-300" },
-          { icon: Timer, label: "Planned minutes", value: week.summary.minutes, unit: "min", tone: "bg-amber-300/12 text-amber-200" },
-          { icon: ListChecks, label: "Exercises", value: week.summary.exercises, tone: "bg-sky-400/12 text-sky-300" },
-        ].map((stat, index) => <Reveal key={stat.label} index={1 + index}><Stat {...stat} /></Reveal>)}
-      </div>}
 
-      {week && <TwoColumnFlow weights={days.map((item) => 2 + Math.max(1, item.workouts.length) * 1.4)} items={days.map((item, index) => {
-          const isToday = item.date === today
-          const { total, done } = dayProgress(item)
-          return <Reveal key={item.date} index={5 + index}>
-            <div id={`gym-day-${item.date}`} className="scroll-mt-32">
-              <Tile glow={isToday} className={cn(total > 0 && done === total && "border-emerald-400/30")}>
-                <div className="mb-4 flex items-start gap-4">
-                  <div className={cn("flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl border", isToday ? "border-violet-300/40 bg-violet-400/15" : "border-white/10 bg-white/[0.04]")}>
-                    <span className={cn("text-[10px] font-semibold uppercase tracking-wider", isToday ? "text-violet-200" : "text-slate-500")}>{shortDate(item.date, { month: "short" })}</span>
-                    <span className="text-xl font-bold leading-none text-white">{Number(item.date.slice(8))}</span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-lg font-semibold tracking-tight text-white">{item.day_name}</h3>
-                      {isToday && <span className="rounded-full bg-violet-300 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-950">Today</span>}
-                      {total > 0 && <span key={`${done}/${total}`} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums transition-colors duration-500", done > 0 && "chip-pop",
-                        done === total ? "border-emerald-300/50 bg-gradient-to-r from-emerald-400/25 to-teal-400/15 text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.3)]" : "border-white/10 bg-white/[0.04] text-slate-300")}>
-                        {done === total ? <><Trophy className="h-3 w-3 text-amber-200" />Day complete</> : <><CheckCircle2 className="h-3 w-3" />{done}/{total} done</>}
-                      </span>}
-                    </div>
-                    <p className="mt-1 text-sm text-slate-400">{total ? `${item.workouts.reduce((sum, workout) => sum + workout.workout.estimated_duration_minutes, 0)} min of strength work` : "No workout planned"}</p>
-                  </div>
-                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => newWorkout(item.date)} className="shrink-0 rounded-full text-slate-400 hover:bg-violet-400/10 hover:text-violet-100"><Plus className="mr-1 h-4 w-4" />Add</Button>
-                </div>
-                {daySessions(item)}
-              </Tile>
-            </div>
-          </Reveal>
-        })} />}
+      {week && <>
+        <p className="flex items-center gap-2 px-1 text-xs text-slate-500"><CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />Tick a workout off when you finish it (tap again to untick). Tap a workout to open it.</p>
+        <div className="space-y-3">
+          {days.map((item, index) => {
+            const { total, done } = dayProgress(item)
+            return <Reveal key={item.date} index={1 + index}>
+              <WeekDay id={`gym-day-${item.date}`} tone="gym" date={item.date} dayName={item.day_name} isToday={item.date === today} total={total} done={done}
+                summary={!total ? "Free day" : done === total ? `${dayMinutes(item)} min`
+                  : `${dayMinutes(item)} min · ${done ? `${done} of ${total} done` : `${total} workout${total === 1 ? "" : "s"}`}`}
+                onOpen={(event) => openDay(item.date, event.currentTarget)}
+                add={<Button size="sm" variant="ghost" disabled={busy} onClick={() => newWorkout(item.date)} aria-label={`Add a workout on ${item.day_name}`} title="Build a workout for this day"
+                  className="shrink-0 rounded-full text-slate-400 hover:bg-violet-400/10 hover:text-violet-100"><Plus className="mr-1 h-4 w-4" />Add</Button>}>
+                {total > 0 && item.workouts.map((workout) => <CompletionRow key={workout.key} compact {...tickProps(item, workout)}>
+                  <GymWorkoutLine item={workout} actions={cardMenu(workout)} className={changed?.has(workout.key) ? "wc-changed wc-gym" : undefined}
+                    onOpen={(event) => openSession(workout.key, event.currentTarget)} />
+                </CompletionRow>)}
+              </WeekDay>
+            </Reveal>
+          })}
+        </div>
+      </>}
 
       <Dialog open={!!dateAction} onOpenChange={(open) => { if (!open) setDateAction(null) }}>
         <DialogContent className="border-white/10 bg-[#0d151c] sm:max-w-sm">
@@ -503,7 +488,7 @@ export function WorkoutCalendar({ onChanged, onGuideEvent, refresh = 0, revealWe
             </span>
           })()}
         </>}>
-        {focusDay && daySessions(focusDay, true)}
+        {focusDay && daySessions(focusDay)}
       </DayFocus>
 
       <WorkoutFocus tone="gym" id={openWorkout ? focusSession : null} origin={focusOrigin}

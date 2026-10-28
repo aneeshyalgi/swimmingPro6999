@@ -1,8 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react"
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileDown, FileText, Loader2, Maximize2, Sparkles, Trash2, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, ChevronRight, FileDown, FileText, Loader2, Maximize2, Moon, Sparkles, Trash2, Trophy, X, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useCountUp } from "@/components/dashboard-ui"
 import { cn } from "@/lib/utils"
 
 /** A workout card's title: one line with an ellipsis, but up to two lines on a phone, where one line leaves too little. */
@@ -233,7 +234,8 @@ export function TwoColumnFlow({ items, weights, gap = 5 }: { items: ReactNode[];
   )
 }
 
-/** "Export week" pill: downloads the visible week as one branded PDF, with its own progress state. */
+/** "Export week" pill: downloads the visible week as one branded PDF, with its own progress state. Just its icon on a
+ *  phone, so the week's buttons fit on fewer lines. */
 export function ExportWeekButton({ onExport, disabled }: { onExport: () => Promise<unknown>; disabled?: boolean }) {
   const [exporting, setExporting] = useState(false)
   const run = async () => {
@@ -242,10 +244,190 @@ export function ExportWeekButton({ onExport, disabled }: { onExport: () => Promi
   }
   return (
     <Button variant="outline" disabled={disabled || exporting} aria-busy={exporting} onClick={() => void run()} title="Download this week as a PDF"
-      className="rounded-full border-white/15 bg-white/[0.04] backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/40 hover:bg-accent/10 hover:text-white">
-      {exporting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <FileDown className="mr-1.5 h-4 w-4" />}
-      {exporting ? "Preparing PDF…" : "Export week"}
+      className="rounded-full border-white/15 bg-white/[0.04] backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/40 hover:bg-accent/10 hover:text-white max-sm:w-9 max-sm:px-0">
+      {exporting ? <Loader2 className="h-4 w-4 animate-spin sm:mr-1.5" /> : <FileDown className="h-4 w-4 sm:mr-1.5" />}
+      <span className="max-sm:sr-only">{exporting ? "Preparing PDF…" : "Export week"}</span>
     </Button>
+  )
+}
+
+/** One of the week's totals in its header (distance, sessions, minutes…), counting up as it appears. */
+export function WeekStat({ icon: Icon, label, value, unit, tone }: { icon: LucideIcon; label: string; value: number; unit?: string; tone: string }) {
+  const shown = useCountUp(value)
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2 backdrop-blur-md">
+      <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", tone)}><Icon className="h-3.5 w-3.5" /></span>
+      <span className="min-w-0">
+        <span className="block text-sm font-bold tabular-nums leading-tight text-white sm:text-base">
+          {shown.toLocaleString()}{unit && <span className="ml-0.5 text-xs font-medium text-slate-400">{unit}</span>}
+        </span>
+        <span className="block truncate text-[11px] leading-tight text-slate-400">{label}</span>
+      </span>
+    </div>
+  )
+}
+
+/** Whether an element's text runs past its line clamp; measured again whenever its size changes. */
+function useOverflow<T extends HTMLElement>(watch: unknown, active: boolean) {
+  const ref = useRef<T>(null)
+  const [overflows, setOverflows] = useState(false)
+  useEffect(() => {
+    const element = ref.current
+    if (!element || !active) return
+    const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [watch, active])
+  return [ref, overflows] as const
+}
+
+/** Text cut to a few lines (`clamp`, line-clamp classes), with Read more when it runs longer. */
+export function ClampText({ text, clamp, className }: { text: string; clamp: string; className?: string }) {
+  const [open, setOpen] = useState(false)
+  const [ref, overflows] = useOverflow<HTMLParagraphElement>(text, !open)
+  return (
+    <>
+      <p ref={ref} className={cn(className, !open && clamp)}>{text}</p>
+      {(overflows || open) && (
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
+          className="mt-1.5 inline-flex items-center gap-1 rounded-full text-xs font-semibold text-accent transition-colors hover:text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          {open ? "Show less" : "Read more"}<ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-300", open && "rotate-180")} />
+        </button>
+      )}
+    </>
+  )
+}
+
+/**
+ * What a day of the week is for, under its name: a line (two on a phone) until it's opened, then in full with the day's
+ * recovery advice. It only opens when there's more to read.
+ */
+export function DayNotes({ objective, recovery }: { objective: string; recovery: string[] }) {
+  const [open, setOpen] = useState(false)
+  const [ref, overflows] = useOverflow<HTMLParagraphElement>(objective, !open)
+  const panel = useId()
+  if (!objective.trim() && !recovery.length) return null
+  const more = overflows || open || recovery.length > 0
+  const toggle = () => setOpen((value) => !value)
+  return (
+    <div className="mt-2">
+      <div className="flex items-start gap-2">
+        <p ref={ref} onClick={more ? toggle : undefined}
+          className={cn("min-w-0 flex-1 text-sm leading-6 text-slate-400", !open && "line-clamp-2 sm:line-clamp-1", more && "cursor-pointer transition-colors hover:text-slate-300")}>
+          {objective.trim() || "Recovery for this day"}
+        </p>
+        {more && (
+          <button type="button" aria-expanded={open} aria-controls={panel} onClick={toggle}
+            aria-label={open ? "Show less of this day's plan" : `Show this day's full plan${recovery.length ? ` and ${recovery.length} recovery tip${recovery.length === 1 ? "" : "s"}` : ""}`}
+            className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            {recovery.length > 0 && <><Moon className="h-3 w-3 text-amber-200" /><span className="tabular-nums">{recovery.length}</span></>}
+            <span className="max-sm:hidden">{open ? "Less" : "More"}</span>
+            <ChevronDown className={cn("h-3 w-3 transition-transform duration-300", open && "rotate-180")} />
+          </button>
+        )}
+      </div>
+      {recovery.length > 0 && (
+        <div id={panel} hidden={!open} className="dash-reveal mt-2 rounded-xl border border-amber-200/10 bg-amber-200/[0.035] px-3 py-2.5">
+          <h5 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-100/80"><Moon className="h-3 w-3 text-amber-200" />Recovery</h5>
+          <ul className="space-y-1 text-sm leading-6 text-slate-300">
+            {recovery.map((item, index) => <li key={index} className="flex gap-2"><span className="mt-2.5 h-1 w-1 shrink-0 rounded-full bg-amber-200/80" />{item}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const DAY_TONES = {
+  swim: { today: "border-accent/30 shadow-[0_0_0_1px_rgba(87,229,234,0.06),0_14px_36px_rgba(0,0,0,0.25)]", badge: "border-accent/40 bg-accent/15", month: "text-accent", pill: "bg-accent text-accent-foreground" },
+  gym: { today: "border-violet-300/30 shadow-[0_0_0_1px_rgba(167,139,250,0.06),0_14px_36px_rgba(0,0,0,0.25)]", badge: "border-violet-300/40 bg-violet-400/15", month: "text-violet-200", pill: "bg-violet-300 text-slate-950" },
+} as const
+
+/**
+ * One day in the swim or gym week's list: its date and name (which open the day full screen), what it comes to
+ * (`summary`), a button to add to it (`add`), what it's for (`notes`) and its sessions (`children`), a line each.
+ */
+export function WeekDay({ id, tone, date, dayName, isToday, summary, total, done, add, notes, onOpen, children }: {
+  id: string
+  tone: keyof typeof DAY_TONES
+  date: string
+  dayName: string
+  isToday: boolean
+  summary: string
+  /** Sessions on the day and how many are ticked off: all of them makes it complete. */
+  total: number
+  done: number
+  add?: ReactNode
+  notes?: ReactNode
+  onOpen: (event: MouseEvent<HTMLButtonElement>) => void
+  children?: ReactNode
+}) {
+  const style = DAY_TONES[tone]
+  const complete = total > 0 && done === total
+  return (
+    <div id={id} className="scroll-mt-32">
+      <div className={cn("rounded-2xl border bg-[linear-gradient(160deg,rgba(22,32,42,0.72),rgba(10,15,21,0.9))] p-3 transition-colors duration-500 sm:p-4",
+        isToday ? style.today : complete ? "border-emerald-400/25" : "border-white/[0.07]")}>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onOpen} aria-haspopup="dialog" title="Open this day full screen"
+            className="group/day flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <span className={cn("flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-xl border transition-colors duration-300 group-hover/day:border-white/25", isToday ? style.badge : "border-white/10 bg-white/[0.04]")}>
+              <span className={cn("text-[9px] font-semibold uppercase leading-none tracking-wider", isToday ? style.month : "text-slate-500")}>{shortDate(date, { month: "short" })}</span>
+              <span className="mt-0.5 text-base font-bold leading-none text-white">{Number(date.slice(8))}</span>
+            </span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-2">
+                <span className="truncate font-semibold tracking-tight text-white">{dayName}</span>
+                {isToday && <span className={cn("shrink-0 rounded-full px-1.5 py-px text-[9px] font-bold uppercase tracking-wider", style.pill)}>Today</span>}
+              </span>
+              <span className="mt-0.5 block truncate text-xs tabular-nums text-slate-400">{summary}</span>
+            </span>
+          </button>
+          {complete && (
+            <span key={`${done}/${total}`} title="Day complete" className="chip-pop inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-300/50 bg-gradient-to-r from-emerald-400/25 to-teal-400/15 px-1.5 py-1 text-[11px] font-semibold text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.3)] sm:px-2 sm:py-0.5">
+              <Trophy className="h-3 w-3 text-amber-200" /><span className="max-sm:sr-only">Day complete</span>
+            </span>
+          )}
+          {add}
+        </div>
+        {notes}
+        {children && <div className="mt-3 space-y-2">{children}</div>}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A session in the week's list, on one line: its kind's icon, its title and what it comes to (`meta` under the title;
+ * `aside` on the right from sm up, where the numbers line up down the week). The line opens it full screen (`onOpen`);
+ * its ••• menu (`actions`) sits beside it.
+ */
+export function SessionLine({ icon, iconClassName, title, meta, aside, actions, className, onOpen }: {
+  icon: ReactNode
+  iconClassName?: string
+  title: string
+  meta?: ReactNode
+  aside?: ReactNode
+  actions?: ReactNode
+  className?: string
+  onOpen: (event: MouseEvent<HTMLButtonElement>) => void
+}) {
+  return (
+    <div className={cn("group/line flex items-center rounded-xl border border-white/[0.07] bg-white/[0.025] transition-colors duration-300 hover:border-white/15 hover:bg-white/[0.045]", className)}>
+      <button type="button" aria-haspopup="dialog" title="Open full screen" onClick={onOpen}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-2.5 pl-2.5 pr-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:pl-3">
+        <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", iconClassName)}>{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className={cn("block truncate text-sm font-semibold text-white", phoneTitle)}>{title}</span>
+          {meta && <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">{meta}</span>}
+        </span>
+        {aside && <span className="shrink-0 text-right max-sm:hidden">{aside}</span>}
+        <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-slate-500 transition-[color,transform] duration-300 group-hover/line:translate-x-0.5 group-hover/line:text-slate-300" />
+      </button>
+      {actions && <div className="shrink-0 pr-1">{actions}</div>}
+    </div>
   )
 }
 
@@ -425,8 +607,10 @@ export function RemovalError({ message, onDismiss, className }: { message?: stri
  * confirms the save, a shake and revert signal a failure. A workout being deleted (`removal`) says so on itself, then
  * slides away while its row closes up, so the workouts below rise into its place.
  */
-export function CompletionRow({ checked, saving, locked, busy, label, hint, onToggle, removal, onDismissRemoval, children }: {
+export function CompletionRow({ checked, saving, locked, busy, label, hint, onToggle, removal, onDismissRemoval, compact = false, children }: {
   checked: boolean; locked?: boolean; label: string; hint?: string; children: ReactNode
+  /** Beside a one-line session (SessionLine) rather than a card: the tick sits level with it. */
+  compact?: boolean
   /** This workout's tick is being saved, from here or from another view of it (the day or workout opened full screen). */
   saving?: boolean
   /** Another change is being saved: ticking waits until it's done. */
@@ -491,14 +675,14 @@ export function CompletionRow({ checked, saving, locked, busy, label, hint, onTo
   return (
     <div ref={row} data-gone={gone || undefined} className="removal-row">
       <div className={cn("min-h-0", gone && "overflow-hidden")}>
-        <div className={cn("flex items-start gap-3", gone && "removal-out", phase === "failed" && "removal-shake")}>
-          <CheckToggle className={cn("mt-[18px] transition-opacity duration-300", removing && "opacity-30")} checked={shown} burst={burst} disabled={locked || removing}
+        <div className={cn("flex", compact ? "items-center gap-2.5" : "items-start gap-3", gone && "removal-out", phase === "failed" && "removal-shake")}>
+          <CheckToggle className={cn("transition-opacity duration-300", !compact && "mt-[18px]", removing && "opacity-30")} checked={shown} burst={burst} disabled={locked || removing}
             onClick={toggle} save={save} label={`${shown ? "Untick" : "Mark completed"}: ${label}`} hint={hint} />
-          <div className={cn("relative min-w-0 flex-1 rounded-2xl transition-[box-shadow,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-            shown && "shadow-[0_0_0_1px_rgba(52,211,153,0.35),0_12px_32px_rgba(52,211,153,0.10)]")}>
+          <div className={cn("relative min-w-0 flex-1 transition-[box-shadow,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]", compact ? "rounded-xl" : "rounded-2xl",
+            shown && (compact ? "shadow-[0_0_0_1px_rgba(52,211,153,0.3),0_8px_22px_rgba(52,211,153,0.08)]" : "shadow-[0_0_0_1px_rgba(52,211,153,0.35),0_12px_32px_rgba(52,211,153,0.10)]"))}>
             <div inert={removing} className={cn("transition-[opacity,filter] duration-300", removing && "opacity-45 saturate-[0.35]")}>{children}</div>
-            {shown && burst > 0 && <span key={burst} aria-hidden className="completion-sweep pointer-events-none absolute inset-0 rounded-2xl" />}
-            {removing && <RemovalVeil done={gone} />}
+            {shown && burst > 0 && <span key={burst} aria-hidden className={cn("completion-sweep pointer-events-none absolute inset-0", compact ? "rounded-xl" : "rounded-2xl")} />}
+            {removing && <RemovalVeil done={gone} className={compact ? "rounded-xl" : undefined} />}
             {phase === "failed" && <RemovalError message={removal?.message} onDismiss={onDismissRemoval} />}
           </div>
         </div>
@@ -601,7 +785,7 @@ export function Skeleton({ className, delay = 0 }: { className?: string; delay?:
 /** Day tile placeholder for the week strip; the shimmer ripples across the seven days like a wave. */
 export function DayTileSkeleton({ index }: { index: number }) {
   return (
-    <div aria-hidden className="tl-day flex h-32 flex-col items-center justify-between rounded-[20px] border border-white/[0.06] bg-white/[0.025] px-1 py-2.5 sm:h-40" style={{ "--i": index } as CSSProperties}>
+    <div aria-hidden className="tl-day flex h-28 flex-col items-center justify-between rounded-[20px] border border-white/[0.06] bg-white/[0.025] px-1 py-2.5 sm:h-32" style={{ "--i": index } as CSSProperties}>
       <Skeleton className="h-2 w-7" delay={index * 90} />
       <Skeleton className="h-5 w-6 rounded-md" delay={index * 90} />
       <span className="tl-level relative h-8 w-2 overflow-hidden rounded-full bg-white/[0.06] sm:w-3"><span /></span>
@@ -610,34 +794,22 @@ export function DayTileSkeleton({ index }: { index: number }) {
   )
 }
 
-/** Stats row + day cards in the shape of a week, so nothing jumps when the data arrives. */
+/** Days of the week's list (see WeekDay) in their shape, so nothing jumps when the data arrives. */
 export function WeekSkeleton() {
   return (
-    <div className="tl-appear space-y-5" aria-hidden>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((card) => (
-          <div key={card} className="rounded-[20px] border border-white/[0.07] bg-white/[0.02] p-4">
-            <Skeleton className="h-9 w-9 rounded-xl" delay={card * 120} />
-            <Skeleton className="mt-4 h-7 w-20" delay={card * 120 + 60} />
-            <Skeleton className="mt-2 h-3 w-28 max-w-full" delay={card * 120 + 120} />
+    <div className="tl-appear space-y-3" aria-hidden>
+      {[0, 1, 2, 3].map((card) => (
+        <div key={card} className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3 sm:p-4">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-11 w-11 shrink-0 rounded-xl" delay={card * 150} />
+            <div className="flex-1 space-y-2"><Skeleton className="h-3.5 w-28" delay={card * 150 + 60} /><Skeleton className="h-3 w-44 max-w-full" delay={card * 150 + 120} /></div>
           </div>
-        ))}
-      </div>
-      <div className="grid gap-5 lg:grid-cols-2">
-        {[0, 1, 2, 3].map((card) => (
-          <div key={card} className="rounded-[22px] border border-white/[0.07] bg-white/[0.02] p-5">
-            <div className="flex items-center gap-3">
-              <Skeleton className="h-12 w-12 shrink-0 rounded-2xl" delay={card * 150} />
-              <div className="flex-1 space-y-2"><Skeleton className="h-4 w-32" delay={card * 150 + 60} /><Skeleton className="h-3 w-48 max-w-full" delay={card * 150 + 120} /></div>
-            </div>
-            <div className="mt-5 space-y-2.5">
-              <Skeleton className="h-14 w-full rounded-2xl" delay={card * 150 + 180} />
-              {card % 3 === 0 && <Skeleton className="h-14 w-full rounded-2xl" delay={card * 150 + 240} />}
-              <Skeleton className="h-3 w-2/3" delay={card * 150 + 300} />
-            </div>
+          <div className="mt-3 space-y-2">
+            <Skeleton className="h-[54px] w-full rounded-xl" delay={card * 150 + 180} />
+            {card % 2 === 0 && <Skeleton className="h-[54px] w-full rounded-xl" delay={card * 150 + 240} />}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   )
 }

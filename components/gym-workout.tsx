@@ -2,7 +2,7 @@
 
 import type { MouseEvent, ReactNode } from "react"
 import { CheckCircle2, Clock, Dumbbell, Flame, Lightbulb, MessageSquare, Pencil, Snowflake, Sparkles, UserRound, Waves } from "lucide-react"
-import { Expander, phoneTitle } from "@/components/training-ui"
+import { Expander, SessionLine, phoneTitle } from "@/components/training-ui"
 import { cn } from "@/lib/utils"
 import type { GymItem } from "@/lib/training"
 
@@ -111,6 +111,52 @@ export function GymWorkoutBody({ item, onEdit, actions }: { item: GymItem; onEdi
   )
 }
 
+/** Who a workout is from: the athlete (built themselves), their coach (from the chat or a call) or AI (a planned week). */
+function SourceTag({ item }: { item: GymItem }) {
+  const manual = item.source === "manual"
+  const fromCoach = item.source === "coach"
+  return (
+    <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-semibold normal-case tracking-normal", manual ? "bg-sky-400/15 text-sky-200" : fromCoach ? "bg-accent/15 text-cyan-100" : "bg-violet-400/15 text-violet-200")}>
+      {manual ? <UserRound className="h-2.5 w-2.5" /> : fromCoach ? <MessageSquare className="h-2.5 w-2.5" /> : <Sparkles className="h-2.5 w-2.5" />}{manual ? "Yours" : fromCoach ? "Coach" : "AI"}
+    </span>
+  )
+}
+
+/** When a workout is planned for in its day ("Morning · 07:00–08:00"), if it says. */
+const workoutWhen = (item: GymItem) => {
+  const meta = item.workout.meta
+  return [meta?.label, meta?.start_time && (meta.end_time ? `${meta.start_time}–${meta.end_time}` : meta.start_time)].filter(Boolean).join(" · ")
+}
+
+/**
+ * A strength workout in the gym week's list, on one line (see SessionLine): who it's from, when, whether it was edited,
+ * its dose and its minutes. The line opens it full screen (`onOpen`); `actions` is its ••• menu.
+ */
+export function GymWorkoutLine({ item, actions, className, onOpen }: {
+  item: GymItem
+  actions?: ReactNode
+  className?: string
+  onOpen: (event: MouseEvent<HTMLButtonElement>) => void
+}) {
+  const tone = doseTones[item.dose] ?? doseTones.Moderate
+  const when = workoutWhen(item)
+  const minutes = item.workout.estimated_duration_minutes
+  return (
+    <SessionLine onOpen={onOpen} actions={actions} title={item.workout.title}
+      className={cn(item.completed ? "border-emerald-400/25 bg-emerald-400/[0.03]" : "border-violet-400/15", className)}
+      icon={item.completed ? <CheckCircle2 className="h-4 w-4" /> : <Dumbbell className="h-4 w-4" />}
+      iconClassName={item.completed ? "bg-emerald-400/15 text-emerald-300" : tone.icon}
+      meta={<>
+        <SourceTag item={item} />
+        <span className="tabular-nums sm:hidden">{minutes} min</span>
+        <DoseChip dose={item.dose} className="px-1.5 py-px text-[10px] sm:hidden" />
+        {when && <span className="min-w-0 truncate">{when}</span>}
+        {item.edited && item.source !== "manual" && <span className="inline-flex items-center gap-1"><Pencil className="h-2.5 w-2.5" />edited</span>}
+      </>}
+      aside={<span className="flex items-center gap-3"><DoseChip dose={item.dose} /><span className="w-14 text-sm font-semibold tabular-nums text-violet-100">{minutes} min</span></span>} />
+  )
+}
+
 /**
  * A strength workout in the Workout Library calendar. With `onOpen` its button opens the workout full screen; without
  * it the card expands in place (`defaultOpen` starts it expanded, as in the full-screen day view).
@@ -124,23 +170,17 @@ export function GymWorkoutCard({ item, onEdit, actions, className, defaultOpen =
   onOpen?: (event: MouseEvent<HTMLButtonElement>) => void
 }) {
   const tone = doseTones[item.dose] ?? doseTones.Moderate
-  const meta = item.workout.meta
-  const when = [meta?.label, meta?.start_time && (meta.end_time ? `${meta.start_time}–${meta.end_time}` : meta.start_time)].filter(Boolean).join(" · ")
-  const manual = item.source === "manual"
-  // Added from the coach chat or a call.
-  const fromCoach = item.source === "coach"
+  const when = workoutWhen(item)
   return (
     <Expander defaultOpen={defaultOpen} onOpen={onOpen} className={cn(item.completed ? "border-emerald-400/25" : "border-violet-400/15", className)} header={
       <div className="flex items-center gap-3">
         <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", item.completed ? "bg-emerald-400/15 text-emerald-300" : tone.icon)}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Dumbbell className="h-5 w-5" />}</span>
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-px normal-case tracking-normal", manual ? "bg-sky-400/15 text-sky-200" : fromCoach ? "bg-accent/15 text-cyan-100" : "bg-violet-400/15 text-violet-200")}>
-              {manual ? <UserRound className="h-2.5 w-2.5" /> : fromCoach ? <MessageSquare className="h-2.5 w-2.5" /> : <Sparkles className="h-2.5 w-2.5" />}{manual ? "Yours" : fromCoach ? "Coach" : "AI"}
-            </span>
+            <SourceTag item={item} />
             {when && <span className="normal-case tracking-normal text-slate-400">{when}</span>}
             {item.completed && <span>Completed</span>}
-            {item.edited && !manual && <span className="inline-flex items-center gap-1 normal-case tracking-normal"><Pencil className="h-2.5 w-2.5" />edited</span>}
+            {item.edited && item.source !== "manual" && <span className="inline-flex items-center gap-1 normal-case tracking-normal"><Pencil className="h-2.5 w-2.5" />edited</span>}
           </p>
           <p className={cn("truncate font-semibold text-white", phoneTitle)}>{item.workout.title}</p>
         </div>

@@ -3,7 +3,7 @@
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { z } from "zod"
 import {
-  Activity, BookMarked, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock, Copy, Download, Dumbbell, MoreHorizontal, Pencil, Trash2,
+  Activity, BookMarked, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, Download, Dumbbell, MoreHorizontal, Pencil, Trash2,
   Flag, Heart, Layers, LibraryBig, MapPin, Maximize2, Moon, Plus, RotateCcw, Sparkles, Star,
   Target, Timer, Trophy, Waves, X,
 } from "lucide-react"
@@ -20,10 +20,10 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { SwimWorkoutDetails } from "@/components/swim-workout"
 import { CompetitionForm, RaceResultForm } from "@/components/training-forms"
-import { GrowBar, Reveal, Tile, TileHeader, useCountUp } from "@/components/dashboard-ui"
+import { GrowBar, Reveal, Tile, TileHeader } from "@/components/dashboard-ui"
 import {
-  Banner, CompetitionSkeleton, CompletionRow, DayTileSkeleton, EmptyState, ExportWeekButton, Expander, LoadingLane, TwoColumnFlow, WeekSkeleton, ZoneChip, ZoneStack, daysUntil, inputClass, labelClass, shortDate,
-  phoneTitle, todayISO, useRemovals, zoneTone,
+  Banner, ClampText, CompetitionSkeleton, CompletionRow, DayNotes, DayTileSkeleton, EmptyState, ExportWeekButton, Expander, LoadingLane, SessionLine, TwoColumnFlow, WeekDay, WeekSkeleton, WeekStat, ZoneChip,
+  ZoneStack, daysUntil, inputClass, labelClass, shortDate, phoneTitle, todayISO, useRemovals, zoneTone,
 } from "@/components/training-ui"
 import { WorkoutCalendar } from "@/components/workout-calendar"
 import { DayFocus, WorkoutFocus, tileCentre } from "@/components/day-focus"
@@ -45,29 +45,7 @@ type WeekItem = { completed: boolean; date: string; title: string } & ({ kind: "
 /** The id of an item's row in the week (its session's id). */
 const weekItemId = (item: WeekItem) => (item.kind === "swim" ? `swim:${item.key}` : `${item.kind}:${item.date}`)
 
-/** Rough height of a Training Week day card, used to balance the two columns. */
-const dayWeight = (day: TrainingWeek["days"][number]) => 2.4
-  + day.workouts.length * 1.15 + (day.strength ? 1 : 0) + (day.mobility.length ? 1 : 0) + day.competitions.length * 1.1
-  + (day.recovery.length ? 0.9 + (day.recovery.join("").length > 60 ? 0.4 : 0) : 0)
-  + (day.rest && !day.workouts.length && !day.strength ? 0.7 : 0) + (day.objective.length > 80 ? 0.3 : 0)
-
 const zoneEntries = (zones: Record<string, number>) => Object.entries(zones).map(([label, meters]) => ({ label, meters }))
-
-function StatCard({ icon: Icon, label, value, unit, tone, className }: {
-  icon: typeof Waves; label: string; value: number; unit?: string; tone: string; className?: string
-}) {
-  const shown = useCountUp(value)
-  return (
-    <div className={cn("group relative overflow-hidden rounded-[20px] border border-white/[0.08] bg-[linear-gradient(160deg,rgba(22,32,42,0.82),rgba(10,15,21,0.92))] p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-white/15", className)}>
-      <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-accent/0 blur-2xl transition-colors duration-500 group-hover:bg-accent/15" />
-      <span className={cn("flex h-9 w-9 items-center justify-center rounded-xl", tone)}><Icon className="h-4 w-4" /></span>
-      <p className="mt-4 text-2xl font-bold tabular-nums tracking-tight text-white sm:text-3xl">
-        {shown.toLocaleString()}{unit && <span className="ml-1 text-sm font-medium text-slate-400">{unit}</span>}
-      </p>
-      <p className="mt-1 text-xs text-slate-400">{label}</p>
-    </div>
-  )
-}
 
 const subTabs = [
   { value: "week", label: "Swim Week", short: "Swim", icon: CalendarDays },
@@ -120,6 +98,8 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
   const [changed, setChanged] = useState<ReadonlySet<string> | null>(null)
   // What the re-planner shows on the week while it's open (see WeekLink).
   const [coachLink, setCoachLink] = useState<WeekLink | null>(null)
+  // The week's zones and composition, under its days: closed until asked for.
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
   const mounted = useRef(false)
   const inFlight = useRef(false)
   const activeWeek = useRef(weekStart)
@@ -422,10 +402,15 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
     }
   }
 
-  /** A swim, strength session or day of mobility: what its card, the day view and the workout view each show. */
+  /** A swim, strength session or day of mobility: what its line in the week, the day view and the workout view each show. */
   type Session = {
     id: string; date: string; label: string; title: string; completed: boolean; className?: string
     header: ReactNode; body: ReactNode; menu: ReactNode; chips: ReactNode; onToggle: () => Promise<boolean>
+    /** Its line in the week (see SessionLine): its kind's icon, the title shown there, what it comes to under the title, and
+     *  its numbers on the right. */
+    line: { icon: ReactNode; iconClass: string; title: string; meta: ReactNode; aside: ReactNode }
+    /** Its minutes, for the day's total. */
+    minutes: number
   }
   const chip = (content: ReactNode, tone = "border-white/10 bg-white/[0.04] text-slate-300") =>
     <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold tabular-nums", tone)}>{content}</span>
@@ -435,11 +420,26 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
   const daySessionList = (day: Day): Session[] => {
     const sessions: Session[] = day.workouts.map((item, index) => {
       const label = item.origin === "My workout" ? "Your swim" : index === 0 ? "First swim" : index === 1 ? "Second swim" : `Additional swim ${index + 1}`
+      const minutes = item.workout.estimated_duration_minutes
       return {
-        id: `swim:${item.key}`, date: day.date, label, title: item.workout.title, completed: item.completed,
+        id: `swim:${item.key}`, date: day.date, label, title: item.workout.title, completed: item.completed, minutes,
         className: cn(item.completed && "border-emerald-400/25", changed?.has(`swim:${item.key}`) && "wc-changed wc-swim"),
         menu: itemMenu({ kind: "swim", key: item.key, date: day.date, title: item.workout.title, completed: item.completed }),
         onToggle: () => toggleSwim(item),
+        line: {
+          icon: item.completed ? <CheckCircle2 className="h-4 w-4" /> : <Waves className="h-4 w-4" />,
+          iconClass: item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent",
+          title: item.workout.title,
+          meta: <>
+            {item.origin === "My workout" && <span className="shrink-0 rounded-full bg-sky-400/15 px-1.5 py-px text-[10px] font-semibold text-sky-200">Your swim</span>}
+            <span className="tabular-nums sm:hidden">{item.distance_meters.toLocaleString()} m · {minutes} min</span>
+            <ZoneStack className="h-1 w-16 shrink-0 sm:w-28" entries={zoneEntries(item.zones)} />
+          </>,
+          aside: <span className="block w-20">
+            <span className="block text-sm font-bold tabular-nums text-cyan-100">{item.distance_meters.toLocaleString()} m</span>
+            <span className="block text-[11px] tabular-nums text-slate-500">{minutes} min</span>
+          </span>,
+        },
         chips: <>{chip(<><Waves className="h-3.5 w-3.5" />{item.distance_meters.toLocaleString()} m</>, "border-accent/25 bg-accent/10 text-cyan-100")}{doneChip(item.completed)}</>,
         header: <div className="flex items-center gap-3">
           <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", item.completed ? "bg-emerald-400/15 text-emerald-300" : "bg-accent/12 text-accent")}>{item.completed ? <CheckCircle2 className="h-5 w-5" /> : <Waves className="h-5 w-5" />}</span>
@@ -459,8 +459,16 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
       const strength = day.strength
       sessions.push({
         id: `strength:${day.date}`, date: day.date, label: "Strength", title: strength.title, completed: day.strength_completed, className: "border-violet-400/15",
+        minutes: strength.estimated_duration_minutes,
         menu: itemMenu({ kind: "strength", date: day.date, title: strength.title, completed: day.strength_completed }),
         onToggle: () => togglePart("strength", day.date, day.strength_completed),
+        line: {
+          icon: day.strength_completed ? <CheckCircle2 className="h-4 w-4" /> : <Dumbbell className="h-4 w-4" />,
+          iconClass: day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300",
+          title: strength.title,
+          meta: <span>Strength<span className="tabular-nums sm:hidden"> · {strength.estimated_duration_minutes} min</span></span>,
+          aside: <span className="block w-20 text-sm font-semibold tabular-nums text-violet-100">{strength.estimated_duration_minutes} min</span>,
+        },
         chips: <>{chip(<><Clock className="h-3.5 w-3.5" />{strength.estimated_duration_minutes} min</>, "border-violet-300/25 bg-violet-400/10 text-violet-100")}{doneChip(day.strength_completed)}</>,
         header: <div className="flex items-center gap-3">
           <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl max-sm:hidden", day.strength_completed ? "bg-emerald-400/15 text-emerald-300" : "bg-violet-400/15 text-violet-300")}><Dumbbell className="h-5 w-5" /></span>
@@ -487,10 +495,17 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
       const minutes = day.mobility.reduce((sum, item) => sum + item.duration_minutes, 0)
       const count = `${day.mobility.length} exercise${day.mobility.length === 1 ? "" : "s"}`
       sessions.push({
-        id: `mobility:${day.date}`, date: day.date, label: "Mobility", title: `${day.day_name} mobility`, completed: day.mobility_completed,
+        id: `mobility:${day.date}`, date: day.date, label: "Mobility", title: `${day.day_name} mobility`, completed: day.mobility_completed, minutes,
         className: cn("border-emerald-400/15", day.mobility_completed && "border-emerald-400/30", changed?.has(`mobility:${day.date}`) && "wc-changed wc-swim"),
         menu: itemMenu({ kind: "mobility", date: day.date, title: `${day.day_name} mobility`, completed: day.mobility_completed }),
         onToggle: () => togglePart("mobility", day.date, day.mobility_completed),
+        line: {
+          icon: day.mobility_completed ? <CheckCircle2 className="h-4 w-4" /> : <Heart className="h-4 w-4" />,
+          iconClass: "bg-emerald-400/15 text-emerald-300",
+          title: "Mobility",
+          meta: <span>{count}<span className="tabular-nums sm:hidden"> · {minutes} min</span></span>,
+          aside: <span className="block w-20 text-sm font-semibold tabular-nums text-emerald-100">{minutes} min</span>,
+        },
         chips: <>{chip(<><Heart className="h-3.5 w-3.5" />{count}</>, "border-emerald-300/25 bg-emerald-400/10 text-emerald-100")}{chip(<><Clock className="h-3.5 w-3.5" />{minutes} min</>)}{doneChip(day.mobility_completed)}</>,
         header: <div className="flex items-center gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-300 max-sm:hidden">{day.mobility_completed ? <CheckCircle2 className="h-5 w-5" /> : <Heart className="h-5 w-5" />}</span>
@@ -517,26 +532,51 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
     setFocusDate(null)
     setFocusSession(id)
   }
+  /** Open a day full screen, growing out of what was clicked (its tile in the strip, or its date in the list). */
+  const openDay = (date: string, element: HTMLElement) => {
+    setFocusOrigin(tileCentre(element))
+    setFocusDate(date)
+  }
   const tickHint = (date: string) => (date > today ? "You can tick this off on the day" : undefined)
-  /** `expanded`: the full-screen day view, where every card is open; on the page each card opens full screen instead. */
-  const sessionRow = (session: Session, expanded: boolean) => (
-    <CompletionRow key={session.id} checked={session.completed} saving={ticking.has(session.id)} locked={session.date > today} busy={busy} hint={tickHint(session.date)} label={session.title} onToggle={session.onToggle}
-      removal={removals.get(session.id)} onDismissRemoval={() => removals.dismiss(session.id)}>
-      <Expander className={session.className} actions={session.menu} header={session.header}
-        {...(expanded ? { defaultOpen: true } : { onOpen: (event) => openSession(session.id, event.currentTarget) })}>
-        {session.body}
-      </Expander>
+  const tickProps = (session: Session) => ({
+    checked: session.completed, saving: ticking.has(session.id), locked: session.date > today, busy, hint: tickHint(session.date), label: session.title,
+    onToggle: session.onToggle, removal: removals.get(session.id), onDismissRemoval: () => removals.dismiss(session.id),
+  })
+  /** A session's line in the week: ticked off beside it, and opened full screen from it. */
+  const sessionLine = (session: Session) => (
+    <CompletionRow key={session.id} compact {...tickProps(session)}>
+      <SessionLine className={session.className} icon={session.line.icon} iconClassName={session.line.iconClass} title={session.line.title}
+        meta={session.line.meta} aside={session.line.aside} actions={session.menu} onOpen={(event) => openSession(session.id, event.currentTarget)} />
     </CompletionRow>
   )
-  /** A day's meets, swims, strength, mobility and recovery. `expanded` opens every card (the full-screen day view). */
-  const daySessions = (day: Day, expanded = false) => (
+  /** A session open in full, in the full-screen day view. */
+  const sessionRow = (session: Session) => (
+    <CompletionRow key={session.id} {...tickProps(session)}>
+      <Expander className={session.className} actions={session.menu} header={session.header} defaultOpen>{session.body}</Expander>
+    </CompletionRow>
+  )
+  /** A meet on a day of the week's list, on one line. */
+  const meetLine = (meet: Day["competitions"][number]) => (
+    <div key={meet.id} className="flex items-center gap-3 rounded-xl border border-amber-400/30 bg-[linear-gradient(135deg,rgba(251,191,36,0.14),rgba(251,191,36,0.03))] px-2.5 py-2.5 sm:px-3">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-amber-300/15 text-amber-300"><Flag className="h-4 w-4" /></span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-semibold text-amber-100">{meet.name}</span>
+          <span className="shrink-0 rounded-full bg-amber-300/20 px-1.5 py-px text-[10px] font-bold text-amber-200">Priority {meet.priority}</span>
+        </span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-amber-100/70"><MapPin className="h-3 w-3 shrink-0" /><span className="truncate">{meet.location} · {meet.pool_length}m · {meet.events.join(", ")}</span></span>
+      </span>
+    </div>
+  )
+  /** A day's meets, swims, strength, mobility and recovery, every card open (the full-screen day view). */
+  const daySessions = (day: Day) => (
     <div className="space-y-3">
       {day.competitions.map((meet) => <div key={meet.id} className="relative overflow-hidden rounded-2xl border border-amber-400/30 bg-[linear-gradient(135deg,rgba(251,191,36,0.14),rgba(251,191,36,0.03))] p-4 text-sm">
         <p className="flex items-center gap-2 font-semibold text-amber-100"><Flag className="h-4 w-4 text-amber-300" />{meet.name}<span className="rounded-full bg-amber-300/20 px-2 py-0.5 text-[10px] font-bold text-amber-200">Priority {meet.priority}</span></p>
         <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-amber-100/70"><MapPin className="h-3.5 w-3.5" />{meet.location} · {meet.pool_length}m · {meet.events.join(", ")}</p>
       </div>)}
       {day.rest && !day.workouts.length && !day.strength && <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm text-slate-300"><Moon className="h-5 w-5 text-slate-400" />Rest / recovery day</div>}
-      {daySessionList(day).map((session) => sessionRow(session, expanded))}
+      {daySessionList(day).map((session) => sessionRow(session))}
       {day.recovery.length > 0 && <div className="pt-1">
         <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recovery</h5>
         <ul className="flex flex-wrap gap-2">{day.recovery.map((item, i) => <li key={i} className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/15 bg-amber-200/[0.06] px-3 py-1 text-xs text-amber-50/80"><Moon className="h-3 w-3 text-amber-200" />{item}</li>)}</ul>
@@ -673,7 +713,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
                       changed={!!changed && (changed.has(`mobility:${day.date}`) || day.workouts.some((item) => changed.has(`swim:${item.key}`)))}
                       coach={coachLink ? { scanning: coachLink.scanning, pending: coachLink.pending[day.date], focus: coachLink.focus === day.date } : undefined}
                       emptyLabel={day.competitions.length ? "Meet" : day.strength ? "Gym" : day.mobility.length ? "Mobility" : isRest ? "Rest" : "Free"}
-                      onOpen={(event) => { setFocusOrigin(tileCentre(event.currentTarget)); setFocusDate(day.date) }}
+                      onOpen={(event) => openDay(day.date, event.currentTarget)}
                       icons={<>
                         {day.competitions.length > 0 && <Flag className="h-3 w-3 text-amber-300" />}
                         {day.strength && <Dumbbell className={cn("h-3 w-3", day.strength_completed ? "text-emerald-300" : "text-violet-300")} />}
@@ -684,102 +724,110 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
                 })}
               </div>
               {week && <p className="relative mt-3 flex items-center gap-1.5 text-[11px] text-slate-400"><Maximize2 className="h-3 w-3" />Tap a day to open its sessions full screen</p>}
+              {week && <div className="relative mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+                <WeekStat icon={Waves} label="Swim volume" value={week.summary.swim_volume_meters} unit="m" tone="bg-accent/12 text-accent" />
+                <WeekStat icon={Activity} label="Swim sessions" value={week.summary.swim_sessions} tone="bg-sky-400/12 text-sky-300" />
+                <WeekStat icon={Heart} label="Mobility days" value={week.summary.mobility_sessions} tone="bg-emerald-400/12 text-emerald-300" />
+                <WeekStat icon={Timer} label="Planned duration" value={week.summary.duration_minutes} unit="min" tone="bg-amber-300/12 text-amber-200" />
+              </div>}
             </section>
           </Reveal>
           {generating === "week" && <GenerationOverlay title="Your coach is building this week" subtitle="Every session is checked against your onboarding before it's saved." steps={generationSteps} interval={1800} />}
           {generating === "replan" && <GenerationOverlay title="Your coach is re-planning this week" subtitle={`${replanFromToday ? "Today to Sunday, around" : "Around"} everything you've ticked off, favorited or added.`} steps={replanSteps} interval={1800} />}
-          <p className="px-1 text-xs text-slate-500">Monday-Sunday · Calendar dates use UTC · Totals are planned, not proof of completion. Saved sessions and scheduled workouts are preserved.</p>
 
           {loading && !week && <>
             <LoadingLane tone="swim" title="Loading your swim week" messages={["Fetching this week's sessions", "Syncing completed swims", "Lining up your competitions", "Adding up volume and zones"]} />
             <WeekSkeleton />
           </>}
           {week && <>
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              {[
-                { icon: Waves, label: "Weekly swim volume", value: week.summary.swim_volume_meters, unit: "m", tone: "bg-accent/12 text-accent", className: "" },
-                { icon: Activity, label: "Swim sessions", value: week.summary.swim_sessions, tone: "bg-sky-400/12 text-sky-300" },
-                { icon: Heart, label: "Mobility days", value: week.summary.mobility_sessions, tone: "bg-emerald-400/12 text-emerald-300" },
-                { icon: Timer, label: "Planned duration", value: week.summary.duration_minutes, unit: "min", tone: "bg-amber-300/12 text-amber-200" },
-              ].map((stat, idx) => <Reveal key={stat.label} index={idx + 1} className={stat.className}><StatCard {...stat} className="h-full" /></Reveal>)}
-            </div>
-            {!week.generated && <Reveal index={6}>
+            {!week.generated && <Reveal index={1}>
               <EmptyState icon={Sparkles} title="No AI week saved for these dates" body={swimsAdded
                 ? "The swims you've added are shown below and stay as they are. Generating plans each day's focus, mobility and recovery around them, and adds swims only if your weekly availability has room."
                 : "Your existing sessions, manual workouts and competitions are shown below. Generate a week to fill the remaining onboarding availability."}
                 action={<Button disabled={busy || loading} onClick={generateWeek} className="rounded-full bg-accent text-accent-foreground hover:bg-accent/90"><Sparkles className="mr-2 h-4 w-4" />Generate Swim Week</Button>} />
             </Reveal>}
-            {week.coaching_note && <Reveal index={6}>
-              <Tile glow>
-                <div className="flex gap-4">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/30 to-sky-500/20 shadow-[0_0_24px_rgba(87,229,234,0.25)]"><Sparkles className="h-5 w-5 text-accent" /></span>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">{week.phase || "Weekly coaching focus"}</p>
-                    <p className="mt-2 text-sm leading-7 text-slate-200">{week.coaching_note}</p>
+            {week.coaching_note && <Reveal index={2}>
+              <div className="relative overflow-hidden rounded-2xl border border-accent/20 bg-[linear-gradient(135deg,rgba(87,229,234,0.09),rgba(10,15,21,0.92)_55%)] p-4 shadow-[0_14px_36px_rgba(0,0,0,0.22)] sm:p-5">
+                <div className="flex gap-3 sm:gap-4">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent/30 to-sky-500/20 shadow-[0_0_20px_rgba(87,229,234,0.22)]"><Sparkles className="h-4 w-4 text-accent" /></span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-accent">{week.phase || "Weekly coaching focus"}</p>
+                    <ClampText text={week.coaching_note} clamp="line-clamp-3 sm:line-clamp-2" className="mt-1 text-sm leading-6 text-slate-200" />
                   </div>
                 </div>
-              </Tile>
+              </div>
             </Reveal>}
-            <div className="grid gap-5 lg:grid-cols-2">
-              <Reveal index={7}>
-                <Tile>
-                  <TileHeader icon={Activity} title="Training-zone distribution" subtitle="Planned swim volume by intensity" />
-                  {week.zones.length ? <div className="space-y-4">
-                    <ZoneStack className="h-3" entries={week.zones.map((zone) => ({ label: zone.zone, meters: zone.meters }))} />
-                    {week.zones.map((zone) => <div key={zone.zone}>
-                      <div className="mb-1.5 flex justify-between gap-2 text-sm"><span className="flex items-center gap-2 font-medium text-slate-200"><span className={cn("h-2 w-2 rounded-full", zoneTone(zone.zone).solid)} />{zone.zone}</span><span className="text-slate-400">{zone.meters.toLocaleString()} m · <span className="font-semibold text-white">{zone.percentage}%</span></span></div>
-                      <GrowBar percent={zone.percentage} barClassName={cn("bg-gradient-to-r", zoneTone(zone.zone).bar)} />
-                    </div>)}
-                  </div> : <p className="text-sm text-slate-500">No swim sets scheduled.</p>}
-                </Tile>
-              </Reveal>
-              <Reveal index={8}>
-                <Tile>
-                  <TileHeader icon={Layers} title="Session composition" subtitle="Composition tags may overlap (for example, a race-pace kick set). Zone volume is counted once." />
-                  <div className="grid gap-2.5 sm:grid-cols-2">
-                    {week.composition.map((item) => {
-                      const max = Math.max(1, ...week.composition.map((entry) => entry.meters))
-                      return <div key={item.label} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] p-3 transition-colors hover:border-white/15">
-                        <div className="flex items-baseline justify-between gap-2 text-sm"><span className="text-slate-300">{item.label}</span><span className="font-semibold tabular-nums text-cyan-100">{item.meters.toLocaleString()} m</span></div>
-                        <GrowBar className="mt-2 h-1.5" percent={(item.meters / max) * 100} />
-                      </div>
-                    })}
-                  </div>
-                </Tile>
-              </Reveal>
+
+            <p className="flex items-center gap-2 px-1 text-xs text-slate-500"><CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />Tick a session off when you finish it (tap again to untick). Tap a session to open it.</p>
+            <div className="space-y-3">
+              {week.days.map((day, dayIndex) => {
+                const { total, done } = dayProgress(day)
+                const sessions = daySessionList(day)
+                const isRest = day.rest && !day.workouts.length && !day.strength
+                const minutes = sessions.reduce((sum, session) => sum + session.minutes, 0)
+                // A day with everything ticked off says so on its own (WeekDay), so its count isn't repeated here.
+                const summary = [dayMeters[dayIndex] > 0 && `${dayMeters[dayIndex].toLocaleString()} m`, minutes > 0 && `${minutes} min`,
+                  total > 0 && done < total && (done ? `${done} of ${total} done` : `${total} session${total === 1 ? "" : "s"}`)].filter(Boolean).join(" · ")
+                return <Reveal key={day.date} index={3 + dayIndex}>
+                  <WeekDay id={`day-${day.date}`} tone="swim" date={day.date} dayName={day.day_name} isToday={day.date === today} total={total} done={done}
+                    summary={summary || (day.competitions.length ? "Meet day" : isRest ? "Rest day" : "Nothing planned")}
+                    onOpen={(event) => openDay(day.date, event.currentTarget)}
+                    add={roomForSwim(day) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => openNewSwim(day.date)} aria-label={`Add a swim on ${day.day_name}`} title="Add your own swim to this day"
+                      className="shrink-0 rounded-full text-slate-400 hover:bg-accent/10 hover:text-cyan-100"><Plus className="mr-1 h-4 w-4" /><span className="sm:hidden">Swim</span><span className="hidden sm:inline">Add swim</span></Button>}
+                    notes={<DayNotes objective={day.objective} recovery={day.recovery} />}>
+                    {(day.competitions.length > 0 || isRest || sessions.length > 0) && <>
+                      {day.competitions.map(meetLine)}
+                      {isRest && <p className="flex items-center gap-2.5 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-sm text-slate-300"><Moon className="h-4 w-4 text-slate-400" />Rest / recovery day</p>}
+                      {sessions.map(sessionLine)}
+                    </>}
+                  </WeekDay>
+                </Reveal>
+              })}
             </div>
 
-            <p className="flex items-center gap-2 px-1 text-xs text-slate-500"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />Tick off each swim and strength workout as you finish it. Tap again to untick.</p>
-            <TwoColumnFlow weights={week.days.map(dayWeight)} items={week.days.map((day, dayIndex) => {
-                const isToday = day.date === today
-                const { total, done } = dayProgress(day)
-                return <Reveal key={day.date} index={9 + dayIndex}>
-                  <div id={`day-${day.date}`} className="scroll-mt-32">
-                    <Tile glow={isToday} className={cn(total > 0 && done === total && "border-emerald-400/30")}>
-                      {/* The day's plan sits beside the date, but on a phone it runs the card's full width under the day's name. */}
-                      <div className={cn("mb-4 grid items-start gap-x-4", roomForSwim(day) ? "grid-cols-[auto_minmax(0,1fr)_auto]" : "grid-cols-[auto_minmax(0,1fr)]")}>
-                        <div className={cn("flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl border sm:row-span-2", isToday ? "border-accent/40 bg-accent/15" : "border-white/10 bg-white/[0.04]")}>
-                          <span className={cn("text-[10px] font-semibold uppercase tracking-wider", isToday ? "text-accent" : "text-slate-500")}>{shortDate(day.date, { month: "short" })}</span>
-                          <span className="text-xl font-bold leading-none text-white">{Number(day.date.slice(8))}</span>
-                        </div>
-                        <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold tracking-tight text-white">{day.day_name}</h3>
-                          {isToday && <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-foreground">Today</span>}
-                          {dayMeters[dayIndex] > 0 && <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-slate-300">{dayMeters[dayIndex].toLocaleString()} m</span>}
-                          {total > 0 && <span key={`${done}/${total}`} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums transition-colors duration-500", done > 0 && "chip-pop",
-                            done === total ? "border-emerald-300/50 bg-gradient-to-r from-emerald-400/25 to-teal-400/15 text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.3)]" : "border-white/10 bg-white/[0.04] text-slate-300")}>
-                            {done === total ? <><Trophy className="h-3 w-3 text-amber-200" />Day complete</> : <><CheckCircle2 className="h-3 w-3" />{done}/{total} done</>}
-                          </span>}
-                        </div>
-                        {roomForSwim(day) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => openNewSwim(day.date)} aria-label={`Add a swim on ${day.day_name}`} title="Add your own swim to this day"
-                          className="shrink-0 rounded-full text-slate-400 hover:bg-accent/10 hover:text-cyan-100"><Plus className="mr-1 h-4 w-4" /><span className="sm:hidden">Swim</span><span className="hidden sm:inline">Add swim</span></Button>}
-                        <p className="col-span-full mt-3 text-sm leading-6 text-slate-400 sm:col-span-1 sm:col-start-2 sm:mt-1">{day.objective}</p>
+            <Reveal index={10}>
+              <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[linear-gradient(160deg,rgba(22,32,42,0.6),rgba(10,15,21,0.88))]">
+                <button type="button" aria-expanded={breakdownOpen} aria-controls="swim-week-breakdown" onClick={() => setBreakdownOpen((open) => !open)}
+                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-accent/25 bg-accent/10"><Layers className="h-4 w-4 text-accent" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold text-white">Week breakdown</span>
+                    <span className="block truncate text-xs text-slate-400">Training zones and session composition</span>
+                  </span>
+                  {week.zones.length > 0 && <ZoneStack className="hidden h-1.5 w-40 sm:flex" entries={week.zones.map((zone) => ({ label: zone.zone, meters: zone.meters }))} />}
+                  <ChevronDown className={cn("h-4 w-4 shrink-0 text-slate-400 transition-transform duration-300", breakdownOpen && "rotate-180")} />
+                </button>
+                <div id="swim-week-breakdown" hidden={!breakdownOpen}>
+                  {breakdownOpen && <div className="dash-reveal grid gap-6 border-t border-white/[0.06] p-4 sm:p-5 lg:grid-cols-2">
+                    <div>
+                      <h4 className="flex items-center gap-2 text-sm font-semibold text-white"><Activity className="h-4 w-4 text-accent" />Training-zone distribution</h4>
+                      <p className="mt-0.5 text-xs text-slate-400">Planned swim volume by intensity</p>
+                      {week.zones.length ? <div className="mt-4 space-y-4">
+                        <ZoneStack className="h-3" entries={week.zones.map((zone) => ({ label: zone.zone, meters: zone.meters }))} />
+                        {week.zones.map((zone) => <div key={zone.zone}>
+                          <div className="mb-1.5 flex justify-between gap-2 text-sm"><span className="flex items-center gap-2 font-medium text-slate-200"><span className={cn("h-2 w-2 rounded-full", zoneTone(zone.zone).solid)} />{zone.zone}</span><span className="text-slate-400">{zone.meters.toLocaleString()} m · <span className="font-semibold text-white">{zone.percentage}%</span></span></div>
+                          <GrowBar percent={zone.percentage} barClassName={cn("bg-gradient-to-r", zoneTone(zone.zone).bar)} />
+                        </div>)}
+                      </div> : <p className="mt-4 text-sm text-slate-500">No swim sets scheduled.</p>}
+                    </div>
+                    <div>
+                      <h4 className="flex items-center gap-2 text-sm font-semibold text-white"><Layers className="h-4 w-4 text-accent" />Session composition</h4>
+                      <p className="mt-0.5 text-xs text-slate-400">Composition tags may overlap (for example, a race-pace kick set). Zone volume is counted once.</p>
+                      <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                        {week.composition.map((item) => {
+                          const max = Math.max(1, ...week.composition.map((entry) => entry.meters))
+                          return <div key={item.label} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] p-3 transition-colors hover:border-white/15">
+                            <div className="flex items-baseline justify-between gap-2 text-sm"><span className="text-slate-300">{item.label}</span><span className="font-semibold tabular-nums text-cyan-100">{item.meters.toLocaleString()} m</span></div>
+                            <GrowBar className="mt-2 h-1.5" percent={(item.meters / max) * 100} />
+                          </div>
+                        })}
                       </div>
-                      {daySessions(day)}
-                    </Tile>
-                  </div>
-                </Reveal>
-              })} />
+                    </div>
+                  </div>}
+                </div>
+              </div>
+            </Reveal>
+            <p className="px-1 text-xs text-slate-500">Monday-Sunday · Calendar dates use UTC · Totals are planned, not proof of completion. Saved sessions and scheduled workouts are preserved.</p>
           </>}
           </>}
         </TabsContent>
@@ -893,7 +941,7 @@ export function TrainingPanel({ onChanged, guide, onGuideEvent, refresh = 0, rev
         </>}>
         {focusDay && <>
           {focusDay.objective && <p className="mb-6 text-[15px] leading-7 text-slate-300">{focusDay.objective}</p>}
-          {daySessions(focusDay, true)}
+          {daySessions(focusDay)}
           {!focusDay.competitions.length && !focusDay.workouts.length && !focusDay.strength && !focusDay.mobility.length && !focusDay.rest && !focusDay.recovery.length &&
             <EmptyState icon={CalendarDays} title="Nothing planned for this day" body={week?.generated ? "This day has no sessions in your swim week." : "Generate your swim week to fill this day with sessions."} />}
           {roomForSwim(focusDay) && <button type="button" disabled={busy} onClick={() => openNewSwim(focusDay.date)}

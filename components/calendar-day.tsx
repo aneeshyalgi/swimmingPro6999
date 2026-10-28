@@ -65,7 +65,7 @@ export function CalendarDay({ tone, index, date, dayName, isToday, past, level, 
   return (
     <button ref={ref} type="button" onClick={onOpen} onPointerMove={track} style={{ "--i": index } as CSSProperties} data-day={date}
       aria-label={`${dayName} ${Number(date.slice(8))}${amount ? `, ${amount} ${unit}` : `, ${emptyLabel.toLowerCase()}`}${total ? `, ${done} of ${total} done` : ""}. Open full screen.`}
-      className={cn("wk-in wk-tile group relative h-32 rounded-[20px] p-px text-left outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:h-40",
+      className={cn("wk-in wk-tile group relative h-28 rounded-[20px] p-px text-left outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:h-32",
         isToday ? cn("wk-ring", styles.ring) : cn("bg-white/[0.08]", styles.hover), styles.glow, past && !isToday && "opacity-70 hover:opacity-100",
         coach?.focus && "wc-tile-focus")}>
       <span className="relative flex h-full flex-col items-center overflow-hidden rounded-[19px] bg-[linear-gradient(180deg,#0c141c,#070c12)] px-1 pb-2 pt-2.5">
