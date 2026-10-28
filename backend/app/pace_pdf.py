@@ -1,4 +1,4 @@
-"""Branded PDF export of the Pace Calculator: one coloured section and pace table per training zone."""
+"""Branded PDF export of the Pace Calculator: one section and pace table per training zone, in its zone's colour."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -8,9 +8,11 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import Flowable, KeepTogether, Paragraph, Spacer
 
-from app.week_pdf import ZONE_COLORS, _build, _fit
+from app.pdf_brand import MONO_BOLD, REGULAR, SEMIBOLD, draw, mix
+from app.week_pdf import ZONE_COLORS
 from app.workout_pdf import (
-    BODY, CONTENT_W, CYAN, HAIR, INK, MUTED, NAVY, TINT, VIOLET, WHITE, _Callout, _SectionHeader, _Stats, _style, _text,
+    AMBER, BODY, CONTENT_W, DONE, FAINT, HAIR, INK, MUTED, SKY, SLATE, SWIM, WHITE, _Callout, _SectionHeader, _Stats, _fit, _round, _style,
+    _text, build, whole,
 )
 
 SUITS = {"TRAINING_SUIT": "Training suit", "TECH": "Tech suit"}
@@ -34,10 +36,10 @@ def fmt_range(value: dict[str, float] | None) -> str:
 
 
 class _PaceTable(Flowable):
-    """Rep / push / dive / note rows on a tinted card with the zone's colour stripe."""
+    """A zone's reps and their paces (push start, dive start) with any note, on a card edged in the zone's colour."""
 
-    ROW = 7.6 * mm
-    HEAD = 7 * mm
+    ROW = 7.8 * mm
+    HEAD = 7.4 * mm
 
     def __init__(self, rows: list[dict[str, Any]], display: str, color, dive_relevant: bool):
         super().__init__()
@@ -57,45 +59,42 @@ class _PaceTable(Flowable):
         c, h = self.canv, self.height
         c.saveState()
         path = c.beginPath()
-        path.roundRect(0, 0, CONTENT_W, h, 3 * mm)
+        path.roundRect(0, 0, CONTENT_W, h, 3.2 * mm)
         c.clipPath(path, stroke=0, fill=0)
-        c.setFillColor(TINT)
+        c.setFillColor(WHITE)
         c.rect(0, 0, CONTENT_W, h, stroke=0, fill=1)
+        c.setFillColor(mix(WHITE, self.color, 0.06))
+        c.rect(0, h - self.HEAD, CONTENT_W, self.HEAD, stroke=0, fill=1)
         c.setFillColor(self.color)
-        c.rect(0, 0, 1.4 * mm, h, stroke=0, fill=1)
+        c.rect(0, 0, 1.3 * mm, h, stroke=0, fill=1)
         c.restoreState()
-        widths = [52 * mm] + [38 * mm] * (len(self.columns) - 1)
+        _round(c, 0, 0, CONTENT_W, h, 3.2 * mm, stroke=HAIR, width=0.7)
+        widths = [52 * mm] + [40 * mm] * (len(self.columns) - 1)
         xs, x = [], 6 * mm
         for width in widths:
             xs.append(x)
             x += width
         note_x = x
-        c.setFont("Helvetica-Bold", 6.6)
-        c.setFillColor(MUTED)
         for (title, _), cx in zip(self.columns, xs):
-            c.drawString(cx, h - 4.8 * mm, title)
+            draw(c, cx, h - 4.9 * mm, title, SEMIBOLD, 6.2, mix(colors.black, self.color, 0.75), tracking=0.14)
         if self.has_notes:
-            c.drawString(note_x, h - 4.8 * mm, "NOTE")
+            draw(c, note_x, h - 4.9 * mm, "NOTE", SEMIBOLD, 6.2, mix(colors.black, self.color, 0.75), tracking=0.14)
         y = h - self.HEAD
         for index, row in enumerate(self.rows):
             if index:
-                c.setStrokeColor(HAIR)
-                c.setLineWidth(0.5)
+                c.saveState()
+                c.setStrokeColor(colors.HexColor("#EEF2F6"))
+                c.setLineWidth(0.6)
                 c.line(6 * mm, y, CONTENT_W - 4 * mm, y)
-            baseline = y - self.ROW / 2 - 1.2
+                c.restoreState()
+            baseline = y - self.ROW / 2 - 1.3
             for (_, field), cx in zip(self.columns, xs):
                 if field == "label":
-                    c.setFont("Helvetica-Bold", 9)
-                    c.setFillColor(INK)
-                    c.drawString(cx, baseline, _fit(row["label"], "Helvetica-Bold", 9, 50 * mm))
+                    draw(c, cx, baseline, _fit(row["label"], SEMIBOLD, 9, 50 * mm), SEMIBOLD, 9, INK)
                 else:
-                    c.setFont("Helvetica-Bold", 10)
-                    c.setFillColor(INK if row.get(field) else MUTED)
-                    c.drawString(cx, baseline, fmt_range(row.get(field)))
+                    draw(c, cx, baseline, fmt_range(row.get(field)), MONO_BOLD, 9.6, INK if row.get(field) else FAINT)
             if row.get("note"):
-                c.setFont("Helvetica", 7.4)
-                c.setFillColor(MUTED)
-                c.drawString(note_x, baseline, _fit(row["note"], "Helvetica", 7.4, CONTENT_W - note_x - 5 * mm))
+                draw(c, note_x, baseline, _fit(row["note"], REGULAR, 7.4, CONTENT_W - note_x - 5 * mm), REGULAR, 7.4, MUTED)
             y -= self.ROW
 
 
@@ -103,38 +102,39 @@ def render_pace_pdf(result: dict[str, Any], prepared_by: str | None) -> bytes:
     reference = result["reference"]
     unit = result["unit"]
     story: list[Flowable] = [_Stats([
-        ("Threshold (CSS)", fmt(reference["css_per_100"]), f"/100 {unit}"),
-        ("50 speed", fmt(reference["pace_50"]), f"/100 {unit}"),
-        ("PBs used", str(reference["pbs_used"]), ""),
-        ("Start advantage", f"{result['start_advantage']:.1f}", "s"),
+        ("Threshold (CSS)", fmt(reference["css_per_100"]), f"/100 {unit}", "gauge", SWIM),
+        ("50 speed", fmt(reference["pace_50"]), f"/100 {unit}", "zap", AMBER),
+        ("PBs used", str(reference["pbs_used"]), "", "list_checks", SKY),
+        ("Start advantage", f"{result['start_advantage']:.1f}", "s", "timer", DONE),
     ]), Spacer(1, 6 * mm)]
     warnings = [flag["text"] for flag in result["flags"] if flag["level"] == "warning"]
     notes = [flag["text"] for flag in result["flags"] if flag["level"] != "warning"]
     if warnings:
-        story += [_Callout("Check before you swim", "\n".join(f"•  {text}" for text in warnings), colors.HexColor("#D97706")), Spacer(1, 3 * mm)]
+        story += [_Callout("Check before you swim", "\n".join(f"•  {text}" for text in warnings), AMBER, "triangle_alert"), Spacer(1, 3 * mm)]
     if notes:
-        story += [_Callout("How these paces were set", "\n".join(f"•  {text}" for text in notes), colors.HexColor("#0891B2")), Spacer(1, 3 * mm)]
+        story += [_Callout("How these paces were set", "\n".join(f"•  {text}" for text in notes), SWIM, "info"), Spacer(1, 3 * mm)]
     story.append(Spacer(1, 3 * mm))
     for zone in result["zones"]:
         color = zone_hex(zone["zone"])
         meta = f"{fmt_range(zone['per_100'])} /100 {unit}  ·  {zone['rest']}"
         block = [
-            _SectionHeader(zone["zone"], color, meta), Spacer(1, 2.5 * mm),
-            Paragraph(_text(zone["purpose"]), _style("purpose", fontSize=9, leading=13, textColor=BODY)), Spacer(1, 2.5 * mm),
-            _PaceTable(zone["rows"], result["display"], colors.HexColor(color), zone["dive_relevant"]), Spacer(1, 2 * mm),
-            Paragraph(_text(f"Why: {zone['why']}"), _style("why", fontSize=7.6, leading=10.5, textColor=MUTED)),
+            _SectionHeader(zone["zone"], color, meta, "activity"), Spacer(1, 2.6 * mm),
+            Paragraph(_text(zone["purpose"]), _style("purpose", fontSize=9, leading=13, textColor=BODY)), Spacer(1, 2.8 * mm),
+            _PaceTable(zone["rows"], result["display"], colors.HexColor(color), zone["dive_relevant"]), Spacer(1, 2.2 * mm),
+            Paragraph(_text(f"Why: {zone['why']}"), _style("why", fontSize=7.6, leading=10.8, textColor=MUTED)),
         ]
         story += [KeepTogether(block), Spacer(1, 7 * mm)]
 
     athlete = result["athlete"]
     details = [COURSES[result["course"]], SUITS[result["suit"]]]
-    if prepared_by and prepared_by != athlete:
-        details.append(f"Prepared by {prepared_by}")
+    by = whole(prepared_by)
+    if by and by != athlete:
+        details.append(f"Prepared by {by}")
     hero = {
-        "kicker": "PACE CALCULATOR", "date_line": datetime.now(timezone.utc).strftime("%d %B %Y"),
+        "tone": SWIM, "kicker": "Pace calculator", "date_line": datetime.now(timezone.utc).strftime("%d %B %Y"),
         "title": f"{athlete}  ·  {result['stroke']}", "details": details,
-        "pills": [(f"CSS {fmt(reference['css_per_100'])}/100", CYAN, NAVY, 1), (result["course"], VIOLET, NAVY, 1),
-                  ({"BOTH": "PUSH + DIVE", "PUSH": "PUSH STARTS", "DIVE": "DIVE STARTS"}[result["display"]], WHITE, WHITE, 0.12)],
+        "chips": [(f"CSS {fmt(reference['css_per_100'])} /100 {unit}", SWIM, "gauge"), (result["course"], SKY, "ruler"),
+                  ({"BOTH": "Push and dive starts", "PUSH": "Push starts", "DIVE": "Dive starts"}[result["display"]], SLATE, "zap")],
         "compact": f"{athlete} · {result['stroke']} paces", "subject": "Pace calculator",
     }
-    return _build(hero, story)
+    return build(hero, story)

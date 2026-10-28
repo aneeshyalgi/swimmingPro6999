@@ -1764,8 +1764,8 @@ def export_week_part_pdf(part: WeekPart, date: date, authorization: str | None =
     strength = current["strength"]
     item = {"date": date.isoformat(), "dose": None, "source": "ai",
             "workout": {**strength, "intensity": None, "rationale": None, "coaching_notes": None}}
-    content = render_workout_pdf(item, strength_sections(strength), kicker="STRENGTH SESSION  ·  SWIM WEEK",
-                                 pills=[(f"{len(strength['exercises'])} EXERCISES", "violet"), (f"{strength['estimated_duration_minutes']} MIN", "glass")],
+    content = render_workout_pdf(item, strength_sections(strength), kicker="Strength session  ·  Swim Week",
+                                 pills=[(f"{len(strength['exercises'])} exercises", "violet"), (f"{strength['estimated_duration_minutes']} min", "glass")],
                                  last_stat=("Week phase", week["phase"] or "—"))
     return _pdf(content, date.isoformat(), strength["title"])
 
